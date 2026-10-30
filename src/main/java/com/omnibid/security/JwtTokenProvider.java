@@ -52,7 +52,7 @@ public class JwtTokenProvider {
         String role = authentication.getAuthorities().stream()
                 .findFirst()
                 .map(GrantedAuthority::getAuthority)
-                .orElse("ROLE_BUYER");
+                .orElse("ROLE_USER");
         return generateToken(email, role);
     }
 

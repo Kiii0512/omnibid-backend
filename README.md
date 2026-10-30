@@ -29,7 +29,7 @@ HTTP Request (REST) / WebSocket (STOMP)
 │  - 13 REST Controllers                                 │
 │  - Spring Security 6 + JWT Authentication Filter       │
 │  - Bean Validation (@Valid, Request DTOs)              │
-│  - Phân quyền RBAC (ROLE_BUYER, ROLE_SELLER, ROLE_ADMIN│
+│  - Phân quyền RBAC(ROLE_BUYER, ROLE_SELLER, ROLE_ADMIN)│
 └───────────────────────────┬────────────────────────────┘
                             │
                             ▼

@@ -37,7 +37,7 @@ public class AuthServiceImpl implements AuthService {
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .phoneNumber(request.getPhoneNumber())
                 .address(request.getAddress())
-                .role(UserRole.BUYER)
+                .role(UserRole.USER)
                 .status(UserStatus.ACTIVE)
                 .build();
 

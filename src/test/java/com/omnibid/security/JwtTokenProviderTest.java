@@ -20,7 +20,7 @@ class JwtTokenProviderTest {
     @Test
     void testGenerateAndValidateToken() {
         String email = "test@example.com";
-        String role = "ROLE_BUYER";
+        String role = "ROLE_USER";
 
         String token = jwtTokenProvider.generateToken(email, role);
         assertNotNull(token);

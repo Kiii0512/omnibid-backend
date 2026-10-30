@@ -3,6 +3,8 @@ package com.omnibid.repository;
 import com.omnibid.entity.Auction;
 import com.omnibid.enums.AuctionStatus;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
@@ -21,6 +23,8 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
     Optional<Auction> findByIdForUpdate(@Param("id") Long id);
 
     List<Auction> findByStatus(AuctionStatus status);
+
+    Page<Auction> findByStatus(AuctionStatus status, Pageable pageable);
 
     List<Auction> findByStatusAndStartTimeLessThanEqual(AuctionStatus status, LocalDateTime now);
 

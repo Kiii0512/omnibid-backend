@@ -51,7 +51,7 @@ class AuthServiceTest {
                 .passwordHash("encodedPassword")
                 .phoneNumber("0123456789")
                 .address("123 Street")
-                .role(UserRole.BUYER)
+                .role(UserRole.USER)
                 .status(UserStatus.ACTIVE)
                 .build();
     }
@@ -76,7 +76,7 @@ class AuthServiceTest {
         assertNotNull(response);
         assertEquals("mockToken", response.getAccessToken());
         assertEquals(sampleUser.getEmail(), response.getEmail());
-        assertEquals("BUYER", response.getRole());
+        assertEquals("USER", response.getRole());
         verify(userRepository, times(1)).save(any(User.class));
     }
 
