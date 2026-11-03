@@ -38,6 +38,11 @@ public class OrderScheduler {
             log.error("Error in OrderScheduler.expireOverdueOrders", ex);
         }
 
-        // 4. OrderService.autoCompleteOrders() (chừa chỗ cho bước sau)
+        // 4. OrderService.autoCompleteOrders() (ORD-09)
+        try {
+            orderService.autoCompleteOrders();
+        } catch (Exception ex) {
+            log.error("Error in OrderScheduler.autoCompleteOrders", ex);
+        }
     }
 }

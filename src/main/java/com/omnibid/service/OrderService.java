@@ -23,4 +23,8 @@ public interface OrderService {
     void sendPaymentReminders();
 
     void expireOverdueOrders();
+
+    com.omnibid.dto.order.OrderConfirmReceiptResponse confirmReceipt(CurrentUser currentUser, Long id);
+
+    void autoCompleteOrders();
 }

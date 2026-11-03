@@ -9,12 +9,14 @@ import com.omnibid.dto.order.OrderResponse;
 import com.omnibid.dto.order.ShippingInfoRequest;
 import com.omnibid.entity.*;
 import com.omnibid.enums.OrderStatus;
+import com.omnibid.enums.ProductStatus;
 import com.omnibid.enums.ReportStatus;
 import com.omnibid.enums.ReportType;
 import com.omnibid.enums.ShipmentStatus;
 import com.omnibid.repository.*;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.OrderAccessPolicy;
+import com.omnibid.service.NotificationService;
 import com.omnibid.service.OrderLifecycleSupport;
 import com.omnibid.service.OrderService;
 import lombok.extern.slf4j.Slf4j;
@@ -44,6 +46,33 @@ public class OrderServiceImpl implements OrderService {
     private final OrderLifecycleSupport orderLifecycleSupport;
     private final AppProperties appProperties;
     private final Clock clock;
+    private NotificationService notificationService;
+
+    public OrderServiceImpl(OrderRepository orderRepository,
+                            ProductRepository productRepository,
+                            ProductImageRepository productImageRepository,
+                            UserRepository userRepository,
+                            PaymentRepository paymentRepository,
+                            ShipmentRepository shipmentRepository,
+                            ReportRepository reportRepository,
+                            OrderAccessPolicy orderAccessPolicy,
+                            OrderLifecycleSupport orderLifecycleSupport,
+                            AppProperties appProperties,
+                            Clock clock,
+                            NotificationService notificationService) {
+        this.orderRepository = orderRepository;
+        this.productRepository = productRepository;
+        this.productImageRepository = productImageRepository;
+        this.userRepository = userRepository;
+        this.paymentRepository = paymentRepository;
+        this.shipmentRepository = shipmentRepository;
+        this.reportRepository = reportRepository;
+        this.orderAccessPolicy = orderAccessPolicy;
+        this.orderLifecycleSupport = orderLifecycleSupport;
+        this.appProperties = appProperties;
+        this.clock = clock;
+        this.notificationService = notificationService;
+    }
 
     public OrderServiceImpl(OrderRepository orderRepository,
                             ProductRepository productRepository,
@@ -56,17 +85,7 @@ public class OrderServiceImpl implements OrderService {
                             OrderLifecycleSupport orderLifecycleSupport,
                             AppProperties appProperties,
                             Clock clock) {
-        this.orderRepository = orderRepository;
-        this.productRepository = productRepository;
-        this.productImageRepository = productImageRepository;
-        this.userRepository = userRepository;
-        this.paymentRepository = paymentRepository;
-        this.shipmentRepository = shipmentRepository;
-        this.reportRepository = reportRepository;
-        this.orderAccessPolicy = orderAccessPolicy;
-        this.orderLifecycleSupport = orderLifecycleSupport;
-        this.appProperties = appProperties;
-        this.clock = clock;
+        this(orderRepository, productRepository, productImageRepository, userRepository, paymentRepository, shipmentRepository, reportRepository, orderAccessPolicy, orderLifecycleSupport, appProperties, clock, null);
     }
 
     // Overloaded constructor for tests only testing createFromAuction
@@ -344,6 +363,83 @@ public class OrderServiceImpl implements OrderService {
             return "SELLER";
         }
         return "ADMIN";
+    }
+
+    @Override
+    @Transactional
+    public com.omnibid.dto.order.OrderConfirmReceiptResponse confirmReceipt(CurrentUser currentUser, Long id) {
+        Order preCheck = orderRepository.findById(id).orElseThrow(
+                () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+        );
+
+        if (!preCheck.getBuyerId().equals(currentUser.id())) {
+            throw new AppException("FORBIDDEN", "Chỉ người mua mới được phép xác nhận nhận hàng", HttpStatus.FORBIDDEN);
+        }
+
+        Order order = orderRepository.findByIdForUpdate(id).orElseThrow(
+                () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+        );
+
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            throw new AppException("ORDER_CANCELLED", "Đơn hàng đã bị hủy", HttpStatus.CONFLICT);
+        }
+
+        if (order.getStatus() == OrderStatus.COMPLETED) {
+            throw new AppException("INVALID_STATUS_TRANSITION", "Đơn hàng đã hoàn tất", HttpStatus.CONFLICT);
+        }
+
+        if (order.getStatus() != OrderStatus.SHIPPING) {
+            throw new AppException("INVALID_STATUS_TRANSITION", "Đơn hàng chưa ở trạng thái đang giao hàng", HttpStatus.CONFLICT);
+        }
+
+        Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElse(null);
+        if (shipment == null || shipment.getStatus() != ShipmentStatus.DELIVERED) {
+            throw new AppException("INVALID_STATUS_TRANSITION", "Vận đơn chưa ở trạng thái DELIVERED", HttpStatus.CONFLICT);
+        }
+
+        if (reportRepository.existsByOrderIdAndReportTypeAndStatus(order.getId(), ReportType.COMPLAINT, ReportStatus.PENDING)) {
+            throw new AppException("COMPLAINT_PENDING", "Đơn hàng đang có khiếu nại chờ xử lý", HttpStatus.CONFLICT);
+        }
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        order.confirmReceived(now);
+        orderRepository.save(order);
+
+        Product product = productRepository.findByIdForUpdate(order.getProductId()).orElse(null);
+        if (product != null) {
+            product.setStatus(ProductStatus.SOLD);
+            productRepository.save(product);
+        }
+
+        if (notificationService != null) {
+            notificationService.notify(
+                    order.getSellerId(),
+                    com.omnibid.enums.NotificationType.ORDER_UPDATE,
+                    com.omnibid.common.NotificationTemplates.orderReceiptConfirmedTitle(),
+                    com.omnibid.common.NotificationTemplates.orderReceiptConfirmedContent(order.getId()),
+                    "ORDER",
+                    order.getId()
+            );
+        }
+
+        return com.omnibid.dto.order.OrderConfirmReceiptResponse.builder()
+                .id(order.getId())
+                .orderStatus(order.getStatus())
+                .productStatus(product != null ? product.getStatus() : ProductStatus.SOLD)
+                .build();
+    }
+
+    @Override
+    public void autoCompleteOrders() {
+        LocalDateTime now = LocalDateTime.now(clock);
+        List<Order> overdueOrders = orderRepository.findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, now);
+        for (Order o : overdueOrders) {
+            try {
+                orderLifecycleSupport.autoCompleteOne(o.getId(), now);
+            } catch (Exception ex) {
+                log.error("Failed to auto-complete order id={}", o.getId(), ex);
+            }
+        }
     }
 
     private List<String> calculateAllowedActions(Order order, String viewerRole, Shipment shipment, boolean hasPendingComplaint) {

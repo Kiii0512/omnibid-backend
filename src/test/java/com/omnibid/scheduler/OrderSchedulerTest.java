@@ -24,12 +24,13 @@ class OrderSchedulerTest {
     private OrderScheduler orderScheduler;
 
     @Test
-    @DisplayName("OrderScheduler.tick() gọi timeoutStalePayments(), sendPaymentReminders() và expireOverdueOrders()")
+    @DisplayName("OrderScheduler.tick() gọi timeoutStalePayments(), sendPaymentReminders(), expireOverdueOrders() và autoCompleteOrders()")
     void tick_ExecutesRemindersAndExpiry() {
         orderScheduler.tick();
 
         verify(paymentService).timeoutStalePayments();
         verify(orderService).sendPaymentReminders();
         verify(orderService).expireOverdueOrders();
+        verify(orderService).autoCompleteOrders();
     }
 }

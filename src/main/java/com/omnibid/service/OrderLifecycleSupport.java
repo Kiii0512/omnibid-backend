@@ -7,11 +7,14 @@ import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.PaymentStatus;
 import com.omnibid.enums.ProductStatus;
+import com.omnibid.enums.ReportStatus;
+import com.omnibid.enums.ReportType;
 import com.omnibid.repository.OrderRepository;
 import com.omnibid.repository.PaymentRepository;
 import com.omnibid.repository.ProductRepository;
-import lombok.RequiredArgsConstructor;
+import com.omnibid.repository.ReportRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -20,13 +23,36 @@ import java.time.LocalDateTime;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class OrderLifecycleSupport {
 
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
     private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
+    private ReportRepository reportRepository;
+
+    public OrderLifecycleSupport(OrderRepository orderRepository,
+                                 ProductRepository productRepository,
+                                 PaymentRepository paymentRepository,
+                                 NotificationService notificationService) {
+        this.orderRepository = orderRepository;
+        this.productRepository = productRepository;
+        this.paymentRepository = paymentRepository;
+        this.notificationService = notificationService;
+    }
+
+    @Autowired
+    public OrderLifecycleSupport(OrderRepository orderRepository,
+                                 ProductRepository productRepository,
+                                 PaymentRepository paymentRepository,
+                                 NotificationService notificationService,
+                                 ReportRepository reportRepository) {
+        this.orderRepository = orderRepository;
+        this.productRepository = productRepository;
+        this.paymentRepository = paymentRepository;
+        this.notificationService = notificationService;
+        this.reportRepository = reportRepository;
+    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void expireOne(Long orderId, LocalDateTime now) {
@@ -146,5 +172,60 @@ public class OrderLifecycleSupport {
         );
 
         log.info("Sent 2h payment reminder for order {}", order.getId());
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public void autoCompleteOne(Long orderId, LocalDateTime now) {
+        Order preCheck = orderRepository.findById(orderId).orElse(null);
+        if (preCheck == null) {
+            return;
+        }
+
+        // Khóa Product -> Order
+        Product product = productRepository.findByIdForUpdate(preCheck.getProductId()).orElse(null);
+        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
+
+        if (order == null || order.getStatus() != OrderStatus.SHIPPING) {
+            return;
+        }
+
+        if (order.getConfirmDeadline() == null || now.isBefore(order.getConfirmDeadline())) {
+            return;
+        }
+
+        // Kiểm tra khiếu nại PENDING (ORD-09, UT-ORD-15)
+        if (reportRepository != null && reportRepository.existsByOrderIdAndReportTypeAndStatus(order.getId(), ReportType.COMPLAINT, ReportStatus.PENDING)) {
+            log.info("Order {} has PENDING complaint, skipping auto-completion", order.getId());
+            return;
+        }
+
+        order.autoComplete(now);
+        orderRepository.save(order);
+
+        if (product != null) {
+            product.setStatus(ProductStatus.SOLD);
+            productRepository.save(product);
+        }
+
+        // Thông báo ORDER_UPDATE cho buyer & seller
+        notificationService.notify(
+                order.getBuyerId(),
+                NotificationType.ORDER_UPDATE,
+                NotificationTemplates.orderCompletedTitle(order.getId()),
+                NotificationTemplates.orderCompletedContent(order.getId()),
+                "ORDER",
+                order.getId()
+        );
+
+        notificationService.notify(
+                order.getSellerId(),
+                NotificationType.ORDER_UPDATE,
+                NotificationTemplates.orderCompletedTitle(order.getId()),
+                NotificationTemplates.orderCompletedContent(order.getId()),
+                "ORDER",
+                order.getId()
+        );
+
+        log.info("Order {} auto-COMPLETED at {}", order.getId(), now);
     }
 }

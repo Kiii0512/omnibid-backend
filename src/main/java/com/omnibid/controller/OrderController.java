@@ -61,4 +61,14 @@ public class OrderController {
         OrderDetailResponse result = orderService.updateShippingInfo(currentUser, id, request);
         return ApiResponse.success(result);
     }
+
+    @PatchMapping("/{id}/confirm-receipt")
+    public ApiResponse<com.omnibid.dto.order.OrderConfirmReceiptResponse> confirmReceipt(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long id
+    ) {
+        CurrentUser currentUser = CurrentUser.of(userDetails);
+        com.omnibid.dto.order.OrderConfirmReceiptResponse result = orderService.confirmReceipt(currentUser, id);
+        return ApiResponse.success("Order completed", result);
+    }
 }

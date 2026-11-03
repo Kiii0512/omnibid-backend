@@ -82,7 +82,7 @@ class OrderServiceTest {
     @BeforeEach
     void setUp() {
         orderAccessPolicy = new OrderAccessPolicy();
-        orderLifecycleSupport = new OrderLifecycleSupport(orderRepository, productRepository, paymentRepository, notificationService);
+        orderLifecycleSupport = new OrderLifecycleSupport(orderRepository, productRepository, paymentRepository, notificationService, reportRepository);
 
         AppProperties appProperties = new AppProperties();
         orderService = new OrderServiceImpl(
@@ -96,7 +96,8 @@ class OrderServiceTest {
                 orderAccessPolicy,
                 orderLifecycleSupport,
                 appProperties,
-                clock
+                clock,
+                notificationService
         );
 
         sampleOrder = Order.builder()
@@ -358,6 +359,111 @@ class OrderServiceTest {
         assertEquals(OrderStatus.EXPIRED, sampleOrder.getStatus());
         assertEquals(ProductStatus.HIDDEN, sampleProduct.getStatus());
         verify(productRepository, never()).save(sampleProduct);
+    }
+
+    @Test
+    @DisplayName("UT-ORD-12 Xác nhận nhận hàng: ORDER SHIPPING, Shipment DELIVERED, không khiếu nại -> COMPLETED, Product SOLD, thông báo seller")
+    void confirmReceipt_Success() {
+        sampleOrder.setStatus(OrderStatus.SHIPPING);
+        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
+        when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
+
+        Shipment delivered = Shipment.builder().id(1L).orderId(9L).status(ShipmentStatus.DELIVERED).build();
+        when(shipmentRepository.findByOrderId(9L)).thenReturn(Optional.of(delivered));
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(9L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
+        when(productRepository.findByIdForUpdate(sampleOrder.getProductId())).thenReturn(Optional.of(sampleProduct));
+
+        com.omnibid.dto.order.OrderConfirmReceiptResponse res = orderService.confirmReceipt(buyerUser, 9L);
+
+        assertEquals(OrderStatus.COMPLETED, res.getOrderStatus());
+        assertEquals(OrderStatus.COMPLETED, sampleOrder.getStatus());
+        assertEquals(ProductStatus.SOLD, sampleProduct.getStatus());
+        verify(notificationService).notify(eq(sampleOrder.getSellerId()), eq(NotificationType.ORDER_UPDATE), any(), any(), eq("ORDER"), eq(9L));
+    }
+
+    @Test
+    @DisplayName("UT-ORD-13 Xác nhận khi còn khiếu nại PENDING ném 409 COMPLAINT_PENDING, không đổi dữ liệu")
+    void confirmReceipt_ComplaintPending_ThrowsConflict() {
+        sampleOrder.setStatus(OrderStatus.SHIPPING);
+        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
+        when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
+
+        Shipment delivered = Shipment.builder().id(1L).orderId(9L).status(ShipmentStatus.DELIVERED).build();
+        when(shipmentRepository.findByOrderId(9L)).thenReturn(Optional.of(delivered));
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(9L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(true);
+
+        AppException ex = assertThrows(AppException.class, () -> orderService.confirmReceipt(buyerUser, 9L));
+        assertEquals("COMPLAINT_PENDING", ex.getCode());
+        assertEquals(OrderStatus.SHIPPING, sampleOrder.getStatus());
+        verify(productRepository, never()).save(any());
+    }
+
+    @Test
+    @DisplayName("UT-ORD-14 Tự hoàn tất: ORDER SHIPPING, confirm_deadline = NOW, không khiếu nại -> COMPLETED, Product SOLD, thông báo buyer + seller")
+    void autoCompleteOrders_Success() {
+        sampleOrder.setStatus(OrderStatus.SHIPPING);
+        sampleOrder.setConfirmDeadline(NOW);
+        when(orderRepository.findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, NOW)).thenReturn(List.of(sampleOrder));
+        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
+        when(productRepository.findByIdForUpdate(sampleOrder.getProductId())).thenReturn(Optional.of(sampleProduct));
+        when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(9L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
+
+        orderService.autoCompleteOrders();
+
+        assertEquals(OrderStatus.COMPLETED, sampleOrder.getStatus());
+        assertEquals(ProductStatus.SOLD, sampleProduct.getStatus());
+        verify(notificationService).notify(eq(sampleOrder.getBuyerId()), eq(NotificationType.ORDER_UPDATE), any(), any(), eq("ORDER"), eq(9L));
+        verify(notificationService).notify(eq(sampleOrder.getSellerId()), eq(NotificationType.ORDER_UPDATE), any(), any(), eq("ORDER"), eq(9L));
+    }
+
+    @Test
+    @DisplayName("UT-ORD-15 Tự hoàn tất bị tạm dừng khi có COMPLAINT PENDING; sau khi bác bỏ thì chạy lại hoàn tất")
+    void autoCompleteOrders_ComplaintPendingPausesCompletion() {
+        sampleOrder.setStatus(OrderStatus.SHIPPING);
+        sampleOrder.setConfirmDeadline(NOW);
+        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
+        when(productRepository.findByIdForUpdate(sampleOrder.getProductId())).thenReturn(Optional.of(sampleProduct));
+        when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
+
+        // Lần 1: complaint PENDING -> bỏ qua
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(9L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(true);
+        orderLifecycleSupport.autoCompleteOne(9L, NOW);
+        assertEquals(OrderStatus.SHIPPING, sampleOrder.getStatus());
+
+        // Lần 2: complaint đã bác bỏ (không còn PENDING) -> COMPLETED
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(9L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
+        orderLifecycleSupport.autoCompleteOne(9L, NOW);
+        assertEquals(OrderStatus.COMPLETED, sampleOrder.getStatus());
+    }
+
+    @Test
+    @DisplayName("UT-ORD-17 Xác nhận sai ngữ cảnh: (a) Shipment IN_TRANSIT (b) COMPLETED (c) SELLER (d) CANCELLED ném lỗi tương ứng")
+    void confirmReceipt_InvalidContext_ThrowsAppropriateErrors() {
+        // (a) Shipment IN_TRANSIT -> 409 INVALID_STATUS_TRANSITION
+        sampleOrder.setStatus(OrderStatus.SHIPPING);
+        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
+        when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
+        Shipment inTransit = Shipment.builder().id(1L).orderId(9L).status(ShipmentStatus.IN_TRANSIT).build();
+        when(shipmentRepository.findByOrderId(9L)).thenReturn(Optional.of(inTransit));
+
+        AppException exA = assertThrows(AppException.class, () -> orderService.confirmReceipt(buyerUser, 9L));
+        assertEquals("INVALID_STATUS_TRANSITION", exA.getCode());
+
+        // (b) ORDER COMPLETED -> 409 INVALID_STATUS_TRANSITION
+        sampleOrder.setStatus(OrderStatus.COMPLETED);
+        AppException exB = assertThrows(AppException.class, () -> orderService.confirmReceipt(buyerUser, 9L));
+        assertEquals("INVALID_STATUS_TRANSITION", exB.getCode());
+
+        // (c) Người gọi là SELLER -> 403 FORBIDDEN
+        sampleOrder.setStatus(OrderStatus.SHIPPING);
+        AppException exC = assertThrows(AppException.class, () -> orderService.confirmReceipt(sellerUser, 9L));
+        assertEquals("FORBIDDEN", exC.getCode());
+
+        // (d) ORDER CANCELLED -> 409 ORDER_CANCELLED
+        sampleOrder.setStatus(OrderStatus.CANCELLED);
+        AppException exD = assertThrows(AppException.class, () -> orderService.confirmReceipt(buyerUser, 9L));
+        assertEquals("ORDER_CANCELLED", exD.getCode());
     }
 
     @ParameterizedTest(name = "UT-ORD-16 Sự kiện {0} với Product ban đầu {1} -> kết quả Product {2}")

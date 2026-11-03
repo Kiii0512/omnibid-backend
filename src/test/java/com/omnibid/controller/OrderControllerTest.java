@@ -182,4 +182,24 @@ class OrderControllerTest {
                 .andExpect(jsonPath("$.success").value(false))
                 .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
     }
+
+    @Test
+    @DisplayName("PATCH /api/v1/orders/{id}/confirm-receipt trả 200 khi xác nhận nhận hàng thành công")
+    void confirmReceipt_Returns200() throws Exception {
+        com.omnibid.dto.order.OrderConfirmReceiptResponse res = com.omnibid.dto.order.OrderConfirmReceiptResponse.builder()
+                .id(9L)
+                .orderStatus(OrderStatus.COMPLETED)
+                .productStatus(com.omnibid.enums.ProductStatus.SOLD)
+                .build();
+
+        when(orderService.confirmReceipt(any(), eq(9L))).thenReturn(res);
+
+        mockMvc.perform(patch("/api/v1/orders/9/confirm-receipt"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.message").value("Order completed"))
+                .andExpect(jsonPath("$.data.id").value(9))
+                .andExpect(jsonPath("$.data.orderStatus").value("COMPLETED"))
+                .andExpect(jsonPath("$.data.productStatus").value("SOLD"));
+    }
 }
