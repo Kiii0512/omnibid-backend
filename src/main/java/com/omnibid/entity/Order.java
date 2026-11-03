@@ -1,10 +1,12 @@
 package com.omnibid.entity;
 
+import com.omnibid.common.AppException;
 import com.omnibid.enums.OrderStatus;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
+import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
@@ -81,4 +83,52 @@ public class Order {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    public void markPaid(LocalDateTime now) {
+        require(status == OrderStatus.PENDING_PAYMENT, "markPaid");
+        this.status = OrderStatus.PAID;
+        this.paidAt = now;
+    }
+
+    public void markShipping() {
+        require(status == OrderStatus.PAID, "markShipping");
+        this.status = OrderStatus.SHIPPING;
+    }
+
+    public void markDelivered(LocalDateTime now, LocalDateTime confirmDeadline) {
+        require(status == OrderStatus.SHIPPING, "markDelivered");
+        this.deliveredAt = now;
+        this.confirmDeadline = confirmDeadline;
+    }
+
+    public void confirmReceived(LocalDateTime now) {
+        require(status == OrderStatus.SHIPPING, "confirmReceived");
+        this.status = OrderStatus.COMPLETED;
+        this.completedAt = now;
+    }
+
+    public void autoComplete(LocalDateTime now) {
+        require(status == OrderStatus.SHIPPING, "autoComplete");
+        this.status = OrderStatus.COMPLETED;
+        this.completedAt = now;
+    }
+
+    public void expire() {
+        require(status == OrderStatus.PENDING_PAYMENT, "expire");
+        this.status = OrderStatus.EXPIRED;
+    }
+
+    public void cancel(String reason, LocalDateTime now) {
+        require(status == OrderStatus.PENDING_PAYMENT || status == OrderStatus.PAID || status == OrderStatus.SHIPPING, "cancel");
+        this.status = OrderStatus.CANCELLED;
+        this.cancelReason = reason;
+        this.cancelledAt = now;
+    }
+
+    private void require(boolean condition, String operation) {
+        if (!condition) {
+            throw new AppException("INVALID_STATUS_TRANSITION",
+                    "Cannot " + operation + " when order is " + status, HttpStatus.CONFLICT);
+        }
+    }
 }

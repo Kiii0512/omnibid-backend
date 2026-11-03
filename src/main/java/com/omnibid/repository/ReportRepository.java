@@ -2,6 +2,7 @@ package com.omnibid.repository;
 
 import com.omnibid.entity.Report;
 import com.omnibid.enums.ReportStatus;
+import com.omnibid.enums.ReportType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
@@ -12,4 +13,5 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
     List<Report> findByReporterId(Long reporterId);
     List<Report> findByStatus(ReportStatus status);
     List<Report> findByOrderId(Long orderId);
+    boolean existsByOrderIdAndReportTypeAndStatus(Long orderId, ReportType reportType, ReportStatus status);
 }
