@@ -38,4 +38,6 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     @Query("SELECT r FROM Report r WHERE (:status IS NULL OR r.status = :status) AND (:reportType IS NULL OR r.reportType = :reportType)")
     Page<Report> findAdminReports(@Param("status") ReportStatus status, @Param("reportType") ReportType reportType, Pageable pageable);
+
+    long countByStatus(ReportStatus status);
 }

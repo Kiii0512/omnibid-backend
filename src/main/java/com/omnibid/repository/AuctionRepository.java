@@ -12,6 +12,7 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.time.LocalDateTime;
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,5 +37,11 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
     @Query("SELECT a.id FROM Auction a WHERE a.status = :status AND a.endTime <= :now")
     List<Long> findIdsByStatusAndEndTimeLessThanEqual(@Param("status") AuctionStatus status, @Param("now") LocalDateTime now);
 
-    Optional<Auction> findFirstByProductIdAndStatusIn(Long productId, java.util.Collection<AuctionStatus> statuses);
+    Optional<Auction> findFirstByProductIdAndStatusIn(Long productId, Collection<AuctionStatus> statuses);
+
+    List<Auction> findByProductIdAndStatusIn(Long productId, Collection<AuctionStatus> statuses);
+
+    List<Auction> findBySellerIdAndStatusIn(Long sellerId, Collection<AuctionStatus> statuses);
+
+    long countByStatus(AuctionStatus status);
 }

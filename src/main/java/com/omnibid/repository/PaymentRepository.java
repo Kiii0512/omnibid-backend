@@ -41,4 +41,6 @@ public interface PaymentRepository extends JpaRepository<Payment, Long> {
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT p FROM Payment p WHERE p.transactionRef = :transactionRef")
     Optional<Payment> findByTransactionRefForUpdate(@Param("transactionRef") String transactionRef);
+
+    long countByStatus(PaymentStatus status);
 }

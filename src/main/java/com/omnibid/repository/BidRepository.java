@@ -8,15 +8,27 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
 @Repository
 public interface BidRepository extends JpaRepository<Bid, Long> {
+
     List<Bid> findByAuctionIdOrderByAmountDesc(Long auctionId);
+
     Optional<Bid> findTopByAuctionIdAndStatusOrderByAmountDesc(Long auctionId, BidStatus status);
+
     List<Bid> findByBidderId(Long bidderId);
+
+    List<Bid> findByAuctionId(Long auctionId);
+
+    List<Bid> findByAuctionIdAndBidderId(Long auctionId, Long bidderId);
+
+    @Query("SELECT DISTINCT b.auctionId FROM Bid b WHERE b.bidderId = :bidderId AND b.status IN :statuses")
+    List<Long> findDistinctAuctionIdsByBidderIdAndStatusIn(@Param("bidderId") Long bidderId,
+                                                          @Param("statuses") Collection<BidStatus> statuses);
 
     @Query("""
         SELECT b FROM Bid b, User u
@@ -28,4 +40,6 @@ public interface BidRepository extends JpaRepository<Bid, Long> {
     List<Bid> findValidBidsDesc(@Param("auctionId") Long auctionId,
                                 @Param("statuses") Collection<BidStatus> statuses,
                                 Pageable page);
+
+    long countByCreatedAtBetween(LocalDateTime from, LocalDateTime to);
 }
