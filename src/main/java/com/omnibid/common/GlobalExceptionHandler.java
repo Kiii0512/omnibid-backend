@@ -24,7 +24,14 @@ public class GlobalExceptionHandler {
             code = ex.getStatus().name();
         }
         ApiResponse<Object> response = ApiResponse.error(code, ex.getMessage(), ex.getData());
-        return new ResponseEntity<>(response, ex.getStatus());
+        org.springframework.http.HttpHeaders headers = new org.springframework.http.HttpHeaders();
+        if (ex.getStatus() == HttpStatus.TOO_MANY_REQUESTS && ex.getData() instanceof Map<?, ?> map) {
+            Object retryAfter = map.get("retryAfterSeconds");
+            if (retryAfter != null) {
+                headers.add("Retry-After", String.valueOf(retryAfter));
+            }
+        }
+        return new ResponseEntity<>(response, headers, ex.getStatus());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

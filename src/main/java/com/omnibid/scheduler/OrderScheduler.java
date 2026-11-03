@@ -1,6 +1,7 @@
 package com.omnibid.scheduler;
 
 import com.omnibid.service.OrderService;
+import com.omnibid.service.PaymentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -12,10 +13,16 @@ import org.springframework.stereotype.Component;
 public class OrderScheduler {
 
     private final OrderService orderService;
+    private final PaymentService paymentService;
 
     @Scheduled(fixedDelayString = "${app.scheduler.order-delay:10000}", initialDelay = 10000)
     public void tick() {
-        // 1. PaymentService.timeoutStalePayments() (chừa chỗ cho bước sau)
+        // 1. PaymentService.timeoutStalePayments() (PAY-12)
+        try {
+            paymentService.timeoutStalePayments();
+        } catch (Exception ex) {
+            log.error("Error in OrderScheduler.timeoutStalePayments", ex);
+        }
 
         // 2. Nhắc thanh toán 24h và 2h (ORD-07)
         try {

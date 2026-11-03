@@ -31,6 +31,19 @@ public class AppProperties {
     public static class PaymentProperties {
         private RateLimitProperties rateLimit = new RateLimitProperties();
         private int pendingTimeoutMinutes = 5;
+        private MockProperties mock = new MockProperties();
+
+        public static PaymentProperties defaults() {
+            return new PaymentProperties();
+        }
+
+        @Getter
+        @Setter
+        public static class MockProperties {
+            private boolean allowSimulateResult = true;
+            private com.omnibid.enums.SimulatedOutcome defaultOutcome = com.omnibid.enums.SimulatedOutcome.SUCCESS;
+            private int processingDelaySeconds = 10;
+        }
 
         @Getter
         @Setter
