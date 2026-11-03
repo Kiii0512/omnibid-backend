@@ -1,21 +1,20 @@
 package com.omnibid.service;
 
+import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.entity.Auction;
 import com.omnibid.entity.Bid;
 import com.omnibid.entity.Product;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.BidStatus;
+import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.ProductRepository;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.Clock;
 import java.time.LocalDateTime;
@@ -23,14 +22,36 @@ import java.util.Optional;
 
 @Slf4j
 @Component
-@RequiredArgsConstructor
 public class AuctionLifecycleSupport {
 
     private final AuctionRepository auctionRepository;
     private final BidRepository bidRepository;
     private final ProductRepository productRepository;
     private final WebSocketPublisher webSocketPublisher;
+    private final NotificationService notificationService;
     private final Clock clock;
+
+    public AuctionLifecycleSupport(AuctionRepository auctionRepository,
+                                   BidRepository bidRepository,
+                                   ProductRepository productRepository,
+                                   WebSocketPublisher webSocketPublisher,
+                                   NotificationService notificationService,
+                                   Clock clock) {
+        this.auctionRepository = auctionRepository;
+        this.bidRepository = bidRepository;
+        this.productRepository = productRepository;
+        this.webSocketPublisher = webSocketPublisher;
+        this.notificationService = notificationService;
+        this.clock = clock;
+    }
+
+    public AuctionLifecycleSupport(AuctionRepository auctionRepository,
+                                   BidRepository bidRepository,
+                                   ProductRepository productRepository,
+                                   WebSocketPublisher webSocketPublisher,
+                                   Clock clock) {
+        this(auctionRepository, bidRepository, productRepository, webSocketPublisher, null, clock);
+    }
 
     @Transactional
     public Auction cancelLocked(Auction auction, String reason) {
@@ -45,6 +66,18 @@ public class AuctionLifecycleSupport {
         leadingBid.ifPresent(bid -> {
             bid.setStatus(BidStatus.NOT_WON);
             bidRepository.save(bid);
+
+            // N-05 / D-05: Thông báo AUCTION_ENDED cho người đang dẫn đầu khi phiên bị hủy
+            if (notificationService != null) {
+                notificationService.notify(
+                        bid.getBidderId(),
+                        NotificationType.AUCTION_ENDED,
+                        NotificationTemplates.auctionCancelledTitle(reason),
+                        NotificationTemplates.auctionCancelledContent(auction.getId(), reason),
+                        "AUCTION",
+                        auction.getId()
+                );
+            }
         });
 
         Auction savedAuction = auctionRepository.save(auction);
@@ -80,15 +113,6 @@ public class AuctionLifecycleSupport {
                 .createdAt(auction.getCreatedAt())
                 .build();
 
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
-                }
-            });
-        } else {
-            webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
-        }
+        webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
     }
 }

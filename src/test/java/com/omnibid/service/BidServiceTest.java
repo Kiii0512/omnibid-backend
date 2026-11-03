@@ -53,6 +53,9 @@ class BidServiceTest {
     @Mock
     private WebSocketPublisher webSocketPublisher;
 
+    @Mock
+    private NotificationService notificationService;
+
     private BidServiceImpl bidService;
 
     private Auction sampleAuction;
@@ -60,7 +63,7 @@ class BidServiceTest {
 
     @BeforeEach
     void setUp() {
-        bidService = new BidServiceImpl(auctionRepository, bidRepository, userRepository, webSocketPublisher, clock);
+        bidService = new BidServiceImpl(auctionRepository, bidRepository, userRepository, webSocketPublisher, notificationService, clock);
 
         sampleBidder = User.builder()
                 .id(2L)
@@ -194,5 +197,43 @@ class BidServiceTest {
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertEquals("ACCOUNT_BANNED", ex.getCode());
         verifyNoInteractions(auctionRepository);
+    }
+
+    @Test
+    @DisplayName("UT-CORE-02 Đặt giá tạo thông báo OUTBID cho người bị vượt")
+    void placeBid_OutbidsPreviousLeader_SendsOutbidNotification() {
+        Long previousLeaderId = 3L;
+        Bid previousLeadingBid = Bid.builder()
+                .id(10L)
+                .auctionId(100L)
+                .bidderId(previousLeaderId)
+                .amount(BigDecimal.valueOf(100))
+                .status(BidStatus.LEADING)
+                .build();
+
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
+        when(bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(100L, BidStatus.LEADING))
+                .thenReturn(Optional.of(previousLeadingBid));
+        when(bidRepository.save(any(Bid.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        BidRequest request = BidRequest.builder()
+                .auctionId(100L)
+                .amount(BigDecimal.valueOf(120))
+                .build();
+
+        BidResponse response = bidService.placeBid(2L, request);
+
+        assertNotNull(response);
+        assertEquals(BidStatus.OUTBID, previousLeadingBid.getStatus());
+        verify(bidRepository).save(previousLeadingBid);
+        verify(notificationService).notify(
+                eq(previousLeaderId),
+                eq(com.omnibid.enums.NotificationType.OUTBID),
+                any(),
+                any(),
+                eq("AUCTION"),
+                eq(100L)
+        );
     }
 }

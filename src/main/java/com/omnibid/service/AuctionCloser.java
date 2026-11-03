@@ -1,11 +1,14 @@
 package com.omnibid.service;
 
+import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.entity.Auction;
 import com.omnibid.entity.Bid;
+import com.omnibid.entity.Order;
 import com.omnibid.entity.Product;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.BidStatus;
+import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
@@ -15,8 +18,6 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
@@ -33,6 +34,7 @@ public class AuctionCloser {
     private final ProductRepository productRepository;
     private final OrderService orderService;
     private final WebSocketPublisher webSocketPublisher;
+    private final NotificationService notificationService;
     private final Clock clock;
 
     public AuctionCloser(PlatformTransactionManager transactionManager,
@@ -41,6 +43,7 @@ public class AuctionCloser {
                          ProductRepository productRepository,
                          OrderService orderService,
                          WebSocketPublisher webSocketPublisher,
+                         NotificationService notificationService,
                          Clock clock) {
         TransactionTemplate template = new TransactionTemplate(transactionManager);
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
@@ -50,6 +53,7 @@ public class AuctionCloser {
         this.productRepository = productRepository;
         this.orderService = orderService;
         this.webSocketPublisher = webSocketPublisher;
+        this.notificationService = notificationService;
         this.clock = clock;
     }
 
@@ -60,6 +64,7 @@ public class AuctionCloser {
                          ProductRepository productRepository,
                          OrderService orderService,
                          WebSocketPublisher webSocketPublisher,
+                         NotificationService notificationService,
                          Clock clock) {
         this.transactionTemplate = transactionTemplate;
         this.auctionRepository = auctionRepository;
@@ -67,6 +72,7 @@ public class AuctionCloser {
         this.productRepository = productRepository;
         this.orderService = orderService;
         this.webSocketPublisher = webSocketPublisher;
+        this.notificationService = notificationService;
         this.clock = clock;
     }
 
@@ -75,8 +81,17 @@ public class AuctionCloser {
     }
 
     public void doClose(Long auctionId, LocalDateTime now) {
+        // Khóa dòng phiên trước khi kiểm tra trạng thái
         Auction auction = auctionRepository.findByIdForUpdate(auctionId).orElse(null);
-        if (auction == null || auction.getStatus() != AuctionStatus.ACTIVE || now.isBefore(auction.getEndTime())) {
+        if (auction == null) {
+            log.warn("Auction {} not found when closing", auctionId);
+            return;
+        }
+
+        // Bỏ qua nếu phiên không còn ở trạng thái ACTIVE hoặc chưa hết giờ (R-02)
+        if (auction.getStatus() != AuctionStatus.ACTIVE || now.isBefore(auction.getEndTime())) {
+            log.info("Auction {} status is {} or not yet expired (endTime={}), skipping close",
+                    auctionId, auction.getStatus(), auction.getEndTime());
             return;
         }
 
@@ -86,7 +101,6 @@ public class AuctionCloser {
                 List.of(BidStatus.LEADING, BidStatus.OUTBID),
                 PageRequest.of(0, 1)
         );
-
         boolean hasValidBid = !validBids.isEmpty();
         Bid winningBid = hasValidBid ? validBids.get(0) : null;
         boolean reserveMet = winningBid != null && (
@@ -110,7 +124,39 @@ public class AuctionCloser {
                 productRepository.save(product);
             }
 
-            orderService.createFromAuction(auction);
+            Order order = orderService.createFromAuction(auction);
+
+            // N-02 / UT-SCH-10: Thông báo AUCTION_WON cho người thắng
+            notificationService.notify(
+                    winningBid.getBidderId(),
+                    NotificationType.AUCTION_WON,
+                    NotificationTemplates.auctionWonTitle(),
+                    NotificationTemplates.auctionWonContent(auction.getId(), winningBid.getAmount()),
+                    "AUCTION",
+                    auction.getId()
+            );
+
+            // N-03 / UT-SCH-10: Thông báo ORDER_CREATED cho người thắng
+            Long orderId = order != null ? order.getId() : null;
+            LocalDateTime deadline = order != null ? order.getPaymentDeadline() : null;
+            notificationService.notify(
+                    winningBid.getBidderId(),
+                    NotificationType.ORDER_CREATED,
+                    NotificationTemplates.orderCreatedTitle(orderId, deadline),
+                    NotificationTemplates.orderCreatedContent(orderId, auction.getId(), deadline),
+                    "ORDER",
+                    orderId
+            );
+
+            // N-04 / UT-SCH-10: Thông báo AUCTION_ENDED cho seller
+            notificationService.notify(
+                    auction.getSellerId(),
+                    NotificationType.AUCTION_ENDED,
+                    NotificationTemplates.auctionEndedSellerTitle(),
+                    NotificationTemplates.auctionEndedSellerContent(auction.getId(), winningBid.getAmount()),
+                    "AUCTION",
+                    auction.getId()
+            );
 
             log.info("Auction {} ENDED successfully, winner={}, price={}",
                     auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
@@ -129,6 +175,16 @@ public class AuctionCloser {
                 product.setStatus(ProductStatus.AVAILABLE);
                 productRepository.save(product);
             }
+
+            // N-04: Thông báo AUCTION_ENDED cho seller khi không bán được
+            notificationService.notify(
+                    auction.getSellerId(),
+                    NotificationType.AUCTION_ENDED,
+                    NotificationTemplates.auctionUnsoldSellerTitle(),
+                    NotificationTemplates.auctionUnsoldSellerContent(auction.getId()),
+                    "AUCTION",
+                    auction.getId()
+            );
 
             log.info("Auction {} UNSOLD (hasValidBid={}, reserveMet={})", auction.getId(), hasValidBid, reserveMet);
         }
@@ -173,15 +229,6 @@ public class AuctionCloser {
                 .createdAt(auction.getCreatedAt())
                 .build();
 
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
-                }
-            });
-        } else {
-            webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
-        }
+        webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
     }
 }

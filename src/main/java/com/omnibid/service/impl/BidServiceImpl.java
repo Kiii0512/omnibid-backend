@@ -1,6 +1,8 @@
 package com.omnibid.service.impl;
 
 import com.omnibid.common.AppException;
+import com.omnibid.common.MaskingUtils;
+import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.bid.BidRequest;
 import com.omnibid.dto.bid.BidResponse;
 import com.omnibid.entity.Auction;
@@ -8,19 +10,19 @@ import com.omnibid.entity.Bid;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.BidStatus;
+import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.service.BidService;
+import com.omnibid.service.NotificationService;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.math.BigDecimal;
 import java.time.Clock;
@@ -39,6 +41,7 @@ public class BidServiceImpl implements BidService {
     private final BidRepository bidRepository;
     private final UserRepository userRepository;
     private final WebSocketPublisher webSocketPublisher;
+    private final NotificationService notificationService;
     private final Clock clock;
 
     @Override
@@ -83,6 +86,16 @@ public class BidServiceImpl implements BidService {
         currentLeadingBid.ifPresent(leadingBid -> {
             leadingBid.setStatus(BidStatus.OUTBID);
             bidRepository.save(leadingBid);
+
+            // N-01 / UT-CORE-02: Thông báo OUTBID cho người vừa mất vị trí dẫn đầu
+            notificationService.notify(
+                    leadingBid.getBidderId(),
+                    NotificationType.OUTBID,
+                    NotificationTemplates.outbidTitle(),
+                    NotificationTemplates.outbidContent(auction.getId(), request.getAmount()),
+                    "AUCTION",
+                    auction.getId()
+            );
         });
 
         Bid newBid = Bid.builder()
@@ -98,7 +111,7 @@ public class BidServiceImpl implements BidService {
         auction.setBidCount((auction.getBidCount() == null ? 0 : auction.getBidCount()) + 1);
         auctionRepository.save(auction);
 
-        String maskedBidderName = maskName(bidder.getFullName());
+        String maskedBidderName = MaskingUtils.maskName(bidder.getFullName());
 
         BidResponse bidResponse = BidResponse.builder()
                 .id(savedBid.getId())
@@ -110,25 +123,12 @@ public class BidServiceImpl implements BidService {
                 .createdAt(savedBid.getCreatedAt() != null ? savedBid.getCreatedAt() : now)
                 .build();
 
-        publishWsAfterCommit(auction.getId(), bidResponse);
+        webSocketPublisher.publishAuctionUpdate(auction.getId(), bidResponse);
 
         log.info("Bid placed successfully: auctionId={}, bidderId={}, amount={}",
                 auction.getId(), bidderId, request.getAmount());
 
         return bidResponse;
-    }
-
-    private void publishWsAfterCommit(Long auctionId, BidResponse bidResponse) {
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    webSocketPublisher.publishAuctionUpdate(auctionId, bidResponse);
-                }
-            });
-        } else {
-            webSocketPublisher.publishAuctionUpdate(auctionId, bidResponse);
-        }
     }
 
     @Override
@@ -139,7 +139,7 @@ public class BidServiceImpl implements BidService {
             String maskedName = "***";
             User bidder = userRepository.findById(bid.getBidderId()).orElse(null);
             if (bidder != null) {
-                maskedName = maskName(bidder.getFullName());
+                maskedName = MaskingUtils.maskName(bidder.getFullName());
             }
             return BidResponse.builder()
                     .id(bid.getId())
@@ -151,14 +151,5 @@ public class BidServiceImpl implements BidService {
                     .createdAt(bid.getCreatedAt())
                     .build();
         }).collect(Collectors.toList());
-    }
-
-    private String maskName(String fullName) {
-        if (fullName == null || fullName.isBlank()) return "***";
-        String[] parts = fullName.trim().split("\\s+");
-        if (parts.length == 1) {
-            return parts[0].charAt(0) + "***";
-        }
-        return parts[0].charAt(0) + "***" + parts[parts.length - 1].charAt(0);
     }
 }

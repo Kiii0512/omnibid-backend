@@ -62,6 +62,9 @@ class AuctionCloserTest {
     private WebSocketPublisher webSocketPublisher;
 
     @Mock
+    private NotificationService notificationService;
+
+    @Mock
     private TransactionTemplate transactionTemplate;
 
     private OrderService orderService;
@@ -89,6 +92,7 @@ class AuctionCloserTest {
                 productRepository,
                 orderService,
                 webSocketPublisher,
+                notificationService,
                 clock
         );
 
@@ -351,7 +355,7 @@ class AuctionCloserTest {
     }
 
     @Test
-    @DisplayName("UT-SCH-10 Thông báo sau chốt: đăng ký WebSocket publish sau khi commit")
+    @DisplayName("UT-SCH-10 Thông báo sau chốt: đăng ký AUCTION_WON, ORDER_CREATED (người thắng), AUCTION_ENDED (seller)")
     void closeOne_NotifiesWebSocketUpdate() {
         Bid highestBid = Bid.builder()
                 .id(1L)
@@ -369,6 +373,9 @@ class AuctionCloserTest {
 
         auctionCloser.closeOne(100L);
 
+        verify(notificationService).notify(eq(2L), eq(com.omnibid.enums.NotificationType.AUCTION_WON), any(), any(), eq("AUCTION"), eq(100L));
+        verify(notificationService).notify(eq(2L), eq(com.omnibid.enums.NotificationType.ORDER_CREATED), any(), any(), eq("ORDER"), any());
+        verify(notificationService).notify(eq(1L), eq(com.omnibid.enums.NotificationType.AUCTION_ENDED), any(), any(), eq("AUCTION"), eq(100L));
         verify(webSocketPublisher).publishAuctionUpdate(eq(100L), any());
     }
 }
