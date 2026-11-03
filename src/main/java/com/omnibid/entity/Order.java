@@ -113,6 +113,12 @@ public class Order {
         this.completedAt = now;
     }
 
+    public void complete(LocalDateTime now) {
+        require(status == OrderStatus.PAID || status == OrderStatus.SHIPPING, "complete");
+        this.status = OrderStatus.COMPLETED;
+        this.completedAt = now;
+    }
+
     public void expire() {
         require(status == OrderStatus.PENDING_PAYMENT, "expire");
         this.status = OrderStatus.EXPIRED;
