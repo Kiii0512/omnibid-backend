@@ -142,14 +142,12 @@ src/main/java/com/omnibid/
    * **Build Tool:** Maven Wrapper (`.\mvnw.cmd` trên Windows hoặc `./mvnw` trên Linux/macOS).
    * **Cơ sở dữ liệu:** MySQL 8.0+ (InnoDB, UTF8mb4).
 
-2. **Cấu hình biến môi trường:**
-   Hệ thống đọc thông tin kết nối và secret từ biến môi trường (xem file mẫu `application-example.properties`):
-   ```powershell
-   $env:DB_URL="jdbc:mysql://localhost:3306/online_auction_db?sslMode=REQUIRED&serverTimezone=Asia/Ho_Chi_Minh"
-   $env:DB_USERNAME="avnadmin"
-   $env:DB_PASSWORD="your_database_password"
-   $env:JWT_SECRET="your_jwt_secret_key_minimum_256_bits"
-   ```
+2. **Cấu hình ứng dụng:**
+   Chép `src/main/resources/application-example.properties` thành `src/main/resources/application.properties` rồi điền giá trị thật (file `application.properties` đã được đưa vào `.gitignore` để bảo mật thông tin kết nối và secret key):
+   * `spring.datasource.url`: URL kết nối MySQL.
+   * `spring.datasource.username` & `spring.datasource.password`: Tài khoản và mật khẩu MySQL.
+   * `jwt.secret`: Chuỗi bí mật JWT tối thiểu 256-bit.
+   * `app.cors.allowed-origins`: Danh sách nguồn Frontend được phép kết nối qua CORS (phân tách bằng dấu phẩy).
 
 3. **Lệnh biên dịch kiểm tra:**
    ```powershell
