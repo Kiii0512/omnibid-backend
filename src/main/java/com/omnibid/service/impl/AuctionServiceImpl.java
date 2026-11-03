@@ -4,20 +4,16 @@ import com.omnibid.common.AppException;
 import com.omnibid.dto.auction.AuctionCreateRequest;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.entity.Auction;
-import com.omnibid.entity.Bid;
-import com.omnibid.entity.Order;
 import com.omnibid.entity.Product;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
-import com.omnibid.enums.BidStatus;
-import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.enums.UserRole;
 import com.omnibid.repository.AuctionRepository;
-import com.omnibid.repository.BidRepository;
-import com.omnibid.repository.OrderRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.repository.UserRepository;
+import com.omnibid.service.AuctionCloser;
+import com.omnibid.service.AuctionLifecycleSupport;
 import com.omnibid.service.AuctionService;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
@@ -28,9 +24,9 @@ import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
-import java.util.Optional;
 
 @Slf4j
 @Service
@@ -40,9 +36,10 @@ public class AuctionServiceImpl implements AuctionService {
     private final AuctionRepository auctionRepository;
     private final ProductRepository productRepository;
     private final UserRepository userRepository;
-    private final BidRepository bidRepository;
-    private final OrderRepository orderRepository;
     private final WebSocketPublisher webSocketPublisher;
+    private final AuctionCloser auctionCloser;
+    private final AuctionLifecycleSupport auctionLifecycleSupport;
+    private final Clock clock;
 
     @Override
     @Transactional
@@ -59,13 +56,13 @@ public class AuctionServiceImpl implements AuctionService {
         }
 
         if (product.getStatus() != ProductStatus.AVAILABLE) {
-            throw new AppException("Product is not available for auction", HttpStatus.BAD_REQUEST);
+            throw new AppException("PRODUCT_NOT_AVAILABLE", "Product is not available for auction", HttpStatus.CONFLICT);
         }
 
         product.setStatus(ProductStatus.IN_AUCTION);
         productRepository.save(product);
 
-        LocalDateTime now = LocalDateTime.now();
+        LocalDateTime now = LocalDateTime.now(clock);
         AuctionStatus initialStatus = !request.getStartTime().isAfter(now)
                 ? AuctionStatus.ACTIVE
                 : AuctionStatus.SCHEDULED;
@@ -117,136 +114,57 @@ public class AuctionServiceImpl implements AuctionService {
     @Override
     @Transactional
     public AuctionResponse cancelAuction(Long userId, Long auctionId, String reason) {
-        Auction auction = auctionRepository.findById(auctionId)
+        Auction auction = auctionRepository.findByIdForUpdate(auctionId)
                 .orElseThrow(() -> new AppException("Auction not found with id: " + auctionId, HttpStatus.NOT_FOUND));
 
         User user = userRepository.findById(userId)
                 .orElseThrow(() -> new AppException("User not found with id: " + userId, HttpStatus.NOT_FOUND));
 
-        if (!auction.getSellerId().equals(userId) && user.getRole() != UserRole.ADMIN) {
-            throw new AppException("You are not authorized to cancel this auction", HttpStatus.FORBIDDEN);
+        boolean isSeller = auction.getSellerId().equals(userId);
+        boolean isAdmin = user.getRole() == UserRole.ADMIN;
+
+        if (!isSeller && !isAdmin) {
+            throw new AppException("FORBIDDEN", "You are not authorized to cancel this auction", HttpStatus.FORBIDDEN);
         }
 
-        if (auction.getBidCount() != null && auction.getBidCount() > 0) {
-            throw new AppException("Cannot cancel auction with existing bids", HttpStatus.BAD_REQUEST);
+        if (isSeller && auction.getStatus() == AuctionStatus.ACTIVE && auction.getBidCount() != null && auction.getBidCount() > 0) {
+            throw new AppException("CANNOT_CANCEL", "Cannot cancel auction with existing bids", HttpStatus.CONFLICT);
         }
 
         if (auction.getStatus() != AuctionStatus.SCHEDULED && auction.getStatus() != AuctionStatus.ACTIVE) {
-            throw new AppException("Auction cannot be cancelled in status: " + auction.getStatus(), HttpStatus.BAD_REQUEST);
+            throw new AppException("CANNOT_CANCEL", "Auction cannot be cancelled in status: " + auction.getStatus(), HttpStatus.CONFLICT);
         }
 
-        auction.setStatus(AuctionStatus.CANCELLED);
-        auction.setCancelReason(reason);
-        Auction savedAuction = auctionRepository.save(auction);
-
-        Product product = productRepository.findById(auction.getProductId()).orElse(null);
-        if (product != null) {
-            product.setStatus(ProductStatus.AVAILABLE);
-            productRepository.save(product);
-        }
-
-        AuctionResponse response = mapToAuctionResponse(savedAuction);
-        webSocketPublisher.publishAuctionUpdate(auctionId, response);
-        return response;
+        Auction cancelled = auctionLifecycleSupport.cancelLocked(auction, reason);
+        return mapToAuctionResponse(cancelled);
     }
 
     @Override
-    @Transactional
     public void startScheduledAuctions() {
-        LocalDateTime now = LocalDateTime.now();
-        List<Auction> scheduledAuctions = auctionRepository.findByStatusAndStartTimeLessThanEqual(AuctionStatus.SCHEDULED, now);
+        LocalDateTime now = LocalDateTime.now(clock);
+        List<Long> scheduledIds = auctionRepository.findIdsByStatusAndStartTimeLessThanEqual(AuctionStatus.SCHEDULED, now);
 
-        for (Auction auction : scheduledAuctions) {
+        for (Long id : scheduledIds) {
             try {
-                auction.setStatus(AuctionStatus.ACTIVE);
-                Auction updated = auctionRepository.save(auction);
-                AuctionResponse response = mapToAuctionResponse(updated);
-                webSocketPublisher.publishAuctionUpdate(updated.getId(), response);
-                log.info("Started auction {} at {}", updated.getId(), now);
+                auctionCloser.startOne(id);
             } catch (Exception e) {
-                log.error("Failed to start scheduled auction {}", auction.getId(), e);
+                log.error("Failed to start scheduled auction {}", id, e);
             }
         }
     }
 
     @Override
-    @Transactional
     public void closeEndedAuctions() {
-        LocalDateTime now = LocalDateTime.now();
-        List<Auction> endedCandidates = auctionRepository.findByStatusAndEndTimeLessThanEqual(AuctionStatus.ACTIVE, now);
+        LocalDateTime now = LocalDateTime.now(clock);
+        List<Long> activeIds = auctionRepository.findIdsByStatusAndEndTimeLessThanEqual(AuctionStatus.ACTIVE, now);
 
-        for (Auction candidate : endedCandidates) {
+        for (Long id : activeIds) {
             try {
-                closeSingleAuction(candidate.getId(), now);
+                auctionCloser.closeOne(id);
             } catch (Exception e) {
-                log.error("Failed to close auction {}", candidate.getId(), e);
+                log.error("Failed to close auction {}", id, e);
             }
         }
-    }
-
-    private void closeSingleAuction(Long auctionId, LocalDateTime now) {
-        Auction auction = auctionRepository.findByIdForUpdate(auctionId).orElse(null);
-        if (auction == null || auction.getStatus() != AuctionStatus.ACTIVE || now.isBefore(auction.getEndTime())) {
-            return;
-        }
-
-        boolean hasBids = auction.getBidCount() != null && auction.getBidCount() > 0 && auction.getHighestBidderId() != null;
-        boolean reserveMet = auction.getReservePrice() == null
-                || (auction.getCurrentPrice() != null && auction.getCurrentPrice().compareTo(auction.getReservePrice()) >= 0);
-
-        if (hasBids && reserveMet) {
-            auction.setStatus(AuctionStatus.ENDED);
-            auction.setWinnerId(auction.getHighestBidderId());
-            auction.setFinalPrice(auction.getCurrentPrice());
-            auction.setClosedAt(now);
-            auctionRepository.save(auction);
-
-            Optional<Bid> winningBid = bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(auction.getId(), BidStatus.LEADING);
-            winningBid.ifPresent(bid -> {
-                bid.setStatus(BidStatus.WON);
-                bidRepository.save(bid);
-            });
-
-            Product product = productRepository.findById(auction.getProductId()).orElse(null);
-            if (product != null) {
-                product.setStatus(ProductStatus.RESERVED);
-                productRepository.save(product);
-            }
-
-            if (orderRepository.findByAuctionId(auction.getId()).isEmpty()) {
-                Order order = Order.builder()
-                        .auctionId(auction.getId())
-                        .buyerId(auction.getHighestBidderId())
-                        .amount(auction.getCurrentPrice())
-                        .status(OrderStatus.PENDING_PAYMENT)
-                        .paymentDeadline(now.plusHours(48))
-                        .build();
-                orderRepository.save(order);
-            }
-
-            log.info("Auction {} ENDED successfully, winner={}", auction.getId(), auction.getWinnerId());
-        } else {
-            auction.setStatus(AuctionStatus.UNSOLD);
-            auction.setClosedAt(now);
-            auctionRepository.save(auction);
-
-            Optional<Bid> highestBid = bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(auction.getId(), BidStatus.LEADING);
-            highestBid.ifPresent(bid -> {
-                bid.setStatus(BidStatus.NOT_WON);
-                bidRepository.save(bid);
-            });
-
-            Product product = productRepository.findById(auction.getProductId()).orElse(null);
-            if (product != null) {
-                product.setStatus(ProductStatus.AVAILABLE);
-                productRepository.save(product);
-            }
-
-            log.info("Auction {} UNSOLD (bids={}, reserveMet={})", auction.getId(), hasBids, reserveMet);
-        }
-
-        AuctionResponse response = mapToAuctionResponse(auction);
-        webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
     }
 
     private AuctionResponse mapToAuctionResponse(Auction auction) {
@@ -267,7 +185,7 @@ public class AuctionServiceImpl implements AuctionService {
         if (auction.getHighestBidderId() != null) {
             User bidder = userRepository.findById(auction.getHighestBidderId()).orElse(null);
             if (bidder != null) {
-                highestBidderName = bidder.getFullName();
+                highestBidderName = maskName(bidder.getFullName());
             }
         }
 
@@ -288,7 +206,27 @@ public class AuctionServiceImpl implements AuctionService {
                 .status(auction.getStatus())
                 .winnerId(auction.getWinnerId())
                 .finalPrice(auction.getFinalPrice())
+                .closedAt(auction.getClosedAt())
+                .cancelReason(auction.getCancelReason())
+                .createdAt(auction.getCreatedAt())
                 .build();
     }
-}
 
+    private String maskName(String fullName) {
+        if (fullName == null || fullName.isBlank()) return "***";
+        String[] parts = fullName.trim().split("\\s+");
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < parts.length; i++) {
+            String p = parts[i];
+            if (p.length() <= 2) {
+                sb.append(p.charAt(0)).append("*");
+            } else {
+                sb.append(p.charAt(0))
+                        .append("*".repeat(p.length() - 2))
+                        .append(p.charAt(p.length() - 1));
+            }
+            if (i < parts.length - 1) sb.append(" ");
+        }
+        return sb.toString();
+    }
+}

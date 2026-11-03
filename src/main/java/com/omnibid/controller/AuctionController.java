@@ -2,6 +2,7 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.AppException;
+import com.omnibid.common.PageResponse;
 import com.omnibid.dto.auction.AuctionCreateRequest;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.dto.auction.CancelAuctionRequest;
@@ -33,19 +34,19 @@ public class AuctionController {
             @Valid @RequestBody AuctionCreateRequest request
     ) {
         if (userDetails == null) {
-            throw new AppException("Unauthorized", HttpStatus.UNAUTHORIZED);
+            throw new AppException("UNAUTHORIZED", "Unauthorized", HttpStatus.UNAUTHORIZED);
         }
         AuctionResponse response = auctionService.createAuction(userDetails.getId(), request);
         return ApiResponse.success("Auction created successfully", response);
     }
 
     @GetMapping
-    public ApiResponse<Page<AuctionResponse>> getAuctions(
+    public ApiResponse<PageResponse<AuctionResponse>> getAuctions(
             @RequestParam(required = false) AuctionStatus status,
             @PageableDefault(size = 20) Pageable pageable
     ) {
-        Page<AuctionResponse> response = auctionService.getAuctions(status, pageable);
-        return ApiResponse.success(response);
+        Page<AuctionResponse> page = auctionService.getAuctions(status, pageable);
+        return ApiResponse.success(PageResponse.from(page));
     }
 
     @GetMapping("/{id}")
@@ -58,14 +59,13 @@ public class AuctionController {
     public ApiResponse<AuctionResponse> cancelAuction(
             @PathVariable Long id,
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestBody(required = false) CancelAuctionRequest request
+            @Valid @RequestBody(required = false) CancelAuctionRequest request
     ) {
         if (userDetails == null) {
-            throw new AppException("Unauthorized", HttpStatus.UNAUTHORIZED);
+            throw new AppException("UNAUTHORIZED", "Unauthorized", HttpStatus.UNAUTHORIZED);
         }
-        String reason = request != null ? request.getReason() : null;
+        String reason = (request != null && request.getReason() != null) ? request.getReason() : "Cancelled by user";
         AuctionResponse response = auctionService.cancelAuction(userDetails.getId(), id, reason);
         return ApiResponse.success("Auction cancelled successfully", response);
     }
 }
-

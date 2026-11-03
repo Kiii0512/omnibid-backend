@@ -25,14 +25,14 @@ public class Report {
     private Long reporterId;
 
     @Enumerated(EnumType.STRING)
-    @Column(nullable = false)
-    private ReportType type;
+    @Column(name = "report_type", nullable = false)
+    private ReportType reportType;
 
-    @Column(name = "target_type", nullable = false, length = 50)
-    private String targetType;
+    @Column(name = "reported_user_id")
+    private Long reportedUserId;
 
-    @Column(name = "target_id", nullable = false)
-    private Long targetId;
+    @Column(name = "reported_product_id")
+    private Long reportedProductId;
 
     @Column(name = "order_id")
     private Long orderId;
@@ -46,9 +46,8 @@ public class Report {
     private ReportStatus status = ReportStatus.PENDING;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "resolved_action")
-    @Builder.Default
-    private ReportAction resolvedAction = ReportAction.NONE;
+    @Column(name = "action")
+    private ReportAction action;
 
     @Column(name = "admin_note", columnDefinition = "TEXT")
     private String adminNote;

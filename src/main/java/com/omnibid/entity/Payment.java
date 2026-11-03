@@ -24,26 +24,33 @@ public class Payment {
     @Column(name = "order_id", nullable = false)
     private Long orderId;
 
-    @Column(name = "idempotency_key", nullable = false, unique = true, length = 100)
-    private String idempotencyKey;
+    @Column(name = "attempt_no", nullable = false)
+    @Builder.Default
+    private Integer attemptNo = 1;
 
     @Column(nullable = false, precision = 12, scale = 2)
     private BigDecimal amount;
 
     @Enumerated(EnumType.STRING)
-    @Column(name = "payment_method", nullable = false)
-    private PaymentMethod paymentMethod;
+    @Column(name = "method", nullable = false)
+    private PaymentMethod method;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
     private PaymentStatus status = PaymentStatus.PENDING;
 
-    @Column(name = "mock_transaction_id", length = 100)
-    private String mockTransactionId;
+    @Column(name = "idempotency_key", nullable = false, length = 64)
+    private String idempotencyKey;
+
+    @Column(name = "transaction_ref", nullable = false, length = 64)
+    private String transactionRef;
 
     @Column(name = "failure_reason")
     private String failureReason;
+
+    @Column(name = "paid_at")
+    private LocalDateTime paidAt;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

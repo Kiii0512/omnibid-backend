@@ -21,20 +21,17 @@ public class AuditLog {
     @Column(name = "admin_id", nullable = false)
     private Long adminId;
 
-    @Column(nullable = false, length = 100)
+    @Column(nullable = false, length = 50)
     private String action;
 
-    @Column(name = "target_type", nullable = false, length = 50)
+    @Column(name = "target_type", nullable = false, length = 30)
     private String targetType;
 
     @Column(name = "target_id", nullable = false)
     private Long targetId;
 
-    @Column(columnDefinition = "TEXT")
-    private String details;
-
-    @Column(name = "ip_address", length = 45)
-    private String ipAddress;
+    @Column(name = "detail", columnDefinition = "TEXT")
+    private String detail;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

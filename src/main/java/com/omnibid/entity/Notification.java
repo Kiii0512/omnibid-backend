@@ -22,23 +22,23 @@ public class Notification {
     @Column(name = "user_id", nullable = false)
     private Long userId;
 
-    @Column(nullable = false)
-    private String title;
-
-    @Column(nullable = false, columnDefinition = "TEXT")
-    private String message;
-
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private NotificationType type;
 
-    @Column(name = "reference_id")
-    private Long referenceId;
+    @Column(nullable = false)
+    private String title;
 
-    @Column(name = "reference_type", length = 50)
-    private String referenceType;
+    @Column(nullable = false, columnDefinition = "TEXT")
+    private String content;
 
-    @Column(name = "is_read")
+    @Column(name = "ref_type", length = 30)
+    private String refType;
+
+    @Column(name = "ref_id")
+    private Long refId;
+
+    @Column(name = "is_read", nullable = false)
     @Builder.Default
     private Boolean isRead = false;
 

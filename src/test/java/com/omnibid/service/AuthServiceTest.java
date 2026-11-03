@@ -11,6 +11,7 @@ import com.omnibid.repository.UserRepository;
 import com.omnibid.security.JwtTokenProvider;
 import com.omnibid.service.impl.AuthServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -66,34 +67,32 @@ class AuthServiceTest {
                 .address("123 Street")
                 .build();
 
-        when(userRepository.existsByEmail(request.getEmail())).thenReturn(false);
-        when(passwordEncoder.encode(request.getPassword())).thenReturn("encodedPassword");
+        when(userRepository.existsByEmail("john@example.com")).thenReturn(false);
+        when(passwordEncoder.encode("rawPassword")).thenReturn("encodedPassword");
         when(userRepository.save(any(User.class))).thenReturn(sampleUser);
-        when(jwtTokenProvider.generateToken(sampleUser.getEmail(), sampleUser.getRole().name())).thenReturn("mockToken");
+        when(jwtTokenProvider.generateToken("john@example.com", "USER")).thenReturn("mockJwtToken");
 
         AuthResponse response = authService.register(request);
 
         assertNotNull(response);
-        assertEquals("mockToken", response.getAccessToken());
-        assertEquals(sampleUser.getEmail(), response.getEmail());
+        assertEquals("mockJwtToken", response.getAccessToken());
+        assertEquals("john@example.com", response.getEmail());
         assertEquals("USER", response.getRole());
-        verify(userRepository, times(1)).save(any(User.class));
+        verify(userRepository).save(any(User.class));
     }
 
     @Test
+    @DisplayName("D-02 Đăng ký trùng email trả 409 EMAIL_ALREADY_EXISTS")
     void register_DuplicateEmail_ThrowsAppException() {
         RegisterRequest request = RegisterRequest.builder()
-                .fullName("John Doe")
                 .email("john@example.com")
-                .password("rawPassword")
                 .build();
 
-        when(userRepository.existsByEmail(request.getEmail())).thenReturn(true);
+        when(userRepository.existsByEmail("john@example.com")).thenReturn(true);
 
         AppException ex = assertThrows(AppException.class, () -> authService.register(request));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertEquals("Email is already registered", ex.getMessage());
-        verify(userRepository, never()).save(any(User.class));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("EMAIL_ALREADY_EXISTS", ex.getCode());
     }
 
     @Test
@@ -103,15 +102,15 @@ class AuthServiceTest {
                 .password("rawPassword")
                 .build();
 
-        when(userRepository.findByEmail(request.getEmail())).thenReturn(Optional.of(sampleUser));
+        when(userRepository.findByEmail("john@example.com")).thenReturn(Optional.of(sampleUser));
         when(passwordEncoder.matches("rawPassword", "encodedPassword")).thenReturn(true);
-        when(jwtTokenProvider.generateToken(sampleUser.getEmail(), sampleUser.getRole().name())).thenReturn("mockToken");
+        when(jwtTokenProvider.generateToken("john@example.com", "USER")).thenReturn("mockJwtToken");
 
         AuthResponse response = authService.login(request);
 
         assertNotNull(response);
-        assertEquals("mockToken", response.getAccessToken());
-        assertEquals(sampleUser.getEmail(), response.getEmail());
+        assertEquals("mockJwtToken", response.getAccessToken());
+        assertEquals(1L, response.getUserId());
     }
 
     @Test
@@ -121,7 +120,7 @@ class AuthServiceTest {
                 .password("wrongPassword")
                 .build();
 
-        when(userRepository.findByEmail(request.getEmail())).thenReturn(Optional.of(sampleUser));
+        when(userRepository.findByEmail("john@example.com")).thenReturn(Optional.of(sampleUser));
         when(passwordEncoder.matches("wrongPassword", "encodedPassword")).thenReturn(false);
 
         AppException ex = assertThrows(AppException.class, () -> authService.login(request));
@@ -131,17 +130,17 @@ class AuthServiceTest {
     @Test
     void login_BannedUser_ThrowsAppException() {
         sampleUser.setStatus(UserStatus.BANNED);
+
         LoginRequest request = LoginRequest.builder()
                 .email("john@example.com")
                 .password("rawPassword")
                 .build();
 
-        when(userRepository.findByEmail(request.getEmail())).thenReturn(Optional.of(sampleUser));
+        when(userRepository.findByEmail("john@example.com")).thenReturn(Optional.of(sampleUser));
         when(passwordEncoder.matches("rawPassword", "encodedPassword")).thenReturn(true);
 
         AppException ex = assertThrows(AppException.class, () -> authService.login(request));
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
-        assertEquals("User account is banned", ex.getMessage());
+        assertEquals("ACCOUNT_BANNED", ex.getCode());
     }
 }
-

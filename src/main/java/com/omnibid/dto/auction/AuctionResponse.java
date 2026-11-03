@@ -46,5 +46,10 @@ public class AuctionResponse {
     private Long winnerId;
 
     private BigDecimal finalPrice;
-}
 
+    private LocalDateTime closedAt;
+
+    private String cancelReason;
+
+    private LocalDateTime createdAt;
+}

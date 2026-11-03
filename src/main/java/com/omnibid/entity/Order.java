@@ -24,11 +24,23 @@ public class Order {
     @Column(name = "auction_id", nullable = false, unique = true)
     private Long auctionId;
 
+    @Column(name = "product_id", nullable = false)
+    private Long productId;
+
+    @Column(name = "seller_id", nullable = false)
+    private Long sellerId;
+
     @Column(name = "buyer_id", nullable = false)
     private Long buyerId;
 
-    @Column(nullable = false, precision = 12, scale = 2)
-    private BigDecimal amount;
+    @Column(name = "final_price", nullable = false, precision = 12, scale = 2)
+    private BigDecimal finalPrice;
+
+    @Column(name = "shipping_address")
+    private String shippingAddress;
+
+    @Column(name = "phone_number", length = 20)
+    private String phoneNumber;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
@@ -41,8 +53,17 @@ public class Order {
     @Column(name = "paid_at")
     private LocalDateTime paidAt;
 
+    @Column(name = "delivered_at")
+    private LocalDateTime deliveredAt;
+
     @Column(name = "confirm_deadline")
     private LocalDateTime confirmDeadline;
+
+    @Column(name = "reminder_24h_sent_at")
+    private LocalDateTime reminder24hSentAt;
+
+    @Column(name = "reminder_2h_sent_at")
+    private LocalDateTime reminder2hSentAt;
 
     @Column(name = "completed_at")
     private LocalDateTime completedAt;

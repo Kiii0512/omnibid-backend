@@ -23,22 +23,17 @@ public class Shipment {
     @Column(name = "order_id", nullable = false, unique = true)
     private Long orderId;
 
-    @Column(name = "tracking_code", nullable = false, unique = true, length = 100)
+    @Column(name = "tracking_code", nullable = false, unique = true, length = 50)
     private String trackingCode;
+
+    @Column(name = "carrier_name", nullable = false, length = 100)
+    @Builder.Default
+    private String carrierName = "SIMULATED_CARRIER";
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     @Builder.Default
     private ShipmentStatus status = ShipmentStatus.CREATED;
-
-    @Column(name = "shipping_address", nullable = false)
-    private String shippingAddress;
-
-    @Column(name = "picked_up_at")
-    private LocalDateTime pickedUpAt;
-
-    @Column(name = "delivered_at")
-    private LocalDateTime deliveredAt;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
