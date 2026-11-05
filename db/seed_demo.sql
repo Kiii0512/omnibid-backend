@@ -23,11 +23,11 @@ INSERT INTO `products` (`id`, `seller_id`, `category_id`, `title`, `description`
 (1, 2, 1, 'Đồng hồ Rolex Submariner Date', 'Rolex Submariner Date thép Oystersteel chính hãng', 'LIKE_NEW', 'IN_AUCTION'),
 (2, 2, 2, 'iPhone 15 Pro Max 256GB', 'iPhone 15 Pro Max màu titan tự nhiên nguyên hộp', 'NEW', 'IN_AUCTION'),
 (3, 2, 2, 'MacBook Pro 16 inch M3 Max', 'MacBook Pro 16 inch 36GB RAM 1TB SSD Space Black', 'LIKE_NEW', 'IN_AUCTION'),
-(4, 2, 1, 'Đồng hồ Omega Speedmaster Moonwatch', 'Omega Speedmaster Professional Chronograph 42mm', 'USED', 'RESERVED'),
-(5, 2, 3, 'Bình gốm thời Chu thế kỷ 18', 'Bình gốm hoa lam cổ thời Chu nguyên bản men lam', 'USED', 'AVAILABLE'),
-(6, 2, 3, 'Tiền xu cổ Đông Dương 1885', 'Đồng bạc Đông Dương Piastre de Commerce hiếm', 'USED', 'AVAILABLE'),
-(7, 2, 2, 'Sony PlayStation 5 Slim', 'Máy chơi game PS5 Slim bản đĩa đã qua sử dụng', 'USED', 'SOLD'),
-(8, 2, 3, 'Tranh sơn dầu nghệ thuật cổ', 'Tranh sơn dầu trừu tượng không rõ nguồn gốc', 'USED', 'HIDDEN');
+(4, 2, 1, 'Đồng hồ Omega Speedmaster Moonwatch', 'Omega Speedmaster Professional Chronograph 42mm', 'GOOD', 'RESERVED'),
+(5, 2, 3, 'Bình gốm thời Chu thế kỷ 18', 'Bình gốm hoa lam cổ thời Chu nguyên bản men lam', 'GOOD', 'AVAILABLE'),
+(6, 2, 3, 'Tiền xu cổ Đông Dương 1885', 'Đồng bạc Đông Dương Piastre de Commerce hiếm', 'GOOD', 'AVAILABLE'),
+(7, 2, 2, 'Sony PlayStation 5 Slim', 'Máy chơi game PS5 Slim bản đĩa đã qua sử dụng', 'GOOD', 'SOLD'),
+(8, 2, 3, 'Tranh sơn dầu nghệ thuật cổ', 'Tranh sơn dầu trừu tượng không rõ nguồn gốc', 'GOOD', 'HIDDEN');
 
 -- 4. product_images (1..5 images per product)
 INSERT INTO `product_images` (`id`, `product_id`, `image_url`, `is_primary`) VALUES
