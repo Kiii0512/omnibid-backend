@@ -2,8 +2,10 @@ package com.omnibid.repository;
 
 import com.omnibid.entity.Bid;
 import com.omnibid.enums.BidStatus;
+import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
@@ -19,6 +21,15 @@ public interface BidRepository extends JpaRepository<Bid, Long> {
     List<Bid> findByAuctionIdOrderByAmountDesc(Long auctionId);
 
     Optional<Bid> findTopByAuctionIdAndStatusOrderByAmountDesc(Long auctionId, BidStatus status);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM Bid b WHERE b.auctionId = :auctionId AND b.status = :status")
+    List<Bid> findByAuctionIdAndStatusForUpdate(@Param("auctionId") Long auctionId, @Param("status") BidStatus status);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM Bid b WHERE b.bidderId = :bidderId AND b.status IN :statuses")
+    List<Bid> findByBidderIdAndStatusInForUpdate(@Param("bidderId") Long bidderId,
+                                                @Param("statuses") Collection<BidStatus> statuses);
 
     List<Bid> findByBidderId(Long bidderId);
 

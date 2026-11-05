@@ -159,12 +159,11 @@ public class ShipmentServiceImpl implements ShipmentService {
     @Override
     @Transactional
     public ShipmentStatusResponse updateShipmentStatus(CurrentUser currentUser, Long shipmentId, ShipmentStatusUpdateRequest request) {
-        Shipment pre = shipmentRepository.findById(shipmentId).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy vận đơn", HttpStatus.NOT_FOUND)
-        );
+        Long orderId = shipmentRepository.findOrderIdById(shipmentId)
+                .orElseThrow(() -> new AppException("NOT_FOUND", "Không tìm thấy vận đơn", HttpStatus.NOT_FOUND));
 
         // Lock order first, then lock shipment (SHP-07)
-        Order order = orderRepository.findByIdForUpdate(pre.getOrderId()).orElseThrow(
+        Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(
                 () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
         );
 

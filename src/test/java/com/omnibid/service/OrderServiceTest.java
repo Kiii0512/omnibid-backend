@@ -203,7 +203,6 @@ class OrderServiceTest {
                 .build();
 
         // 1. Order PENDING_PAYMENT
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
         when(orderRepository.save(any(Order.class))).thenAnswer(i -> i.getArgument(0));
 
@@ -230,7 +229,7 @@ class OrderServiceTest {
                 .phoneNumber("0900000000")
                 .build();
 
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
+        when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
 
         // (c) Người gọi là SELLER
         AppException exSeller = assertThrows(AppException.class, () -> orderService.updateShippingInfo(sellerUser, 9L, request));
@@ -303,7 +302,6 @@ class OrderServiceTest {
         sampleOrder.setPaymentDeadline(NOW);
         when(orderRepository.findByStatusAndPaymentDeadlineLessThanEqual(OrderStatus.PENDING_PAYMENT, NOW))
                 .thenReturn(List.of(sampleOrder));
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
         when(productRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(sampleProduct));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
         when(paymentRepository.existsByOrderIdAndStatus(9L, PaymentStatus.PENDING)).thenReturn(false);
@@ -325,7 +323,6 @@ class OrderServiceTest {
         sampleOrder.setPaymentDeadline(NOW.minusSeconds(1));
         when(orderRepository.findByStatusAndPaymentDeadlineLessThanEqual(OrderStatus.PENDING_PAYMENT, NOW))
                 .thenReturn(List.of(sampleOrder));
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
         when(productRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(sampleProduct));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
         when(paymentRepository.existsByOrderIdAndStatus(9L, PaymentStatus.PENDING)).thenReturn(true);
@@ -342,8 +339,6 @@ class OrderServiceTest {
     void expireOverdueOrders_BoundaryAndProductHidden() {
         // (a) Deadline = NOW + 1s (chưa quá hạn)
         sampleOrder.setPaymentDeadline(NOW.plusSeconds(1));
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
-        when(productRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(sampleProduct));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
 
         orderLifecycleSupport.expireOne(9L, NOW);
@@ -352,6 +347,7 @@ class OrderServiceTest {
         // (b) Deadline = NOW, Product HIDDEN
         sampleOrder.setPaymentDeadline(NOW);
         sampleProduct.setStatus(ProductStatus.HIDDEN);
+        when(productRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(sampleProduct));
         when(paymentRepository.existsByOrderIdAndStatus(9L, PaymentStatus.PENDING)).thenReturn(false);
         when(paymentRepository.existsByOrderIdAndStatus(9L, PaymentStatus.SUCCESS)).thenReturn(false);
 
@@ -365,7 +361,6 @@ class OrderServiceTest {
     @DisplayName("UT-ORD-12 Xác nhận nhận hàng: ORDER SHIPPING, Shipment DELIVERED, không khiếu nại -> COMPLETED, Product SOLD, thông báo seller")
     void confirmReceipt_Success() {
         sampleOrder.setStatus(OrderStatus.SHIPPING);
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
 
         Shipment delivered = Shipment.builder().id(1L).orderId(9L).status(ShipmentStatus.DELIVERED).build();
@@ -385,7 +380,6 @@ class OrderServiceTest {
     @DisplayName("UT-ORD-13 Xác nhận khi còn khiếu nại PENDING ném 409 COMPLAINT_PENDING, không đổi dữ liệu")
     void confirmReceipt_ComplaintPending_ThrowsConflict() {
         sampleOrder.setStatus(OrderStatus.SHIPPING);
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
 
         Shipment delivered = Shipment.builder().id(1L).orderId(9L).status(ShipmentStatus.DELIVERED).build();
@@ -404,9 +398,8 @@ class OrderServiceTest {
         sampleOrder.setStatus(OrderStatus.SHIPPING);
         sampleOrder.setConfirmDeadline(NOW);
         when(orderRepository.findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, NOW)).thenReturn(List.of(sampleOrder));
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
-        when(productRepository.findByIdForUpdate(sampleOrder.getProductId())).thenReturn(Optional.of(sampleProduct));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
+        when(productRepository.findByIdForUpdate(sampleOrder.getProductId())).thenReturn(Optional.of(sampleProduct));
         when(reportRepository.existsByOrderIdAndReportTypeAndStatus(9L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
 
         orderService.autoCompleteOrders();
@@ -422,8 +415,6 @@ class OrderServiceTest {
     void autoCompleteOrders_ComplaintPendingPausesCompletion() {
         sampleOrder.setStatus(OrderStatus.SHIPPING);
         sampleOrder.setConfirmDeadline(NOW);
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
-        when(productRepository.findByIdForUpdate(sampleOrder.getProductId())).thenReturn(Optional.of(sampleProduct));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
 
         // Lần 1: complaint PENDING -> bỏ qua
@@ -432,6 +423,7 @@ class OrderServiceTest {
         assertEquals(OrderStatus.SHIPPING, sampleOrder.getStatus());
 
         // Lần 2: complaint đã bác bỏ (không còn PENDING) -> COMPLETED
+        when(productRepository.findByIdForUpdate(sampleOrder.getProductId())).thenReturn(Optional.of(sampleProduct));
         when(reportRepository.existsByOrderIdAndReportTypeAndStatus(9L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
         orderLifecycleSupport.autoCompleteOne(9L, NOW);
         assertEquals(OrderStatus.COMPLETED, sampleOrder.getStatus());
@@ -442,7 +434,6 @@ class OrderServiceTest {
     void confirmReceipt_InvalidContext_ThrowsAppropriateErrors() {
         // (a) Shipment IN_TRANSIT -> 409 INVALID_STATUS_TRANSITION
         sampleOrder.setStatus(OrderStatus.SHIPPING);
-        when(orderRepository.findById(9L)).thenReturn(Optional.of(sampleOrder));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
         Shipment inTransit = Shipment.builder().id(1L).orderId(9L).status(ShipmentStatus.IN_TRANSIT).build();
         when(shipmentRepository.findByOrderId(9L)).thenReturn(Optional.of(inTransit));
@@ -509,5 +500,97 @@ class OrderServiceTest {
 
         AppException ex4 = assertThrows(AppException.class, () -> order.cancel("Reason", NOW));
         assertEquals("INVALID_STATUS_TRANSITION", ex4.getCode());
+    }
+
+    @Test
+    @DisplayName("calculateAllowedActions and mapToOrderDetailResponse all branches")
+    void testCalculateAllowedActionsAndMappingBranches() {
+        // 1. BUYER with PAID and shipment == null
+        Order paidOrder = Order.builder().id(20L).sellerId(1L).buyerId(2L).status(OrderStatus.PAID).finalPrice(BigDecimal.valueOf(100)).build();
+        when(orderRepository.findById(20L)).thenReturn(Optional.of(paidOrder));
+        when(shipmentRepository.findByOrderId(20L)).thenReturn(Optional.empty());
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(20L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
+
+        OrderDetailResponse res1 = orderService.getOrderById(buyerUser, 20L);
+        assertTrue(res1.getAllowedActions().contains("UPDATE_SHIPPING_INFO"));
+        assertTrue(res1.getAllowedActions().contains("COMPLAIN"));
+
+        // 2. BUYER with PAID and shipment CREATED and hasPendingComplaint = true
+        Shipment sCreated = Shipment.builder().id(1L).orderId(20L).status(ShipmentStatus.CREATED).build();
+        when(shipmentRepository.findByOrderId(20L)).thenReturn(Optional.of(sCreated));
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(20L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(true);
+        OrderDetailResponse res2 = orderService.getOrderById(buyerUser, 20L);
+        assertTrue(res2.getAllowedActions().contains("UPDATE_SHIPPING_INFO"));
+        assertFalse(res2.getAllowedActions().contains("COMPLAIN"));
+
+        // 3. BUYER with PAID and shipment PICKED_UP
+        Shipment sPickedUp = Shipment.builder().id(1L).orderId(20L).status(ShipmentStatus.PICKED_UP).build();
+        when(shipmentRepository.findByOrderId(20L)).thenReturn(Optional.of(sPickedUp));
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(20L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
+        OrderDetailResponse res3 = orderService.getOrderById(buyerUser, 20L);
+        assertFalse(res3.getAllowedActions().contains("UPDATE_SHIPPING_INFO"));
+        assertTrue(res3.getAllowedActions().contains("COMPLAIN"));
+
+        // 4. BUYER with SHIPPING and shipment DELIVERED with pending complaint
+        Order shipOrder = Order.builder().id(21L).sellerId(1L).buyerId(2L).status(OrderStatus.SHIPPING).finalPrice(BigDecimal.valueOf(100)).build();
+        when(orderRepository.findById(21L)).thenReturn(Optional.of(shipOrder));
+        Shipment sDelivered = Shipment.builder().id(2L).orderId(21L).status(ShipmentStatus.DELIVERED).build();
+        when(shipmentRepository.findByOrderId(21L)).thenReturn(Optional.of(sDelivered));
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(21L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(true);
+        OrderDetailResponse res4 = orderService.getOrderById(buyerUser, 21L);
+        assertFalse(res4.getAllowedActions().contains("CONFIRM_RECEIPT"));
+        assertFalse(res4.getAllowedActions().contains("COMPLAIN"));
+
+        // 5. BUYER with SHIPPING and shipment IN_TRANSIT with no complaint
+        Shipment sInTransit = Shipment.builder().id(2L).orderId(21L).status(ShipmentStatus.IN_TRANSIT).build();
+        when(shipmentRepository.findByOrderId(21L)).thenReturn(Optional.of(sInTransit));
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(21L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(false);
+        OrderDetailResponse res5 = orderService.getOrderById(buyerUser, 21L);
+        assertFalse(res5.getAllowedActions().contains("CONFIRM_RECEIPT"));
+        assertTrue(res5.getAllowedActions().contains("COMPLAIN"));
+
+        // 6. BUYER with SHIPPING and shipment IN_TRANSIT with pending complaint
+        when(reportRepository.existsByOrderIdAndReportTypeAndStatus(21L, ReportType.COMPLAINT, ReportStatus.PENDING)).thenReturn(true);
+        OrderDetailResponse res6 = orderService.getOrderById(buyerUser, 21L);
+        assertFalse(res6.getAllowedActions().contains("COMPLAIN"));
+
+        // 7. SELLER with PAID / SHIPPING -> UPDATE_SHIPMENT
+        OrderDetailResponse res7 = orderService.getOrderById(sellerUser, 21L);
+        assertTrue(res7.getAllowedActions().contains("UPDATE_SHIPMENT"));
+
+        // 8. SELLER with COMPLETED -> no UPDATE_SHIPMENT
+        Order completedOrder = Order.builder().id(22L).sellerId(1L).buyerId(2L).status(OrderStatus.COMPLETED).finalPrice(BigDecimal.valueOf(100)).build();
+        when(orderRepository.findById(22L)).thenReturn(Optional.of(completedOrder));
+        OrderDetailResponse res8 = orderService.getOrderById(sellerUser, 22L);
+        assertFalse(res8.getAllowedActions().contains("UPDATE_SHIPMENT"));
+
+        // 9. ADMIN viewer role -> no actions
+        OrderDetailResponse res9 = orderService.getOrderById(adminUser, 21L);
+        assertTrue(res9.getAllowedActions().isEmpty());
+    }
+
+    @Test
+    @DisplayName("getOrders role branches and updateShippingInfo status branches")
+    void testGetOrdersAndShippingInfoBranches() {
+        // getOrders with role=null / other
+        when(orderRepository.findByBuyerOrSeller(eq(2L), any(), any()))
+                .thenReturn(new PageImpl<>(Collections.singletonList(sampleOrder)));
+        var res1 = orderService.getOrders(buyerUser, null, null, PageRequest.of(0, 10));
+        assertEquals(1, res1.getContent().size());
+
+        // updateShippingInfo on CANCELLED order -> 409 ORDER_CANCELLED
+        Order cancelled = Order.builder().id(30L).buyerId(2L).sellerId(1L).status(OrderStatus.CANCELLED).build();
+        when(orderRepository.findByIdForUpdate(30L)).thenReturn(Optional.of(cancelled));
+        ShippingInfoRequest req = new ShippingInfoRequest("123 Street", "0901234567");
+        AppException ex1 = assertThrows(AppException.class, () -> orderService.updateShippingInfo(buyerUser, 30L, req));
+        assertEquals("ORDER_CANCELLED", ex1.getCode());
+
+        // updateShippingInfo on PAID with null shipment -> success
+        Order paid = Order.builder().id(31L).buyerId(2L).sellerId(1L).status(OrderStatus.PAID).build();
+        when(shipmentRepository.findByOrderId(31L)).thenReturn(Optional.empty());
+        when(orderRepository.findByIdForUpdate(31L)).thenReturn(Optional.of(paid));
+        when(orderRepository.save(any(Order.class))).thenAnswer(i -> i.getArgument(0));
+        OrderDetailResponse res2 = orderService.updateShippingInfo(buyerUser, 31L, req);
+        assertEquals("123 Street", res2.getShippingAddress());
     }
 }

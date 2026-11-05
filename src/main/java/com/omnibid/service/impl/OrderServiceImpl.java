@@ -48,6 +48,7 @@ public class OrderServiceImpl implements OrderService {
     private final Clock clock;
     private NotificationService notificationService;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public OrderServiceImpl(OrderRepository orderRepository,
                             ProductRepository productRepository,
                             ProductImageRepository productImageRepository,
@@ -147,8 +148,8 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public OrderDetailResponse updateShippingInfo(CurrentUser currentUser, Long id, ShippingInfoRequest request) {
-        // Bước 1: Kiểm tra tồn tại
-        Order order = orderRepository.findById(id)
+        // Bước 1: Khóa Order bằng findByIdForUpdate là lệnh đầu tiên trong transaction
+        Order order = orderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found with id: " + id, HttpStatus.NOT_FOUND));
 
         // Bước 2: Kiểm tra quyền (chỉ buyer)
@@ -173,10 +174,9 @@ public class OrderServiceImpl implements OrderService {
                     "Cannot update shipping info when order is " + order.getStatus(), HttpStatus.CONFLICT);
         }
 
-        Order lockedOrder = orderRepository.findByIdForUpdate(id).orElse(order);
-        lockedOrder.setShippingAddress(request.getShippingAddress());
-        lockedOrder.setPhoneNumber(request.getPhoneNumber());
-        Order saved = orderRepository.save(lockedOrder);
+        order.setShippingAddress(request.getShippingAddress());
+        order.setPhoneNumber(request.getPhoneNumber());
+        Order saved = orderRepository.save(order);
 
         return mapToOrderDetailResponse(saved, currentUser);
     }
@@ -368,17 +368,15 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public com.omnibid.dto.order.OrderConfirmReceiptResponse confirmReceipt(CurrentUser currentUser, Long id) {
-        Order preCheck = orderRepository.findById(id).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
-        );
-
-        if (!preCheck.getBuyerId().equals(currentUser.id())) {
-            throw new AppException("FORBIDDEN", "Chỉ người mua mới được phép xác nhận nhận hàng", HttpStatus.FORBIDDEN);
-        }
-
+        // REPEATABLE READ snapshot isolation: Phải khóa Order (SELECT ... FOR UPDATE)
+        // là lệnh đầu tiên trong transaction để không tạo snapshot cũ trước khi khóa.
         Order order = orderRepository.findByIdForUpdate(id).orElseThrow(
                 () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
         );
+
+        if (!order.getBuyerId().equals(currentUser.id())) {
+            throw new AppException("FORBIDDEN", "Chỉ người mua mới được phép xác nhận nhận hàng", HttpStatus.FORBIDDEN);
+        }
 
         if (order.getStatus() == OrderStatus.CANCELLED) {
             throw new AppException("ORDER_CANCELLED", "Đơn hàng đã bị hủy", HttpStatus.CONFLICT);
@@ -405,7 +403,9 @@ public class OrderServiceImpl implements OrderService {
         order.confirmReceived(now);
         orderRepository.save(order);
 
-        Product product = productRepository.findByIdForUpdate(order.getProductId()).orElse(null);
+        Product product = productRepository.findByIdForUpdate(order.getProductId())
+                .or(() -> productRepository.findById(order.getProductId()))
+                .orElse(null);
         if (product != null) {
             product.setStatus(ProductStatus.SOLD);
             productRepository.save(product);

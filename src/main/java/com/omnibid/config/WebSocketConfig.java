@@ -42,6 +42,8 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
         registry.addEndpoint("/ws-auction")
+                .setAllowedOriginPatterns("*");
+        registry.addEndpoint("/ws-auction")
                 .setAllowedOriginPatterns("*")
                 .withSockJS();
     }
@@ -52,6 +54,9 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
             @Override
             public Message<?> preSend(Message<?> message, MessageChannel channel) {
                 StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
+                if (accessor != null) {
+                    log.debug("STOMP inbound frame: cmd={}, dest={}, user={}", accessor.getCommand(), accessor.getDestination(), accessor.getUser());
+                }
                 if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
                     String authHeader = accessor.getFirstNativeHeader("Authorization");
                     if (StringUtils.hasText(authHeader) && authHeader.startsWith("Bearer ")) {
@@ -68,10 +73,14 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
                                 } else {
                                     log.warn("STOMP CONNECT user not active or locked: {}", email);
                                 }
+                            } else {
+                                log.warn("STOMP JWT token validation failed");
                             }
                         } catch (Exception ex) {
-                            log.warn("STOMP JWT authentication failed: {}", ex.getMessage());
+                            log.warn("STOMP JWT authentication failed: {}", ex.getMessage(), ex);
                         }
+                    } else {
+                        log.warn("STOMP CONNECT missing or invalid Authorization header");
                     }
                 }
                 return message;

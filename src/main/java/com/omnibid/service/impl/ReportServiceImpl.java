@@ -45,20 +45,22 @@ public class ReportServiceImpl implements ReportService {
     @Override
     @Transactional
     public ReportResponse createReport(CurrentUser currentUser, ReportRequest request) {
+        if (request.reason() == null || request.reason().trim().length() < 10) {
+            throw new AppException("VALIDATION_ERROR", "Reason must be at least 10 characters", HttpStatus.BAD_REQUEST);
+        }
+
+        if (request.reportType() == ReportType.COMPLAINT) {
+            return createComplaintReport(currentUser, request);
+        }
+
         User reporter = userRepository.findById(currentUser.id())
                 .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
         if (reporter.getStatus() == UserStatus.BANNED) {
             throw new AppException("ACCOUNT_BANNED", "Account is banned", HttpStatus.FORBIDDEN);
         }
 
-        if (request.reason() == null || request.reason().trim().length() < 10) {
-            throw new AppException("VALIDATION_ERROR", "Reason must be at least 10 characters", HttpStatus.BAD_REQUEST);
-        }
-
         if (request.reportType() == ReportType.VIOLATION) {
             return createViolationReport(currentUser, request);
-        } else if (request.reportType() == ReportType.COMPLAINT) {
-            return createComplaintReport(currentUser, request);
         } else {
             throw new AppException("VALIDATION_ERROR", "Unsupported report type: " + request.reportType(), HttpStatus.BAD_REQUEST);
         }
@@ -124,9 +126,15 @@ public class ReportServiceImpl implements ReportService {
             throw new AppException("VALIDATION_ERROR", "orderId is required for complaint", HttpStatus.BAD_REQUEST);
         }
 
-        // Lock hierarchy: L4 Order
+        // Lock hierarchy: L4 Order - lock Order first before non-locking reads to preserve REPEATABLE READ snapshot
         Order order = orderRepository.findByIdForUpdate(request.orderId())
                 .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+
+        User reporter = userRepository.findById(currentUser.id())
+                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
+        if (reporter.getStatus() == UserStatus.BANNED) {
+            throw new AppException("ACCOUNT_BANNED", "Account is banned", HttpStatus.FORBIDDEN);
+        }
 
         if (!order.getBuyerId().equals(currentUser.id())) {
             throw new AppException("FORBIDDEN", "Only buyer can file complaint", HttpStatus.FORBIDDEN);

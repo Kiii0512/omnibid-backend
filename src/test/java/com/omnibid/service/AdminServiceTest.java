@@ -18,6 +18,7 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.http.HttpStatus;
@@ -333,8 +334,8 @@ class AdminServiceTest {
     }
 
     @Test
-    @DisplayName("UT-ADM-07: Thứ tự khóa — User có Bid ở phiên id 15 và 12 -> findByIdForUpdate theo thứ tự 12 rồi 15; User khóa trước Auction")
-    void updateUserStatus_LockOrder_UserBeforeAuctionsInAscendingOrder() {
+    @DisplayName("UT-ADM-07: Thứ tự khóa — User có Bid ở phiên id 15 và 12 -> findByIdForUpdate theo thứ tự 12 rồi 15; User khóa SAU CÙNG")
+    void updateUserStatus_LockOrder_AuctionsInAscendingOrderBeforeUser() {
         when(userRepository.findByIdForUpdate(OTHER_ID)).thenReturn(Optional.of(otherUser));
         when(bidRepository.findDistinctAuctionIdsByBidderIdAndStatusIn(eq(OTHER_ID), anyCollection()))
                 .thenReturn(List.of(15L, 12L)); // unsorted input
@@ -351,16 +352,15 @@ class AdminServiceTest {
         UserStatusUpdateRequest request = new UserStatusUpdateRequest(UserStatus.BANNED, "Thu tu khoa");
         adminService.updateUserStatus(adminUser, OTHER_ID, request);
 
-        InOrder inOrder = inOrder(userRepository, auctionRepository);
-        inOrder.verify(userRepository).findByIdForUpdate(OTHER_ID);
+        InOrder inOrder = inOrder(auctionRepository, userRepository);
         inOrder.verify(auctionRepository).findByIdForUpdate(12L);
         inOrder.verify(auctionRepository).findByIdForUpdate(15L);
+        inOrder.verify(userRepository).findByIdForUpdate(OTHER_ID);
     }
 
     @Test
     @DisplayName("UT-ADM-08: Ẩn sản phẩm — Product HIDDEN; phiên CANCELLED (PRODUCT_HIDDEN); ORDER PENDING_PAYMENT CANCELLED; audit PRODUCT_HIDE")
     void hideProduct_ActiveAuctionAndUnpaidOrder_CancelsAuctionAndOrder_HidesProduct() {
-        when(productRepository.findById(PRODUCT_ID)).thenReturn(Optional.of(product));
         when(auctionRepository.findByProductIdAndStatusIn(eq(PRODUCT_ID), anyCollection())).thenReturn(List.of(auction));
         when(auctionRepository.findByIdForUpdate(AUCTION_ID)).thenReturn(Optional.of(auction));
         when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(product));
@@ -420,9 +420,8 @@ class AdminServiceTest {
                 .sellerId(SELLER_ID)
                 .status(orderStatus)
                 .build();
-        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(product));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(product));
 
         Payment pendingPayment = Payment.builder().id(1L).orderId(ORDER_ID).status(PaymentStatus.PENDING).build();
         Payment successPayment = Payment.builder().id(2L).orderId(ORDER_ID).status(PaymentStatus.SUCCESS).build();
@@ -449,9 +448,8 @@ class AdminServiceTest {
     @DisplayName("UT-ADM-11: Hủy đơn đã đóng — ORDER COMPLETED, CANCELLED, EXPIRED -> 409 INVALID_STATUS_TRANSITION")
     void cancelOrder_ClosedOrders_ThrowsConflict(OrderStatus closedStatus) {
         Order order = Order.builder().id(ORDER_ID).productId(PRODUCT_ID).status(closedStatus).build();
-        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
-        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(product));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(order));
+        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(product));
 
         AdminCancelOrderRequest request = new AdminCancelOrderRequest("Huy don da dong");
         assertThatThrownBy(() -> adminService.cancelOrder(adminUser, ORDER_ID, request))
@@ -564,5 +562,77 @@ class AdminServiceTest {
         assertThat(zeroResponse.auctions().sellThroughRate()).isEqualTo(0.0);
         assertThat(zeroResponse.payments().successRate()).isEqualTo(0.0);
         assertThat(zeroResponse.bids().avgPerAuction()).isEqualTo(0.0);
+    }
+
+    @Test
+    @DisplayName("Admin queries: getUsers, getProducts, getOrders, getAuditLogs success & non-admin 403")
+    void adminQueries_SuccessAndNonAdminForbidden() {
+        CurrentUser nonAdmin = new CurrentUser(2L, false);
+
+        // 1. Non-admin forbidden
+        assertThatThrownBy(() -> adminService.getUsers(nonAdmin, null, null, PageRequest.of(0, 10)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("FORBIDDEN"));
+        assertThatThrownBy(() -> adminService.getProducts(nonAdmin, null, null, null, PageRequest.of(0, 10)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("FORBIDDEN"));
+        assertThatThrownBy(() -> adminService.getOrders(nonAdmin, null, null, null, null, null, PageRequest.of(0, 10)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("FORBIDDEN"));
+        assertThatThrownBy(() -> adminService.getAuditLogs(nonAdmin, null, null, null, null, null, null, PageRequest.of(0, 10)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("FORBIDDEN"));
+
+        // 2. getUsers
+        when(userRepository.findAdminUsers(eq(UserStatus.ACTIVE), eq("John"), any()))
+                .thenReturn(new PageImpl<>(List.of(otherUser)));
+        var usersRes = adminService.getUsers(adminUser, UserStatus.ACTIVE, "John", PageRequest.of(0, 10));
+        assertThat(usersRes.getContent()).hasSize(1);
+
+        // 3. getProducts
+        when(productRepository.findAdminProducts(any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(product)));
+        when(userRepository.findById(product.getSellerId())).thenReturn(Optional.of(otherUser));
+        when(categoryRepository.findById(any())).thenReturn(Optional.of(Category.builder().id(1L).name("Watches").build()));
+        var prodsRes = adminService.getProducts(adminUser, null, null, null, PageRequest.of(0, 10));
+        assertThat(prodsRes.getContent()).hasSize(1);
+        assertThat(prodsRes.getContent().get(0).categoryName()).isEqualTo("Watches");
+
+        // 4. getOrders
+        Order sampleOrder = Order.builder().id(9L).buyerId(OTHER_ID).sellerId(SELLER_ID).status(OrderStatus.PAID).finalPrice(BigDecimal.valueOf(500000)).build();
+        when(orderRepository.findAdminOrders(any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(sampleOrder)));
+        when(userRepository.findById(OTHER_ID)).thenReturn(Optional.of(otherUser));
+        when(userRepository.findById(SELLER_ID)).thenReturn(Optional.of(User.builder().id(SELLER_ID).fullName("Seller").build()));
+        var ordersRes = adminService.getOrders(adminUser, null, null, null, null, null, PageRequest.of(0, 10));
+        assertThat(ordersRes.getContent()).hasSize(1);
+
+        // 5. getAuditLogs
+        AuditLog auditLog = AuditLog.builder().id(1L).adminId(ADMIN_ID).action("USER_BAN").targetType("USER").targetId(3L).createdAt(NOW).build();
+        when(auditLogRepository.findAdminAuditLogs(any(), any(), any(), any(), any(), any(), any()))
+                .thenReturn(new PageImpl<>(List.of(auditLog)));
+        when(userRepository.findById(ADMIN_ID)).thenReturn(Optional.of(adminEntity));
+        var auditRes = adminService.getAuditLogs(adminUser, null, null, null, null, null, null, PageRequest.of(0, 10));
+        assertThat(auditRes.getContent()).hasSize(1);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = ProductStatus.class, names = {"HIDDEN", "SOLD", "REMOVED"})
+    @DisplayName("hideProduct on product already HIDDEN/SOLD/REMOVED throws 409 INVALID_STATUS_TRANSITION")
+    void hideProduct_InvalidStatus_ThrowsConflict(ProductStatus invalidStatus) {
+        Product p = Product.builder().id(PRODUCT_ID).sellerId(SELLER_ID).status(invalidStatus).build();
+        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(p));
+
+        assertThatThrownBy(() -> adminService.hideProduct(adminUser, PRODUCT_ID, new ProductHideRequest(invalidStatus, "Ly do an san pham hop le")))
+                .isInstanceOf(AppException.class)
+                .matches(e -> ((AppException) e).getCode().equals("INVALID_STATUS_TRANSITION") && ((AppException) e).getStatus() == HttpStatus.CONFLICT);
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = AuctionStatus.class, names = {"CANCELLED", "ENDED"})
+    @DisplayName("cancelAuction on auction already CANCELLED/ENDED throws 409 INVALID_STATUS_TRANSITION")
+    void cancelAuction_InvalidStatus_ThrowsConflict(AuctionStatus invalidStatus) {
+        Auction a = Auction.builder().id(AUCTION_ID).sellerId(SELLER_ID).productId(PRODUCT_ID).status(invalidStatus).build();
+        when(auctionRepository.findByIdForUpdate(AUCTION_ID)).thenReturn(Optional.of(a));
+
+        assertThatThrownBy(() -> adminService.cancelAuction(adminUser, AUCTION_ID, new AdminCancelAuctionRequest("Ly do huy phien hop le")))
+                .isInstanceOf(AppException.class)
+                .matches(e -> ((AppException) e).getCode().equals("INVALID_STATUS_TRANSITION") && ((AppException) e).getStatus() == HttpStatus.CONFLICT);
     }
 }

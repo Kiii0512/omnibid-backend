@@ -28,6 +28,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -106,8 +107,8 @@ class BidServiceTest {
 
         when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(100L, BidStatus.LEADING))
-                .thenReturn(Optional.empty());
+        when(bidRepository.findByAuctionIdAndStatusForUpdate(100L, BidStatus.LEADING))
+                .thenReturn(List.of());
         when(bidRepository.save(any(Bid.class))).thenReturn(savedBid);
 
         BidResponse response = bidService.placeBid(2L, request);
@@ -186,6 +187,7 @@ class BidServiceTest {
     @DisplayName("UT-CORE-01 Đặt giá khi bidder BANNED bị 403 ACCOUNT_BANNED")
     void placeBid_BannedBidder_ThrowsForbidden() {
         sampleBidder.setStatus(UserStatus.BANNED);
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
         when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
 
         BidRequest request = BidRequest.builder()
@@ -196,7 +198,6 @@ class BidServiceTest {
         AppException ex = assertThrows(AppException.class, () -> bidService.placeBid(2L, request));
         assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
         assertEquals("ACCOUNT_BANNED", ex.getCode());
-        verifyNoInteractions(auctionRepository);
     }
 
     @Test
@@ -213,8 +214,8 @@ class BidServiceTest {
 
         when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(100L, BidStatus.LEADING))
-                .thenReturn(Optional.of(previousLeadingBid));
+        when(bidRepository.findByAuctionIdAndStatusForUpdate(100L, BidStatus.LEADING))
+                .thenReturn(List.of(previousLeadingBid));
         when(bidRepository.save(any(Bid.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
         BidRequest request = BidRequest.builder()
@@ -235,5 +236,28 @@ class BidServiceTest {
                 eq("AUCTION"),
                 eq(100L)
         );
+    }
+
+    @Test
+    @DisplayName("UT-CORE-06 Đặt giá trúng mức đã có (đua ở DB): DataIntegrityViolationException -> 409 BID_TOO_LOW")
+    void placeBid_DuplicateAmountRaceCondition_ThrowsBidTooLow() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
+        when(bidRepository.findByAuctionIdAndStatusForUpdate(100L, BidStatus.LEADING))
+                .thenReturn(List.of());
+        when(bidRepository.save(any(Bid.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("Duplicate entry for key 'uq_bids_auction_amount'"));
+
+        BidRequest request = BidRequest.builder()
+                .auctionId(100L)
+                .amount(BigDecimal.valueOf(100))
+                .build();
+
+        AppException ex = assertThrows(AppException.class, () -> bidService.placeBid(2L, request));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("BID_TOO_LOW", ex.getCode());
+        assertNotNull(ex.getData());
+        assertTrue(ex.getData() instanceof java.util.Map);
+        assertEquals(BigDecimal.valueOf(110), ((java.util.Map<?, ?>) ex.getData()).get("minNextBid"));
     }
 }

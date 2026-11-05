@@ -25,6 +25,9 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("SELECT u FROM User u WHERE u.id = :id")
     Optional<User> findByIdForUpdate(@Param("id") Long id);
 
+    @Query(value = "SELECT status FROM users WHERE id = :id LOCK IN SHARE MODE", nativeQuery = true)
+    String checkCurrentStatus(@Param("id") Long id);
+
     @Query("""
         SELECT u FROM User u
         WHERE (:status IS NULL OR u.status = :status)

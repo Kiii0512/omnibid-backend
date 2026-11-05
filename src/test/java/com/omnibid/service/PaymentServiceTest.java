@@ -881,4 +881,217 @@ class PaymentServiceTest {
         assertThat(refs.get(1)).startsWith("MOCK-");
         assertThat(refs.get(0)).isNotEqualTo(refs.get(1));
     }
+
+    @Test
+    @DisplayName("pay: order not found, blank address/phone, active user, null deadline, existing success with shipment")
+    void testPayAdditionalBranches() {
+        // 1. Order not found
+        when(orderRepository.findByIdForUpdate(999L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.pay(buyerUser, 999L, KEY_A, new PaymentRequest(PaymentMethod.MOCK_CARD, null)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("NOT_FOUND"));
+
+        // 2. Blank address & phone
+        Order blankAddressOrder = Order.builder().id(ORDER_ID).buyerId(BUYER_ID).status(OrderStatus.PENDING_PAYMENT)
+                .shippingAddress("   ").phoneNumber("0901234567").build();
+        mockOrderLock(blankAddressOrder);
+        assertThatThrownBy(() -> service.pay(buyerUser, ORDER_ID, KEY_A, new PaymentRequest(PaymentMethod.MOCK_CARD, null)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("VALIDATION_ERROR"));
+
+        Order blankPhoneOrder = Order.builder().id(ORDER_ID).buyerId(BUYER_ID).status(OrderStatus.PENDING_PAYMENT)
+                .shippingAddress("123 Street").phoneNumber("   ").build();
+        mockOrderLock(blankPhoneOrder);
+        assertThatThrownBy(() -> service.pay(buyerUser, ORDER_ID, KEY_A, new PaymentRequest(PaymentMethod.MOCK_CARD, null)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("VALIDATION_ERROR"));
+
+        // 3. Existing SUCCESS with shipment
+        mockOrderLock(sampleOrder);
+        Payment existingSuccess = Payment.builder().id(12L).orderId(ORDER_ID).status(PaymentStatus.SUCCESS).idempotencyKey(KEY_A).attemptNo(1).build();
+        when(paymentRepository.findByOrderIdAndIdempotencyKey(ORDER_ID, KEY_A)).thenReturn(Optional.of(existingSuccess));
+        Shipment existingShipment = Shipment.builder().id(55L).trackingCode("SIM-000009").status(ShipmentStatus.CREATED).build();
+        when(shipmentRepository.findByOrderId(ORDER_ID)).thenReturn(Optional.of(existingShipment));
+
+        PaymentResponse earlyRes = service.pay(buyerUser, ORDER_ID, KEY_A, new PaymentRequest(PaymentMethod.MOCK_CARD, null));
+        assertThat(earlyRes.getStatus()).isEqualTo(PaymentStatus.SUCCESS);
+        assertThat(earlyRes.getShipment()).isNotNull();
+        assertThat(earlyRes.getShipment().getTrackingCode()).isEqualTo("SIM-000009");
+    }
+
+    @Test
+    @DisplayName("finalizePayment: not found, expired order, processing, null failure reason, idempotent with shipment")
+    void testFinalizePaymentAdditionalBranches() {
+        // 1. paymentLookup isEmpty
+        when(paymentRepository.findByTransactionRef("NON-EXISTENT")).thenReturn(Optional.empty());
+        assertThat(service.finalizePayment("NON-EXISTENT", SimulatedOutcome.SUCCESS, null)).isNull();
+
+        // 2. paymentOpt isEmpty
+        Payment p = Payment.builder().id(88L).orderId(ORDER_ID).status(PaymentStatus.PENDING).build();
+        when(paymentRepository.findByTransactionRef("TX-OPT-EMPTY")).thenReturn(Optional.of(p));
+        mockOrderLock(sampleOrder);
+        when(paymentRepository.findByIdForUpdate(88L)).thenReturn(Optional.empty());
+        assertThat(service.finalizePayment("TX-OPT-EMPTY", SimulatedOutcome.SUCCESS, null)).isNull();
+
+        // 3. order EXPIRED while in-flight
+        when(paymentRepository.findByTransactionRef("TX-EXPIRED")).thenReturn(Optional.of(p));
+        when(paymentRepository.findByIdForUpdate(88L)).thenReturn(Optional.of(p));
+        Order expiredOrder = Order.builder().id(ORDER_ID).status(OrderStatus.EXPIRED).build();
+        mockOrderLock(expiredOrder);
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(i -> i.getArgument(0));
+
+        PaymentResponse resExpired = service.finalizePayment("TX-EXPIRED", SimulatedOutcome.SUCCESS, null);
+        assertThat(resExpired.getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(resExpired.getFailureReason()).isEqualTo("ORDER_EXPIRED");
+
+        // 4. outcome PROCESSING
+        p.setStatus(PaymentStatus.PENDING);
+        mockOrderLock(sampleOrder);
+        PaymentResponse resProcessing = service.finalizePayment("TX-EXPIRED", SimulatedOutcome.PROCESSING, null);
+        assertThat(resProcessing.getStatus()).isEqualTo(PaymentStatus.PENDING);
+
+        // 5. outcome FAILED with null failureReason -> defaults to MOCK_DECLINED
+        p.setStatus(PaymentStatus.PENDING);
+        PaymentResponse resFailedNullReason = service.finalizePayment("TX-EXPIRED", SimulatedOutcome.FAILED, null);
+        assertThat(resFailedNullReason.getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(resFailedNullReason.getFailureReason()).isEqualTo("MOCK_DECLINED");
+
+        // 6. Idempotent SUCCESS with existing shipment
+        Payment alreadySuccess = Payment.builder().id(88L).orderId(ORDER_ID).status(PaymentStatus.SUCCESS).attemptNo(1).build();
+        when(paymentRepository.findByTransactionRef("TX-ALREADY-SUCCESS")).thenReturn(Optional.of(alreadySuccess));
+        when(paymentRepository.findByIdForUpdate(88L)).thenReturn(Optional.of(alreadySuccess));
+        Shipment existingShipment = Shipment.builder().id(55L).trackingCode("SIM-000009").status(ShipmentStatus.CREATED).build();
+        when(shipmentRepository.findByOrderId(ORDER_ID)).thenReturn(Optional.of(existingShipment));
+
+        PaymentResponse resIdempotentSuccess = service.finalizePayment("TX-ALREADY-SUCCESS", SimulatedOutcome.SUCCESS, null);
+        assertThat(resIdempotentSuccess.getStatus()).isEqualTo(PaymentStatus.SUCCESS);
+        assertThat(resIdempotentSuccess.getShipment()).isNotNull();
+    }
+
+    @Test
+    @DisplayName("getPaymentsByOrder not found and timeoutStalePayments null order branch")
+    void testGetPaymentsAndTimeoutBranches() {
+        // getPaymentsByOrder not found
+        when(orderRepository.findById(999L)).thenReturn(Optional.empty());
+        assertThatThrownBy(() -> service.getPaymentsByOrder(buyerUser, 999L))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("NOT_FOUND"));
+
+        // timeoutStalePayments with null order
+        Payment stale = Payment.builder().id(77L).orderId(ORDER_ID).status(PaymentStatus.PENDING).createdAt(NOW.minusMinutes(10)).build();
+        when(paymentRepository.findByStatusAndCreatedAtLessThanEqual(eq(PaymentStatus.PENDING), any()))
+                .thenReturn(List.of(stale));
+        when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.empty());
+        when(paymentRepository.findByIdForUpdate(77L)).thenReturn(Optional.of(stale));
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(i -> i.getArgument(0));
+
+        service.timeoutStalePayments();
+        assertThat(stale.getStatus()).isEqualTo(PaymentStatus.FAILED);
+        assertThat(stale.getFailureReason()).isEqualTo("TIMEOUT");
+    }
+
+    @Test
+    @DisplayName("Payment edge branches: null phone, rate limit null createdAt, finalize success on non-pending order, minimal constructor")
+    void testPaymentEdgeBranches() {
+        // 1. null phone
+        Order nullPhone = Order.builder().id(ORDER_ID).buyerId(BUYER_ID).status(OrderStatus.PENDING_PAYMENT)
+                .shippingAddress("123 Street").phoneNumber(null).build();
+        mockOrderLock(nullPhone);
+        assertThatThrownBy(() -> service.pay(buyerUser, ORDER_ID, KEY_A, new PaymentRequest(PaymentMethod.MOCK_CARD, null)))
+                .isInstanceOf(AppException.class).matches(e -> ((AppException) e).getCode().equals("VALIDATION_ERROR"));
+
+        // 2. rate limit oldestOf5.getCreatedAt() == null
+        mockOrderLock(sampleOrder);
+        Payment pNoCreated = Payment.builder().id(1L).createdAt(null).build();
+        List<Payment> fiveWithNull = new ArrayList<>(Collections.nCopies(5, pNoCreated));
+        when(paymentRepository.findTop5ByOrderIdOrderByCreatedAtDesc(ORDER_ID)).thenReturn(fiveWithNull);
+        when(paymentRepository.existsByOrderIdAndStatus(ORDER_ID, PaymentStatus.PENDING)).thenReturn(false);
+        when(paymentRepository.findByOrderIdAndIdempotencyKey(ORDER_ID, KEY_A)).thenReturn(Optional.empty());
+        when(paymentRepository.findTopByOrderIdOrderByAttemptNoDesc(ORDER_ID)).thenReturn(Optional.empty());
+        when(paymentRepository.save(any(Payment.class))).thenAnswer(i -> {
+            Payment p = i.getArgument(0);
+            p.setId(100L);
+            return p;
+        });
+        when(gateway.charge(any())).thenReturn(new GatewayResult(SimulatedOutcome.SUCCESS, null));
+        when(paymentRepository.findByTransactionRef(anyString())).thenAnswer(i -> Optional.of(Payment.builder().id(100L).orderId(ORDER_ID).status(PaymentStatus.PENDING).build()));
+        when(paymentRepository.findByIdForUpdate(100L)).thenAnswer(i -> Optional.of(Payment.builder().id(100L).orderId(ORDER_ID).status(PaymentStatus.PENDING).build()));
+        when(shipmentService.createForPaidOrder(any())).thenReturn(Shipment.builder().id(1L).trackingCode("SIM-000009").status(ShipmentStatus.CREATED).build());
+
+        PaymentResponse resRateLimitNull = service.pay(buyerUser, ORDER_ID, KEY_A, new PaymentRequest(PaymentMethod.MOCK_CARD, null));
+        assertThat(resRateLimitNull.getStatus()).isEqualTo(PaymentStatus.SUCCESS);
+
+        // 3. finalizePayment on order that is already PAID
+        Payment pendingPay = Payment.builder().id(101L).orderId(ORDER_ID).status(PaymentStatus.PENDING).build();
+        when(paymentRepository.findByTransactionRef("TX-ORDER-ALREADY-PAID")).thenReturn(Optional.of(pendingPay));
+        when(paymentRepository.findByIdForUpdate(101L)).thenReturn(Optional.of(pendingPay));
+        Order alreadyPaidOrder = Order.builder().id(ORDER_ID).status(OrderStatus.PAID).build();
+        mockOrderLock(alreadyPaidOrder);
+        PaymentResponse resAlreadyPaid = service.finalizePayment("TX-ORDER-ALREADY-PAID", SimulatedOutcome.SUCCESS, null);
+        assertThat(resAlreadyPaid.getStatus()).isEqualTo(PaymentStatus.SUCCESS);
+
+        // 4. timeoutStalePayments when paymentOpt is empty or status != PENDING
+        Payment stale2 = Payment.builder().id(78L).orderId(ORDER_ID).status(PaymentStatus.PENDING).createdAt(NOW.minusMinutes(10)).build();
+        when(paymentRepository.findByStatusAndCreatedAtLessThanEqual(eq(PaymentStatus.PENDING), any()))
+                .thenReturn(List.of(stale2));
+        when(paymentRepository.findByIdForUpdate(78L)).thenReturn(Optional.empty());
+        service.timeoutStalePayments(); // doesn't fail
+
+        // 5. minimal constructor (null userRepository & shipmentRepository)
+        PaymentServiceImpl minimalService = new PaymentServiceImpl(
+                orderRepository, paymentRepository, gateway, shipmentService, null, notificationService,
+                new DirectTransactionTemplate(), paymentProperties, clock, null
+        );
+        when(paymentRepository.findByTransactionRef("TX-MINIMAL")).thenReturn(Optional.of(pendingPay));
+        mockOrderLock(sampleOrder);
+        sampleOrder.setStatus(OrderStatus.PENDING_PAYMENT);
+        PaymentResponse minRes = minimalService.finalizePayment("TX-MINIMAL", SimulatedOutcome.SUCCESS, null);
+        assertThat(minRes.getStatus()).isEqualTo(PaymentStatus.SUCCESS);
+    }
+
+    @Test
+    @DisplayName("Payment.createdAt: khi tạo Payment mới, createdAt luôn được gán bằng LocalDateTime.now(clock)")
+    void pay_SetsCreatedAtFromClock() {
+        mockOrderLock(sampleOrder);
+        when(paymentRepository.findByOrderIdAndIdempotencyKey(ORDER_ID, "VALID-KEY-12345")).thenReturn(Optional.empty());
+        when(paymentRepository.existsByOrderIdAndStatus(ORDER_ID, PaymentStatus.PENDING)).thenReturn(false);
+        when(paymentRepository.findTop5ByOrderIdOrderByCreatedAtDesc(ORDER_ID)).thenReturn(Collections.emptyList());
+        when(paymentRepository.findTopByOrderIdOrderByAttemptNoDesc(ORDER_ID)).thenReturn(Optional.empty());
+
+        ArgumentCaptor<Payment> paymentCaptor = ArgumentCaptor.forClass(Payment.class);
+        when(paymentRepository.save(paymentCaptor.capture())).thenAnswer(inv -> {
+            Payment p = inv.getArgument(0);
+            p.setId(99L);
+            return p;
+        });
+
+        when(gateway.charge(any(GatewayRequest.class))).thenReturn(new GatewayResult(SimulatedOutcome.SUCCESS, null));
+        when(paymentRepository.findByTransactionRef(anyString())).thenAnswer(inv -> {
+            Payment p = Payment.builder()
+                    .id(99L)
+                    .orderId(ORDER_ID)
+                    .attemptNo(1)
+                    .amount(sampleOrder.getFinalPrice())
+                    .status(PaymentStatus.PENDING)
+                    .transactionRef(inv.getArgument(0))
+                    .build();
+            return Optional.of(p);
+        });
+        when(paymentRepository.findByIdForUpdate(99L)).thenAnswer(inv -> {
+            Payment p = Payment.builder()
+                    .id(99L)
+                    .orderId(ORDER_ID)
+                    .attemptNo(1)
+                    .amount(sampleOrder.getFinalPrice())
+                    .status(PaymentStatus.PENDING)
+                    .transactionRef("MOCK-TX")
+                    .build();
+            return Optional.of(p);
+        });
+
+        Shipment shipment = Shipment.builder().id(4L).orderId(ORDER_ID).trackingCode("SIM-000009").status(ShipmentStatus.CREATED).build();
+        when(shipmentService.createForPaidOrder(sampleOrder)).thenReturn(shipment);
+
+        service.pay(buyerUser, ORDER_ID, "VALID-KEY-12345", new PaymentRequest(PaymentMethod.MOCK_CARD, null));
+
+        Payment createdPayment = paymentCaptor.getAllValues().get(0);
+        assertThat(createdPayment.getCreatedAt()).isNotNull();
+        assertThat(createdPayment.getCreatedAt()).isEqualTo(LocalDateTime.now(clock));
+    }
 }

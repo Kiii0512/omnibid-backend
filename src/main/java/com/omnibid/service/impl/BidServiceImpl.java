@@ -20,8 +20,10 @@ import com.omnibid.service.NotificationService;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
@@ -47,15 +49,17 @@ public class BidServiceImpl implements BidService {
     @Override
     @Transactional
     public BidResponse placeBid(Long bidderId, BidRequest request) {
+        // REPEATABLE READ snapshot isolation: Phải khóa Auction (SELECT ... FOR UPDATE)
+        // là lệnh đầu tiên trong transaction để tránh đọc snapshot cũ.
+        Auction auction = auctionRepository.findByIdForUpdate(request.getAuctionId())
+                .orElseThrow(() -> new AppException("AUCTION_NOT_FOUND", "Auction not found with id: " + request.getAuctionId(), HttpStatus.NOT_FOUND));
+
         User bidder = userRepository.findById(bidderId)
                 .orElseThrow(() -> new AppException("USER_NOT_FOUND", "User not found with id: " + bidderId, HttpStatus.NOT_FOUND));
 
         if (bidder.getStatus() == UserStatus.BANNED) {
             throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
         }
-
-        Auction auction = auctionRepository.findByIdForUpdate(request.getAuctionId())
-                .orElseThrow(() -> new AppException("AUCTION_NOT_FOUND", "Auction not found with id: " + request.getAuctionId(), HttpStatus.NOT_FOUND));
 
         LocalDateTime now = LocalDateTime.now(clock);
         if (auction.getStatus() != AuctionStatus.ACTIVE || !now.isBefore(auction.getEndTime())) {
@@ -81,13 +85,12 @@ public class BidServiceImpl implements BidService {
             throw new AppException("BID_TOO_LOW", "Bid amount must be at least " + minRequiredAmount, HttpStatus.CONFLICT, Map.of("minNextBid", minRequiredAmount));
         }
 
-        Optional<Bid> currentLeadingBid = bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(
+        List<Bid> currentLeadingBids = bidRepository.findByAuctionIdAndStatusForUpdate(
                 auction.getId(), BidStatus.LEADING);
-        currentLeadingBid.ifPresent(leadingBid -> {
+        for (Bid leadingBid : currentLeadingBids) {
             leadingBid.setStatus(BidStatus.OUTBID);
             bidRepository.save(leadingBid);
 
-            // N-01 / UT-CORE-02: Thông báo OUTBID cho người vừa mất vị trí dẫn đầu
             notificationService.notify(
                     leadingBid.getBidderId(),
                     NotificationType.OUTBID,
@@ -96,7 +99,7 @@ public class BidServiceImpl implements BidService {
                     "AUCTION",
                     auction.getId()
             );
-        });
+        }
 
         Bid newBid = Bid.builder()
                 .auctionId(auction.getId())
@@ -104,7 +107,19 @@ public class BidServiceImpl implements BidService {
                 .amount(request.getAmount())
                 .status(BidStatus.LEADING)
                 .build();
-        Bid savedBid = bidRepository.save(newBid);
+        Bid savedBid;
+        try {
+            savedBid = bidRepository.save(newBid);
+            bidRepository.flush();
+        } catch (DataIntegrityViolationException dive) {
+            log.warn("Duplicate bid amount detected at DB level: auctionId={}, amount={}", auction.getId(), request.getAmount());
+            BigDecimal nextMin = request.getAmount().add(auction.getBidIncrement());
+            throw new AppException("BID_TOO_LOW", "Mức giá đã có người đặt", HttpStatus.CONFLICT, Map.of("minNextBid", nextMin));
+        }
+
+        if ("BANNED".equals(userRepository.checkCurrentStatus(bidderId))) {
+            throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
+        }
 
         auction.setCurrentPrice(request.getAmount());
         auction.setHighestBidderId(bidderId);

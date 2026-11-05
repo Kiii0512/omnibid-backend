@@ -328,6 +328,20 @@ public class PaymentServiceImpl implements PaymentService {
 
             LocalDateTime now = LocalDateTime.now(clock);
 
+            // R-05: If order was cancelled or expired while payment was in-flight, fail the payment
+            if (order.getStatus() == OrderStatus.CANCELLED || order.getStatus() == OrderStatus.EXPIRED) {
+                payment.setStatus(PaymentStatus.FAILED);
+                payment.setFailureReason(order.getStatus() == OrderStatus.CANCELLED ? "ORDER_CANCELLED" : "ORDER_EXPIRED");
+                payment = paymentRepository.save(payment);
+                return PaymentResponse.builder()
+                        .paymentId(payment.getId())
+                        .attemptNo(payment.getAttemptNo())
+                        .status(PaymentStatus.FAILED)
+                        .orderStatus(order.getStatus())
+                        .failureReason(payment.getFailureReason())
+                        .build();
+            }
+
             if (outcome == SimulatedOutcome.SUCCESS) {
                 payment.setStatus(PaymentStatus.SUCCESS);
                 payment.setPaidAt(now);

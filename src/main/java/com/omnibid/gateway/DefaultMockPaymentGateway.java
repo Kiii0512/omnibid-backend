@@ -19,6 +19,7 @@ public class DefaultMockPaymentGateway implements MockPaymentGateway {
     private final TaskScheduler taskScheduler;
     private PaymentService directPaymentService;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public DefaultMockPaymentGateway(AppProperties appProperties,
                                      ObjectProvider<PaymentService> paymentServiceProvider,
                                      TaskScheduler taskScheduler) {
@@ -63,7 +64,7 @@ public class DefaultMockPaymentGateway implements MockPaymentGateway {
         }
     }
 
-    private void scheduleDelayedFinalization(String transactionRef) {
+    protected void scheduleDelayedFinalization(String transactionRef) {
         int delaySeconds = appProperties.getPayment().getMock().getProcessingDelaySeconds();
         Instant triggerTime = Instant.now().plusSeconds(delaySeconds);
         log.info("Scheduling delayed finalization for txRef={} in {}s", transactionRef, delaySeconds);

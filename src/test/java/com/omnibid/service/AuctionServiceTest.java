@@ -208,4 +208,57 @@ class AuctionServiceTest {
         assertEquals(ProductStatus.HIDDEN, hiddenProduct.getStatus());
         verify(productRepository, never()).save(any(Product.class));
     }
+
+    @Test
+    @DisplayName("UT-CORE-05 Tạo phiên start_time quá khứ / độ dài < 1 giờ / > 30 ngày / giá sàn < giá khởi điểm -> 400 VALIDATION_ERROR")
+    void createAuction_InvalidTimesOrPrices_ThrowsValidationError() {
+        // 1. start_time in past
+        AuctionCreateRequest pastRequest = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.minusHours(1))
+                .endTime(NOW.plusHours(2))
+                .build();
+        AppException ex1 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, pastRequest));
+        assertEquals(HttpStatus.BAD_REQUEST, ex1.getStatus());
+        assertEquals("VALIDATION_ERROR", ex1.getCode());
+
+        // 2. duration < 1 hour
+        AuctionCreateRequest shortDuration = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(1).plusMinutes(30))
+                .build();
+        AppException ex2 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, shortDuration));
+        assertEquals(HttpStatus.BAD_REQUEST, ex2.getStatus());
+        assertEquals("VALIDATION_ERROR", ex2.getCode());
+
+        // 3. duration > 30 days
+        AuctionCreateRequest longDuration = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(1).plusDays(31))
+                .build();
+        AppException ex3 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, longDuration));
+        assertEquals(HttpStatus.BAD_REQUEST, ex3.getStatus());
+        assertEquals("VALIDATION_ERROR", ex3.getCode());
+
+        // 4. reserve_price < start_price
+        AuctionCreateRequest lowReserve = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .reservePrice(BigDecimal.valueOf(50))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(5))
+                .build();
+        AppException ex4 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, lowReserve));
+        assertEquals(HttpStatus.BAD_REQUEST, ex4.getStatus());
+        assertEquals("VALIDATION_ERROR", ex4.getCode());
+    }
 }

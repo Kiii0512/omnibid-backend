@@ -12,7 +12,7 @@ Hệ thống Backend cho nền tảng đấu giá trực tuyến **OmniBid**, đ
 | **Nguyễn Hà Tuấn Anh** | 0001168 | Developer | **Frontend Next.js:** Toàn bộ giao diện Guest / Buyer / Seller / Admin (React + TypeScript + Tailwind CSS) |
 | **Nguyễn Công Đương** | 0008968 | Developer | **Backend sau đấu giá:** Order, Payment, Shipment, Report, Admin; Database schema & kiểm thử |
 
-* **Giảng viên hướng dẫn:** ThS. Phạm Hữu Tùng
+* **Giảng viên hướng dẫn:** TS. Phạm Hữu Tùng
 
 ---
 
@@ -143,7 +143,7 @@ src/main/java/com/omnibid/
    * **Cơ sở dữ liệu:** MySQL 8.0+ (InnoDB, UTF8mb4).
 
 2. **Cấu hình ứng dụng:**
-   Chép `src/main/resources/application-example.properties` thành `src/main/resources/application.properties` rồi điền giá trị thật (file `application.properties` đã được đưa vào `.gitignore` để bảo mật thông tin kết nối và secret key):
+   Chép `src/main/resources/application-example.properties` thành `src/main/resources/application.properties` rồi điền giá trị thật:
    * `spring.datasource.url`: URL kết nối MySQL.
    * `spring.datasource.username` & `spring.datasource.password`: Tài khoản và mật khẩu MySQL.
    * `jwt.secret`: Chuỗi bí mật JWT tối thiểu 256-bit.
@@ -155,9 +155,18 @@ src/main/java/com/omnibid/
    ```
 
 4. **Lệnh chạy kiểm thử:**
-   ```powershell
-   .\mvnw.cmd test
-   ```
+   * **Unit tests (không cần Docker):**
+     ```powershell
+     .\mvnw.cmd test
+     ```
+   * **Toàn bộ kiểm thử tích hợp & xác thực (cần Docker):**
+     ```powershell
+     .\mvnw.cmd clean verify
+     ```
+   * **Chạy kiểm thử đồng thời (ConcurrencyIT) 20 lần:**
+     ```powershell
+     .\mvnw.cmd test -Dtest=ConcurrencyIT -Dconcurrency.repeats=20
+     ```
 
 5. **Lệnh khởi chạy ứng dụng:**
    ```powershell

@@ -108,110 +108,116 @@ public class AdminServiceImpl implements AdminService {
             throw new AppException("CANNOT_BAN_ADMIN", "Cannot ban yourself", HttpStatus.CONFLICT);
         }
 
-        // Lock hierarchy: L1 User
-        User user = userRepository.findByIdForUpdate(userId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
-
-        if (user.getRole() == UserRole.ADMIN) {
-            throw new AppException("CANNOT_BAN_ADMIN", "Cannot ban an admin user", HttpStatus.CONFLICT);
-        }
-
-        if (user.getStatus() == UserStatus.BANNED) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "User is already banned", HttpStatus.CONFLICT);
-        }
-
-        user.setStatus(UserStatus.BANNED);
-        userRepository.save(user);
-
-        // ADM-03: Invalidate user's bids in ACTIVE auctions (lock auctions by id ASC)
+        // Đọc thường danh sách ID liên quan trước khi khóa
         List<Long> auctionIdsWithBids = bidRepository.findDistinctAuctionIdsByBidderIdAndStatusIn(
                 userId, List.of(BidStatus.LEADING, BidStatus.OUTBID)
         ).stream().sorted().toList();
 
-        int invalidatedBids = 0;
-        List<Long> affectedAuctionIds = new ArrayList<>();
-
-        for (Long auctionId : auctionIdsWithBids) {
-            // Lock hierarchy: L2 Auction
-            Auction auction = auctionRepository.findByIdForUpdate(auctionId).orElse(null);
-            if (auction == null) continue;
-            if (auction.getStatus() != AuctionStatus.ACTIVE) continue;
-
-            List<Bid> userBids = bidRepository.findByAuctionIdAndBidderId(auctionId, userId);
-            for (Bid b : userBids) {
-                if (b.getStatus() == BidStatus.LEADING || b.getStatus() == BidStatus.OUTBID) {
-                    b.setStatus(BidStatus.INVALIDATED);
-                    b.setInvalidReason("ACCOUNT_BANNED");
-                    bidRepository.save(b);
-                    invalidatedBids++;
-                }
-            }
-            affectedAuctionIds.add(auctionId);
-
-            // If user was highest bidder, reselect leader
-            if (auction.getHighestBidderId() != null && auction.getHighestBidderId().equals(userId)) {
-                List<Bid> remainingBids = bidRepository.findValidBidsDesc(
-                        auctionId, List.of(BidStatus.LEADING, BidStatus.OUTBID), PageRequest.of(0, 1)
-                );
-                if (!remainingBids.isEmpty()) {
-                    Bid newLeader = remainingBids.get(0);
-                    newLeader.setStatus(BidStatus.LEADING);
-                    bidRepository.save(newLeader);
-                    auction.setCurrentPrice(newLeader.getAmount());
-                    auction.setHighestBidderId(newLeader.getBidderId());
-                } else {
-                    auction.setCurrentPrice(auction.getStartPrice());
-                    auction.setHighestBidderId(null);
-                }
-            }
-
-            // Recalculate bidCount
-            List<Bid> allValidBids = bidRepository.findValidBidsDesc(
-                    auctionId, List.of(BidStatus.LEADING, BidStatus.OUTBID), Pageable.unpaged()
-            );
-            auction.setBidCount(allValidBids.size());
-            auctionRepository.save(auction);
-
-            broadcastAuctionUpdate(auction);
-        }
-
-        // ADM-04: Seller side: cancel SCHEDULED/ACTIVE auctions (lock auctions by id ASC)
-        List<Auction> sellerAuctions = auctionRepository.findBySellerIdAndStatusIn(
+        List<Long> sellerAuctionIds = auctionRepository.findBySellerIdAndStatusIn(
                 userId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
-        ).stream().sorted(Comparator.comparing(Auction::getId)).toList();
+        ).stream().map(Auction::getId).sorted().toList();
 
-        List<Long> cancelledAuctionIds = new ArrayList<>();
-        LocalDateTime now = LocalDateTime.now(clock);
+        List<Order> unpaidOrders = orderRepository.findUnpaidOrdersByUser(userId);
 
-        for (Auction sa : sellerAuctions) {
-            Auction auc = auctionRepository.findByIdForUpdate(sa.getId()).orElse(null);
-            if (auc == null) continue;
-            if (auc.getStatus() != AuctionStatus.SCHEDULED && auc.getStatus() != AuctionStatus.ACTIVE) continue;
-
-            auc.setStatus(AuctionStatus.CANCELLED);
-            auc.setCancelReason("ACCOUNT_BANNED");
-            auc.setClosedAt(now);
-
-            List<Bid> bids = bidRepository.findByAuctionId(auc.getId());
-            for (Bid b : bids) {
-                if (b.getStatus() == BidStatus.LEADING) {
-                    b.setStatus(BidStatus.NOT_WON);
-                    bidRepository.save(b);
-                }
-            }
-            auctionRepository.save(auc);
-            cancelledAuctionIds.add(auc.getId());
-            auditService.log(adminId, "AUCTION_CANCEL", "AUCTION", auc.getId(), "ACCOUNT_BANNED");
-            broadcastAuctionUpdate(auc);
-        }
-
-        // Hide seller products in AVAILABLE / IN_AUCTION / RESERVED
         List<Product> sellerProducts = productRepository.findBySellerIdAndStatusIn(
                 userId, List.of(ProductStatus.AVAILABLE, ProductStatus.IN_AUCTION, ProductStatus.RESERVED)
         );
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        int invalidatedBids = 0;
+        List<Long> affectedAuctionIds = new ArrayList<>();
+        List<Long> cancelledAuctionIds = new ArrayList<>();
+
+        // Lock hierarchy: L1 Auction (id tăng)
+        SortedSet<Long> allAuctionIds = new TreeSet<>();
+        allAuctionIds.addAll(auctionIdsWithBids);
+        allAuctionIds.addAll(sellerAuctionIds);
+
+        for (Long auctionId : allAuctionIds) {
+            Auction auc = auctionRepository.findByIdForUpdate(auctionId).orElse(null);
+            if (auc == null) continue;
+
+            if (sellerAuctionIds.contains(auctionId)) {
+                if (auc.getStatus() == AuctionStatus.SCHEDULED || auc.getStatus() == AuctionStatus.ACTIVE) {
+                    auc.setStatus(AuctionStatus.CANCELLED);
+                    auc.setCancelReason("ACCOUNT_BANNED");
+                    auc.setClosedAt(now);
+
+                    List<Bid> bids = bidRepository.findByAuctionId(auc.getId());
+                    for (Bid b : bids) {
+                        if (b.getStatus() == BidStatus.LEADING) {
+                            b.setStatus(BidStatus.NOT_WON);
+                            bidRepository.save(b);
+                        }
+                    }
+                    auctionRepository.save(auc);
+                    cancelledAuctionIds.add(auc.getId());
+                    auditService.log(adminId, "AUCTION_CANCEL", "AUCTION", auc.getId(), "ACCOUNT_BANNED");
+                    broadcastAuctionUpdate(auc);
+                }
+            } else if (auctionIdsWithBids.contains(auctionId)) {
+                if (auc.getStatus() == AuctionStatus.ACTIVE) {
+                    List<Bid> userBids = bidRepository.findByAuctionIdAndBidderId(auctionId, userId);
+                    for (Bid b : userBids) {
+                        if (b.getStatus() == BidStatus.LEADING || b.getStatus() == BidStatus.OUTBID) {
+                            b.setStatus(BidStatus.INVALIDATED);
+                            b.setInvalidReason("ACCOUNT_BANNED");
+                            bidRepository.save(b);
+                            invalidatedBids++;
+                        }
+                    }
+                    affectedAuctionIds.add(auctionId);
+
+                    // If user was highest bidder, reselect leader
+                    if (auc.getHighestBidderId() != null && auc.getHighestBidderId().equals(userId)) {
+                        List<Bid> remainingBids = bidRepository.findValidBidsDesc(
+                                auctionId, List.of(BidStatus.LEADING, BidStatus.OUTBID), PageRequest.of(0, 1)
+                        );
+                        if (!remainingBids.isEmpty()) {
+                            Bid newLeader = remainingBids.get(0);
+                            newLeader.setStatus(BidStatus.LEADING);
+                            bidRepository.save(newLeader);
+                            auc.setCurrentPrice(newLeader.getAmount());
+                            auc.setHighestBidderId(newLeader.getBidderId());
+                        } else {
+                            auc.setCurrentPrice(auc.getStartPrice());
+                            auc.setHighestBidderId(null);
+                        }
+                    }
+
+                    // Recalculate bidCount
+                    List<Bid> allValidBids = bidRepository.findValidBidsDesc(
+                            auctionId, List.of(BidStatus.LEADING, BidStatus.OUTBID), Pageable.unpaged()
+                    );
+                    auc.setBidCount(allValidBids.size());
+                    auctionRepository.save(auc);
+                    broadcastAuctionUpdate(auc);
+                }
+            }
+        }
+
+        // Lock hierarchy: L2 Product (id tăng)
+        SortedSet<Long> allProductIds = new TreeSet<>();
+        for (Product p : sellerProducts) {
+            allProductIds.add(p.getId());
+        }
+        for (Order uo : unpaidOrders) {
+            if (uo.getProductId() != null) {
+                allProductIds.add(uo.getProductId());
+            }
+        }
+
+        Map<Long, Product> lockedProducts = new HashMap<>();
+        for (Long pid : allProductIds) {
+            productRepository.findByIdForUpdate(pid).ifPresent(p -> lockedProducts.put(pid, p));
+        }
+
         List<Long> hiddenProductIds = new ArrayList<>();
         for (Product prod : sellerProducts) {
-            Product p = productRepository.findByIdForUpdate(prod.getId()).orElse(null);
+            if (!orderRepository.findByProductIdAndStatusIn(prod.getId(), List.of(OrderStatus.PAID, OrderStatus.SHIPPING)).isEmpty()) {
+                continue;
+            }
+            Product p = lockedProducts.get(prod.getId());
             if (p != null) {
                 p.setStatus(ProductStatus.HIDDEN);
                 productRepository.save(p);
@@ -219,21 +225,19 @@ public class AdminServiceImpl implements AdminService {
             }
         }
 
-        // ADM-05: Unpaid orders (buyer or seller): cancel PENDING_PAYMENT orders (lock order by id ASC)
-        List<Order> unpaidOrders = orderRepository.findUnpaidOrdersByUser(userId);
+        // Lock hierarchy: L3 Order (id tăng) -> L4 Payment
+        List<Long> unpaidOrderIds = unpaidOrders.stream().map(Order::getId).sorted().toList();
         List<Long> cancelledOrderIds = new ArrayList<>();
 
-        for (Order uo : unpaidOrders) {
-            // Lock Product (L3) -> Order (L4)
-            Product prod = productRepository.findByIdForUpdate(uo.getProductId()).orElse(null);
-            Order o = orderRepository.findByIdForUpdate(uo.getId()).orElse(null);
+        for (Long orderId : unpaidOrderIds) {
+            Order o = orderRepository.findByIdForUpdate(orderId).orElse(null);
             if (o == null || o.getStatus() != OrderStatus.PENDING_PAYMENT) continue;
 
             o.cancel("ACCOUNT_BANNED", now);
             orderRepository.save(o);
             cancelledOrderIds.add(o.getId());
 
-            // Cancel pending payments (L5)
+            // Cancel pending payments (L4)
             List<Payment> payments = paymentRepository.findByOrderId(o.getId());
             for (Payment pm : payments) {
                 if (pm.getStatus() == PaymentStatus.PENDING) {
@@ -243,6 +247,7 @@ public class AdminServiceImpl implements AdminService {
                 }
             }
 
+            Product prod = lockedProducts.get(o.getProductId());
             if (prod != null && prod.getStatus() != ProductStatus.HIDDEN && prod.getStatus() != ProductStatus.REMOVED) {
                 prod.setStatus(ProductStatus.AVAILABLE);
                 productRepository.save(prod);
@@ -255,6 +260,57 @@ public class AdminServiceImpl implements AdminService {
                     NotificationTemplates.orderCancelledTitle(o.getId(), "ACCOUNT_BANNED"),
                     NotificationTemplates.orderCancelledContent(o.getId(), "ACCOUNT_BANNED"),
                     "ORDER", o.getId());
+        }
+
+        // Lock hierarchy: L6 User CUỐI, kiểm tra lại toàn bộ điều kiện
+        User user = userRepository.findByIdForUpdate(userId)
+                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
+
+        if (user.getRole() == UserRole.ADMIN || userId.equals(adminId)) {
+            throw new AppException("CANNOT_BAN_ADMIN", "Cannot ban an admin user", HttpStatus.CONFLICT);
+        }
+
+        if (user.getStatus() == UserStatus.BANNED) {
+            throw new AppException("INVALID_STATUS_TRANSITION", "User is already banned", HttpStatus.CONFLICT);
+        }
+
+        user.setStatus(UserStatus.BANNED);
+        userRepository.save(user);
+
+        // Khử mọi Bid còn sót lại của user (nếu có cuộc đua đặt giá xảy ra song song trước khi khóa User)
+        List<Bid> remainingActiveBids = bidRepository.findByBidderIdAndStatusInForUpdate(
+                userId, List.of(BidStatus.LEADING, BidStatus.OUTBID)
+        );
+        for (Bid b : remainingActiveBids) {
+            b.setStatus(BidStatus.INVALIDATED);
+            b.setInvalidReason("ACCOUNT_BANNED");
+            bidRepository.save(b);
+            invalidatedBids++;
+
+            Auction auc = auctionRepository.findByIdForUpdate(b.getAuctionId())
+                    .or(() -> auctionRepository.findById(b.getAuctionId()))
+                    .orElse(null);
+            if (auc != null && userId.equals(auc.getHighestBidderId())) {
+                List<Bid> remainingValid = bidRepository.findValidBidsDesc(
+                        auc.getId(), List.of(BidStatus.LEADING, BidStatus.OUTBID), PageRequest.of(0, 1)
+                );
+                if (!remainingValid.isEmpty()) {
+                    Bid newLead = remainingValid.get(0);
+                    newLead.setStatus(BidStatus.LEADING);
+                    bidRepository.save(newLead);
+                    auc.setCurrentPrice(newLead.getAmount());
+                    auc.setHighestBidderId(newLead.getBidderId());
+                } else {
+                    auc.setCurrentPrice(auc.getStartPrice());
+                    auc.setHighestBidderId(null);
+                }
+                List<Bid> allValid = bidRepository.findValidBidsDesc(
+                        auc.getId(), List.of(BidStatus.LEADING, BidStatus.OUTBID), Pageable.unpaged()
+                );
+                auc.setBidCount(allValid.size());
+                auctionRepository.save(auc);
+                broadcastAuctionUpdate(auc);
+            }
         }
 
         auditService.log(adminId, "USER_BAN", "USER", userId, reason);
@@ -318,26 +374,22 @@ public class AdminServiceImpl implements AdminService {
     }
 
     private Map<String, Object> hideProductInternal(Long productId, String reason, Long adminId) {
-        Product productToInspect = productRepository.findById(productId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
-
-        if (productToInspect.getStatus() == ProductStatus.HIDDEN
-                || productToInspect.getStatus() == ProductStatus.REMOVED
-                || productToInspect.getStatus() == ProductStatus.SOLD) {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Cannot hide product in status: " + productToInspect.getStatus(), HttpStatus.CONFLICT);
-        }
-
-        // Lock ordering: 1. Auctions (L2, id ASC) -> 2. Product (L3) -> 3. Orders (L4, id ASC)
-        List<Auction> openAuctions = auctionRepository.findByProductIdAndStatusIn(
+        // Thứ tự khóa toàn cục: L1 Auction (id tăng) -> L2 Product -> L3 Order (id tăng) -> L4 Payment
+        // 1. Đọc không khóa danh sách Auction và Order liên quan
+        List<Long> openAuctionIds = auctionRepository.findByProductIdAndStatusIn(
                 productId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
-        ).stream().sorted(Comparator.comparing(Auction::getId)).toList();
+        ).stream().map(Auction::getId).sorted().toList();
+
+        List<Long> productOrderIds = orderRepository.findByProductIdAndStatusIn(
+                productId, List.of(OrderStatus.PENDING_PAYMENT)
+        ).stream().map(Order::getId).sorted().toList();
 
         List<Long> cancelledAuctionIds = new ArrayList<>();
         LocalDateTime now = LocalDateTime.now(clock);
 
-        for (Auction oa : openAuctions) {
-            Auction auc = auctionRepository.findByIdForUpdate(oa.getId()).orElse(null);
+        // 2. Khóa L1 Auction (id tăng)
+        for (Long auctionId : openAuctionIds) {
+            Auction auc = auctionRepository.findByIdForUpdate(auctionId).orElse(null);
             if (auc == null) continue;
             auc.setStatus(AuctionStatus.CANCELLED);
             auc.setCancelReason("PRODUCT_HIDDEN");
@@ -356,20 +408,24 @@ public class AdminServiceImpl implements AdminService {
             broadcastAuctionUpdate(auc);
         }
 
-        // Lock Product (L3)
+        // 3. Khóa L2 Product
         Product product = productRepository.findByIdForUpdate(productId)
                 .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+
+        if (product.getStatus() == ProductStatus.HIDDEN
+                || product.getStatus() == ProductStatus.REMOVED
+                || product.getStatus() == ProductStatus.SOLD) {
+            throw new AppException("INVALID_STATUS_TRANSITION",
+                    "Cannot hide product in status: " + product.getStatus(), HttpStatus.CONFLICT);
+        }
+
         product.setStatus(ProductStatus.HIDDEN);
         productRepository.save(product);
 
-        // Cancel unpaid orders of product (L4)
-        List<Order> productOrders = orderRepository.findByProductIdAndStatusIn(
-                productId, List.of(OrderStatus.PENDING_PAYMENT)
-        ).stream().sorted(Comparator.comparing(Order::getId)).toList();
-
+        // 4. Khóa L3 Order (id tăng) -> L4 Payment
         List<Long> cancelledOrderIds = new ArrayList<>();
-        for (Order po : productOrders) {
-            Order ord = orderRepository.findByIdForUpdate(po.getId()).orElse(null);
+        for (Long orderId : productOrderIds) {
+            Order ord = orderRepository.findByIdForUpdate(orderId).orElse(null);
             if (ord == null || ord.getStatus() != OrderStatus.PENDING_PAYMENT) continue;
 
             ord.cancel("PRODUCT_HIDDEN", now);
@@ -522,15 +578,19 @@ public class AdminServiceImpl implements AdminService {
     }
 
     private Order cancelOrderInternal(Long orderId, String reason, Long adminId) {
-        Order orderToInspect = orderRepository.findById(orderId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+        Order initial = orderRepository.findById(orderId).orElse(null);
+        Long productId = initial != null ? initial.getProductId() : null;
 
-        // Lock hierarchy: Product (L3) -> Order (L4) -> Payment (L5)
-        Product product = productRepository.findByIdForUpdate(orderToInspect.getProductId())
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+        // Lock hierarchy: L2 Product -> L3 Order -> L4 Payment
+        Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
 
         Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+
+        if (product == null) {
+            product = productRepository.findByIdForUpdate(order.getProductId())
+                    .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+        }
 
         if (order.getStatus() == OrderStatus.COMPLETED
                 || order.getStatus() == OrderStatus.CANCELLED
@@ -539,7 +599,7 @@ public class AdminServiceImpl implements AdminService {
                     "Cannot cancel order in status: " + order.getStatus(), HttpStatus.CONFLICT);
         }
 
-        // Cancel pending payments (L5)
+        // Cancel pending payments (L4)
         List<Payment> payments = paymentRepository.findByOrderId(orderId);
         for (Payment payment : payments) {
             if (payment.getStatus() == PaymentStatus.PENDING) {
@@ -585,15 +645,19 @@ public class AdminServiceImpl implements AdminService {
     @Override
     @Transactional
     public Map<String, Object> completeOrder(Long orderId, String note, Long adminId) {
-        Order orderToInspect = orderRepository.findById(orderId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+        Order initial = orderRepository.findById(orderId).orElse(null);
+        Long productId = initial != null ? initial.getProductId() : null;
 
-        // Lock hierarchy: Product (L3) -> Order (L4)
-        Product product = productRepository.findByIdForUpdate(orderToInspect.getProductId())
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+        // Lock hierarchy: L2 Product -> L3 Order
+        Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
 
         Order order = orderRepository.findByIdForUpdate(orderId)
                 .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+
+        if (product == null) {
+            product = productRepository.findByIdForUpdate(order.getProductId())
+                    .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+        }
 
         if (order.getStatus() != OrderStatus.PAID && order.getStatus() != OrderStatus.SHIPPING) {
             throw new AppException("INVALID_STATUS_TRANSITION",

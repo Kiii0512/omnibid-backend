@@ -30,6 +30,11 @@ import java.time.ZoneId;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import com.omnibid.dto.report.ReportDetailResponse;
+import com.omnibid.entity.Shipment;
+import com.omnibid.entity.Payment;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -556,5 +561,85 @@ class ReportServiceTest {
         // Report must NOT be saved as RESOLVED
         verify(reportRepository, never()).save(any(Report.class));
         assertThat(report.getStatus()).isEqualTo(ReportStatus.PENDING);
+    }
+
+    @Test
+    @DisplayName("createReport: Báo cáo vi phạm User thành công & lỗi khi user không tồn tại")
+    void createReport_ViolationUser_SuccessAndNotFound() {
+        ReportRequest req = new ReportRequest(ReportType.VIOLATION, SELLER_ID, null, null, "Ly do vi pham user");
+        when(userRepository.findById(OTHER_ID)).thenReturn(Optional.of(activeOther));
+        when(userRepository.existsById(SELLER_ID)).thenReturn(true);
+        when(reportRepository.existsByReporterIdAndReportedUserIdAndStatus(OTHER_ID, SELLER_ID, ReportStatus.PENDING))
+                .thenReturn(false);
+
+        Report saved = Report.builder()
+                .id(99L)
+                .reporterId(OTHER_ID)
+                .reportType(ReportType.VIOLATION)
+                .reportedUserId(SELLER_ID)
+                .reason("Ly do vi pham user")
+                .status(ReportStatus.PENDING)
+                .createdAt(NOW)
+                .build();
+        when(reportRepository.save(any(Report.class))).thenReturn(saved);
+
+        ReportResponse res = reportService.createReport(otherUser, req);
+        assertThat(res.id()).isEqualTo(99L);
+        assertThat(res.reportedUserId()).isEqualTo(SELLER_ID);
+
+        // Case not found
+        when(userRepository.existsById(999L)).thenReturn(false);
+        ReportRequest notFoundReq = new ReportRequest(ReportType.VIOLATION, 999L, null, null, "Ly do vi pham user");
+        assertThatThrownBy(() -> reportService.createReport(otherUser, notFoundReq))
+                .isInstanceOf(AppException.class)
+                .matches(e -> ((AppException) e).getCode().equals("NOT_FOUND"));
+    }
+
+    @Test
+    @DisplayName("getAdminReports: Admin xem danh sách báo cáo có đầy đủ chi tiết & non-admin bị 403")
+    void getAdminReports_AdminAndNonAdmin() {
+        // Non-admin -> 403
+        assertThatThrownBy(() -> reportService.getAdminReports(otherUser, null, null, PageRequest.of(0, 10)))
+                .isInstanceOf(AppException.class)
+                .matches(e -> ((AppException) e).getCode().equals("FORBIDDEN"));
+
+        // Admin -> Success with full summaries
+        Report r = Report.builder()
+                .id(1L)
+                .reporterId(BUYER_ID)
+                .reportedUserId(SELLER_ID)
+                .reportedProductId(PRODUCT_ID)
+                .orderId(ORDER_ID)
+                .reportType(ReportType.COMPLAINT)
+                .status(ReportStatus.PENDING)
+                .reason("Hang khong dung mo ta")
+                .createdAt(NOW)
+                .build();
+        when(reportRepository.findAdminReports(eq(ReportStatus.PENDING), eq(ReportType.COMPLAINT), any()))
+                .thenReturn(new PageImpl<>(List.of(r)));
+        when(userRepository.findById(BUYER_ID)).thenReturn(Optional.of(activeBuyer));
+        when(userRepository.findById(SELLER_ID)).thenReturn(Optional.of(activeSeller));
+        when(productRepository.findById(PRODUCT_ID)).thenReturn(Optional.of(product10));
+        Auction openAuc = Auction.builder().id(200L).productId(PRODUCT_ID).status(AuctionStatus.ACTIVE).build();
+        when(auctionRepository.findFirstByProductIdAndStatusIn(eq(PRODUCT_ID), anyList()))
+                .thenReturn(Optional.of(openAuc));
+
+        Order order = Order.builder().id(ORDER_ID).buyerId(BUYER_ID).sellerId(SELLER_ID).status(OrderStatus.SHIPPING).build();
+        when(orderRepository.findById(ORDER_ID)).thenReturn(Optional.of(order));
+        Shipment shipment = Shipment.builder().id(50L).orderId(ORDER_ID).status(ShipmentStatus.DELIVERED).build();
+        when(shipmentRepository.findByOrderId(ORDER_ID)).thenReturn(Optional.of(shipment));
+        Payment payment = Payment.builder().id(70L).orderId(ORDER_ID).status(PaymentStatus.SUCCESS).build();
+        when(paymentRepository.findByOrderIdOrderByAttemptNoDesc(ORDER_ID)).thenReturn(List.of(payment));
+
+        var pageRes = reportService.getAdminReports(adminUser, ReportStatus.PENDING, ReportType.COMPLAINT, PageRequest.of(0, 10));
+        assertThat(pageRes.getContent()).hasSize(1);
+        ReportDetailResponse detail = pageRes.getContent().get(0);
+        assertThat(detail.id()).isEqualTo(1L);
+        assertThat(detail.reporter()).isNotNull();
+        assertThat(detail.reportedProduct()).isNotNull();
+        assertThat(detail.reportedProduct().activeAuctionId()).isEqualTo(200L);
+        assertThat(detail.order()).isNotNull();
+        assertThat(detail.order().shipmentStatus()).isEqualTo("DELIVERED");
+        assertThat(detail.order().paymentStatus()).isEqualTo("SUCCESS");
     }
 }

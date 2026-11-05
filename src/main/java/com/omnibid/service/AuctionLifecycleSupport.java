@@ -31,6 +31,7 @@ public class AuctionLifecycleSupport {
     private final NotificationService notificationService;
     private final Clock clock;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public AuctionLifecycleSupport(AuctionRepository auctionRepository,
                                    BidRepository bidRepository,
                                    ProductRepository productRepository,
@@ -82,7 +83,9 @@ public class AuctionLifecycleSupport {
 
         Auction savedAuction = auctionRepository.save(auction);
 
-        Product product = productRepository.findById(auction.getProductId()).orElse(null);
+        Product product = productRepository.findByIdForUpdate(auction.getProductId())
+                .or(() -> productRepository.findById(auction.getProductId()))
+                .orElse(null);
         if (product != null && product.getStatus() != ProductStatus.HIDDEN && product.getStatus() != ProductStatus.REMOVED) {
             product.setStatus(ProductStatus.AVAILABLE);
             productRepository.save(product);

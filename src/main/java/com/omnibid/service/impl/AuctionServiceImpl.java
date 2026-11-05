@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.List;
 
@@ -44,11 +45,23 @@ public class AuctionServiceImpl implements AuctionService {
     @Override
     @Transactional
     public AuctionResponse createAuction(Long userId, AuctionCreateRequest request) {
+        LocalDateTime now = LocalDateTime.now(clock);
+        if (request.getStartTime().isBefore(now)) {
+            throw new AppException("VALIDATION_ERROR", "Thời gian bắt đầu không được ở quá khứ", HttpStatus.BAD_REQUEST);
+        }
         if (!request.getStartTime().isBefore(request.getEndTime())) {
-            throw new AppException("Start time must be before end time", HttpStatus.BAD_REQUEST);
+            throw new AppException("VALIDATION_ERROR", "Start time must be before end time", HttpStatus.BAD_REQUEST);
+        }
+        Duration duration = Duration.between(request.getStartTime(), request.getEndTime());
+        if (duration.toMinutes() < 60 || duration.toDays() > 30) {
+            throw new AppException("VALIDATION_ERROR", "Thời lượng phiên phải từ 1 giờ đến 30 ngày", HttpStatus.BAD_REQUEST);
+        }
+        if (request.getReservePrice() != null && request.getReservePrice().compareTo(request.getStartPrice()) < 0) {
+            throw new AppException("VALIDATION_ERROR", "Giá sàn phải lớn hơn hoặc bằng giá khởi điểm", HttpStatus.BAD_REQUEST);
         }
 
-        Product product = productRepository.findById(request.getProductId())
+        Product product = productRepository.findByIdForUpdate(request.getProductId())
+                .or(() -> productRepository.findById(request.getProductId()))
                 .orElseThrow(() -> new AppException("Product not found", HttpStatus.NOT_FOUND));
 
         if (!product.getSellerId().equals(userId)) {
@@ -62,7 +75,6 @@ public class AuctionServiceImpl implements AuctionService {
         product.setStatus(ProductStatus.IN_AUCTION);
         productRepository.save(product);
 
-        LocalDateTime now = LocalDateTime.now(clock);
         AuctionStatus initialStatus = !request.getStartTime().isAfter(now)
                 ? AuctionStatus.ACTIVE
                 : AuctionStatus.SCHEDULED;

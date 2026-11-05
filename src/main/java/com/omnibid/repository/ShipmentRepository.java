@@ -15,6 +15,9 @@ public interface ShipmentRepository extends JpaRepository<Shipment, Long> {
     Optional<Shipment> findByOrderId(Long orderId);
     Optional<Shipment> findByTrackingCode(String trackingCode);
 
+    @Query("SELECT s.orderId FROM Shipment s WHERE s.id = :id")
+    Optional<Long> findOrderIdById(@Param("id") Long id);
+
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT s FROM Shipment s WHERE s.id = :id")
     Optional<Shipment> findByIdForUpdate(@Param("id") Long id);

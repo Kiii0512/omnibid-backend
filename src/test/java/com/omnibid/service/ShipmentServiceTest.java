@@ -195,7 +195,7 @@ class ShipmentServiceTest {
     @Test
     @DisplayName("UT-SHP-04 CREATED -> PICKED_UP bởi SELLER: Shipment PICKED_UP, Order sang SHIPPING, event updated_by = 1")
     void updateShipmentStatus_CreatedToPickedUp_Success() {
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -218,7 +218,7 @@ class ShipmentServiceTest {
         sampleShipment.setStatus(ShipmentStatus.PICKED_UP);
         sampleOrder.setStatus(OrderStatus.SHIPPING);
 
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -237,7 +237,7 @@ class ShipmentServiceTest {
         sampleShipment.setStatus(ShipmentStatus.IN_TRANSIT);
         sampleOrder.setStatus(OrderStatus.SHIPPING);
 
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -255,7 +255,7 @@ class ShipmentServiceTest {
     @Test
     @DisplayName("UT-SHP-07 Nhảy cóc: CREATED -> IN_TRANSIT hoặc CREATED -> DELIVERED ném 409 INVALID_STATUS_TRANSITION, không ghi event")
     void updateShipmentStatus_SkipStatus_ThrowsInvalidStatusTransition() {
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -280,7 +280,7 @@ class ShipmentServiceTest {
         // IN_TRANSIT -> PICKED_UP
         sampleShipment.setStatus(ShipmentStatus.IN_TRANSIT);
         sampleOrder.setStatus(OrderStatus.SHIPPING);
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -304,7 +304,7 @@ class ShipmentServiceTest {
     void updateShipmentStatus_SameStatus_ThrowsInvalidStatusTransition() {
         sampleShipment.setStatus(ShipmentStatus.PICKED_UP);
         sampleOrder.setStatus(OrderStatus.SHIPPING);
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -319,7 +319,7 @@ class ShipmentServiceTest {
     @Test
     @DisplayName("UT-SHP-10 Buyer cập nhật ném 403 FORBIDDEN")
     void updateShipmentStatus_BuyerUpdates_ThrowsForbidden() {
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -332,7 +332,7 @@ class ShipmentServiceTest {
     @Test
     @DisplayName("UT-SHP-11 Người ngoài nhận 403; ADMIN cập nhật thành công, event updated_by = 9, ghi audit SHIPMENT_UPDATE")
     void updateShipmentStatus_OtherForbiddenAndAdminSuccess() {
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -356,7 +356,7 @@ class ShipmentServiceTest {
     @Test
     @DisplayName("UT-SHP-12 Seller bị khóa (BANNED) ném 403 ACCOUNT_BANNED")
     void updateShipmentStatus_SellerBanned_ThrowsAccountBanned() {
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -376,7 +376,7 @@ class ShipmentServiceTest {
     @Test
     @DisplayName("UT-SHP-13 Đơn CANCELLED ném 409 ORDER_CANCELLED; Đơn COMPLETED ném 409 INVALID_STATUS_TRANSITION")
     void updateShipmentStatus_CancelledOrCompletedOrder_ThrowsConflict() {
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -395,7 +395,7 @@ class ShipmentServiceTest {
     @Test
     @DisplayName("UT-SHP-14 Lịch sử bất biến: Không có thao tác update/delete trên ShipmentEventRepository")
     void updateShipmentStatus_ImmutableHistory_NeverUpdatesOrDeletesEvents() {
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 
@@ -413,7 +413,7 @@ class ShipmentServiceTest {
         sampleShipment.setStatus(ShipmentStatus.IN_TRANSIT);
         sampleOrder.setStatus(OrderStatus.SHIPPING);
 
-        when(shipmentRepository.findById(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
+        when(shipmentRepository.findOrderIdById(SHIPMENT_ID)).thenReturn(Optional.of(ORDER_ID));
         when(orderRepository.findByIdForUpdate(ORDER_ID)).thenReturn(Optional.of(sampleOrder));
         when(shipmentRepository.findByIdForUpdate(SHIPMENT_ID)).thenReturn(Optional.of(sampleShipment));
 

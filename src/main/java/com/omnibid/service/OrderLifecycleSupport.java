@@ -56,17 +56,28 @@ public class OrderLifecycleSupport {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void expireOne(Long orderId, LocalDateTime now) {
-        Order preCheck = orderRepository.findById(orderId).orElse(null);
-        if (preCheck == null) {
+        // Đọc không khóa để lấy product_id (AUCTION_ORDER_INTEGRATION §4.1)
+        Order initial = orderRepository.findById(orderId)
+                .or(() -> orderRepository.findByIdForUpdate(orderId))
+                .orElse(null);
+        if (initial == null || initial.getStatus() != OrderStatus.PENDING_PAYMENT) {
             return;
         }
 
-        // Quy tắc khóa: Product -> Order (AUCTION_ORDER_INTEGRATION §4)
-        Product product = productRepository.findByIdForUpdate(preCheck.getProductId()).orElse(null);
-        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
+        if (now.isBefore(initial.getPaymentDeadline())) {
+            return;
+        }
 
+        // Thứ tự khóa toàn cục: L2 Product -> L3 Order -> L4 Payment
+        Long productId = initial.getProductId();
+        Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
+        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
         if (order == null || order.getStatus() != OrderStatus.PENDING_PAYMENT) {
             return;
+        }
+
+        if (product == null && order.getProductId() != null) {
+            product = productRepository.findByIdForUpdate(order.getProductId()).orElse(null);
         }
 
         // Kiểm tra quá hạn
@@ -176,17 +187,28 @@ public class OrderLifecycleSupport {
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void autoCompleteOne(Long orderId, LocalDateTime now) {
-        Order preCheck = orderRepository.findById(orderId).orElse(null);
-        if (preCheck == null) {
+        // Đọc không khóa để lấy product_id (AUCTION_ORDER_INTEGRATION §4.1)
+        Order initial = orderRepository.findById(orderId)
+                .or(() -> orderRepository.findByIdForUpdate(orderId))
+                .orElse(null);
+        if (initial == null || initial.getStatus() != OrderStatus.SHIPPING) {
             return;
         }
 
-        // Khóa Product -> Order
-        Product product = productRepository.findByIdForUpdate(preCheck.getProductId()).orElse(null);
-        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
+        if (initial.getConfirmDeadline() == null || now.isBefore(initial.getConfirmDeadline())) {
+            return;
+        }
 
+        // Thứ tự khóa toàn cục: L2 Product -> L3 Order
+        Long productId = initial.getProductId();
+        Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
+        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
         if (order == null || order.getStatus() != OrderStatus.SHIPPING) {
             return;
+        }
+
+        if (product == null && order.getProductId() != null) {
+            product = productRepository.findByIdForUpdate(order.getProductId()).orElse(null);
         }
 
         if (order.getConfirmDeadline() == null || now.isBefore(order.getConfirmDeadline())) {
