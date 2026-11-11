@@ -3,9 +3,11 @@ package com.omnibid.controller;
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.AppException;
 import com.omnibid.dto.auction.AuctionCreateRequest;
+import com.omnibid.dto.auction.AuctionDetailResponse;
+import com.omnibid.dto.auction.AuctionFilterRequest;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.dto.auction.CancelAuctionRequest;
-import com.omnibid.enums.AuctionStatus;
+import com.omnibid.enums.UserRole;
 import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.AuctionService;
 import jakarta.validation.Valid;
@@ -41,16 +43,23 @@ public class AuctionController {
 
     @GetMapping
     public ApiResponse<Page<AuctionResponse>> getAuctions(
-            @RequestParam(required = false) AuctionStatus status,
+            @Valid @ModelAttribute AuctionFilterRequest filter,
             @PageableDefault(size = 20) Pageable pageable
     ) {
-        Page<AuctionResponse> response = auctionService.getAuctions(status, pageable);
+        Page<AuctionResponse> response = auctionService.getAuctions(filter, pageable);
         return ApiResponse.success(response);
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<AuctionResponse> getAuctionById(@PathVariable Long id) {
-        AuctionResponse response = auctionService.getAuctionById(id);
+    public ApiResponse<AuctionDetailResponse> getAuctionById(
+            @PathVariable Long id,
+            @AuthenticationPrincipal CustomUserDetails userDetails
+    ) {
+        Long currentUserId = userDetails != null ? userDetails.getId() : null;
+        boolean isAdmin = userDetails != null
+                && userDetails.getUser() != null
+                && userDetails.getUser().getRole() == UserRole.ADMIN;
+        AuctionDetailResponse response = auctionService.getAuctionById(id, currentUserId, isAdmin);
         return ApiResponse.success(response);
     }
 
@@ -68,4 +77,3 @@ public class AuctionController {
         return ApiResponse.success("Auction cancelled successfully", response);
     }
 }
-

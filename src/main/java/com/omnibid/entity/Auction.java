@@ -67,7 +67,10 @@ public class Auction {
 
     @Column(name = "cancel_reason")
     private String cancelReason;
-
+    @Version
+    @Column(name = "version", nullable = false)
+    @Builder.Default
+    private Long version = 0L;
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
