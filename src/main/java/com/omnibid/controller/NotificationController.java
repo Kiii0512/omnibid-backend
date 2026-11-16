@@ -25,12 +25,13 @@ public class NotificationController {
     public ApiResponse<PageResponse<NotificationResponse>> getNotifications(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false) Boolean isRead,
+            @RequestParam(required = false) com.omnibid.enums.NotificationType type,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
         validateAuth(userDetails);
         PageResponse<NotificationResponse> result = notificationService.getNotifications(
-                userDetails.getId(), isRead, PageRequest.of(page, Math.min(size, 100))
+                userDetails.getId(), isRead, type, PageRequest.of(page, Math.min(size, 100))
         );
         return ApiResponse.success(result);
     }

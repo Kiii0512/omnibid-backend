@@ -4,6 +4,7 @@ import com.omnibid.common.AppException;
 import com.omnibid.dto.category.CategoryRequest;
 import com.omnibid.dto.category.CategoryResponse;
 import com.omnibid.entity.Category;
+import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.CategoryRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.security.CurrentUser;
@@ -17,6 +18,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.text.Normalizer;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -25,13 +28,29 @@ public class CategoryServiceImpl implements CategoryService {
 
     private final CategoryRepository categoryRepository;
     private final ProductRepository productRepository;
+    private final AuctionRepository auctionRepository;
     private final AuditService auditService;
 
     @Override
     @Transactional(readOnly = true)
     public List<CategoryResponse> getAllCategories() {
+        Map<Long, Long> counts = auctionRepository.countActiveAuctionsGroupedByCategory().stream()
+                .filter(row -> row != null && row.length >= 2 && row[0] != null)
+                .collect(Collectors.toMap(
+                        row -> (Long) row[0],
+                        row -> ((Number) row[1]).longValue(),
+                        (a, b) -> a
+                ));
+
         return categoryRepository.findAll().stream()
-                .map(this::mapToResponse)
+                .map(cat -> new CategoryResponse(
+                        cat.getId(),
+                        cat.getName(),
+                        cat.getSlug(),
+                        cat.getIconUrl(),
+                        cat.getCreatedAt(),
+                        counts.getOrDefault(cat.getId(), 0L)
+                ))
                 .toList();
     }
 
@@ -40,7 +59,15 @@ public class CategoryServiceImpl implements CategoryService {
     public CategoryResponse getCategoryById(Long id) {
         Category category = categoryRepository.findById(id)
                 .orElseThrow(() -> new AppException("NOT_FOUND", "Category not found", HttpStatus.NOT_FOUND));
-        return mapToResponse(category);
+        long activeCount = auctionRepository.countActiveAuctionsByCategoryId(id);
+        return new CategoryResponse(
+                category.getId(),
+                category.getName(),
+                category.getSlug(),
+                category.getIconUrl(),
+                category.getCreatedAt(),
+                activeCount
+        );
     }
 
     @Override

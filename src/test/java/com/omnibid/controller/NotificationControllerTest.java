@@ -105,7 +105,7 @@ class NotificationControllerTest {
                 .totalPages(1)
                 .build();
 
-        when(notificationService.getNotifications(eq(2L), any(), any())).thenReturn(pageRes);
+        when(notificationService.getNotifications(eq(2L), any(), any(), any())).thenReturn(pageRes);
 
         mockMvc.perform(get("/api/v1/notifications")
                         .contentType(MediaType.APPLICATION_JSON))

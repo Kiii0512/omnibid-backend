@@ -20,6 +20,18 @@ public interface NotificationRepository extends JpaRepository<Notification, Long
 
     Page<Notification> findByUserIdAndIsReadOrderByCreatedAtDesc(Long userId, Boolean isRead, Pageable pageable);
 
+    @Query("""
+        SELECT n FROM Notification n
+        WHERE n.userId = :userId
+          AND (:isRead IS NULL OR n.isRead = :isRead)
+          AND (:type IS NULL OR n.type = :type)
+        ORDER BY n.createdAt DESC
+    """)
+    Page<Notification> findNotifications(@Param("userId") Long userId,
+                                         @Param("isRead") Boolean isRead,
+                                         @Param("type") com.omnibid.enums.NotificationType type,
+                                         Pageable pageable);
+
     long countByUserIdAndIsReadFalse(Long userId);
 
     @Modifying

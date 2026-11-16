@@ -1,6 +1,8 @@
 package com.omnibid.dto.auction;
 
+import com.omnibid.dto.product.ProductImageResponse;
 import com.omnibid.enums.AuctionStatus;
+import com.omnibid.enums.ProductCondition;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -8,6 +10,7 @@ import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.List;
 
 @Data
 @Builder
@@ -21,6 +24,14 @@ public class AuctionResponse {
 
     private String productTitle;
 
+    private String productDescription;
+
+    private Long categoryId;
+
+    private String categoryName;
+
+    private ProductCondition condition;
+
     private Long sellerId;
 
     private String sellerName;
@@ -30,6 +41,10 @@ public class AuctionResponse {
     private BigDecimal bidIncrement;
 
     private BigDecimal currentPrice;
+
+    private BigDecimal minNextBid;
+
+    private String reserveStatus;
 
     private Long highestBidderId;
 
@@ -52,4 +67,12 @@ public class AuctionResponse {
     private String cancelReason;
 
     private LocalDateTime createdAt;
+
+    private String primaryImageUrl;
+
+    private List<ProductImageResponse> images;
+
+    private LocalDateTime serverTime;
+
+    private Boolean isWatched;
 }

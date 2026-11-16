@@ -41,6 +41,15 @@ public class OrderController {
         return ApiResponse.success(result);
     }
 
+    @GetMapping("/summary")
+    public ApiResponse<com.omnibid.dto.order.OrderUserSummaryResponse> getOrderSummary(
+            @AuthenticationPrincipal CustomUserDetails userDetails
+    ) {
+        CurrentUser currentUser = CurrentUser.of(userDetails);
+        com.omnibid.dto.order.OrderUserSummaryResponse summary = orderService.getOrderSummary(currentUser);
+        return ApiResponse.success(summary);
+    }
+
     @GetMapping("/{id}")
     public ApiResponse<OrderDetailResponse> getOrderById(
             @AuthenticationPrincipal CustomUserDetails userDetails,

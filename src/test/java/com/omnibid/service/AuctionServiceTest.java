@@ -10,9 +10,13 @@ import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
+import com.omnibid.mapper.AuctionMapper;
 import com.omnibid.repository.AuctionRepository;
+import com.omnibid.repository.CategoryRepository;
+import com.omnibid.repository.ProductImageRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.repository.UserRepository;
+import com.omnibid.repository.WatchlistRepository;
 import com.omnibid.service.impl.AuctionServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -45,6 +49,15 @@ class AuctionServiceTest {
     private ProductRepository productRepository;
 
     @Mock
+    private ProductImageRepository productImageRepository;
+
+    @Mock
+    private CategoryRepository categoryRepository;
+
+    @Mock
+    private WatchlistRepository watchlistRepository;
+
+    @Mock
     private UserRepository userRepository;
 
     @Mock
@@ -56,6 +69,7 @@ class AuctionServiceTest {
     @Mock
     private AuctionLifecycleSupport auctionLifecycleSupport;
 
+    private AuctionMapper auctionMapper;
     private AuctionServiceImpl auctionService;
 
     private User sampleSeller;
@@ -64,13 +78,24 @@ class AuctionServiceTest {
 
     @BeforeEach
     void setUp() {
+        auctionMapper = new AuctionMapper(
+                productRepository,
+                productImageRepository,
+                categoryRepository,
+                userRepository,
+                watchlistRepository,
+                clock
+        );
+
         auctionService = new AuctionServiceImpl(
                 auctionRepository,
                 productRepository,
+                productImageRepository,
                 userRepository,
                 webSocketPublisher,
                 auctionCloser,
                 auctionLifecycleSupport,
+                auctionMapper,
                 clock
         );
 
@@ -115,6 +140,7 @@ class AuctionServiceTest {
                 .build();
 
         when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(productImageRepository.countByProductId(10L)).thenReturn(1L);
         when(auctionRepository.save(any(Auction.class))).thenReturn(sampleAuction);
         when(productRepository.save(any(Product.class))).thenReturn(sampleProduct);
         when(userRepository.findById(1L)).thenReturn(Optional.of(sampleSeller));
@@ -260,5 +286,57 @@ class AuctionServiceTest {
         AppException ex4 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, lowReserve));
         assertEquals(HttpStatus.BAD_REQUEST, ex4.getStatus());
         assertEquals("VALIDATION_ERROR", ex4.getCode());
+    }
+
+    @Test
+    void createAuction_NoImages_ThrowsBadRequest() {
+        AuctionCreateRequest request = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(5))
+                .build();
+
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(productImageRepository.countByProductId(10L)).thenReturn(0L);
+
+        AppException ex = assertThrows(AppException.class, () -> auctionService.createAuction(1L, request));
+        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertEquals("BAD_REQUEST", ex.getCode());
+    }
+
+    @Test
+    void updateAuction_Success_WhenScheduled() {
+        when(auctionRepository.findById(100L)).thenReturn(Optional.of(sampleAuction));
+        when(auctionRepository.save(any(Auction.class))).thenAnswer(i -> i.getArgument(0));
+
+        com.omnibid.dto.auction.AuctionUpdateRequest updateRequest = new com.omnibid.dto.auction.AuctionUpdateRequest(
+                BigDecimal.valueOf(150),
+                BigDecimal.valueOf(15),
+                BigDecimal.valueOf(250),
+                NOW.plusHours(2),
+                NOW.plusHours(6)
+        );
+
+        AuctionResponse response = auctionService.updateAuction(1L, 100L, updateRequest);
+        assertNotNull(response);
+        assertEquals(BigDecimal.valueOf(150), sampleAuction.getStartPrice());
+        assertEquals(BigDecimal.valueOf(15), sampleAuction.getBidIncrement());
+    }
+
+    @Test
+    void updateAuction_ActiveWithBids_ThrowsConflict() {
+        sampleAuction.setStatus(AuctionStatus.ACTIVE);
+        sampleAuction.setBidCount(1);
+        when(auctionRepository.findById(100L)).thenReturn(Optional.of(sampleAuction));
+
+        com.omnibid.dto.auction.AuctionUpdateRequest updateRequest = new com.omnibid.dto.auction.AuctionUpdateRequest(
+                BigDecimal.valueOf(150), null, null, null, null
+        );
+
+        AppException ex = assertThrows(AppException.class, () -> auctionService.updateAuction(1L, 100L, updateRequest));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("CANNOT_UPDATE", ex.getCode());
     }
 }

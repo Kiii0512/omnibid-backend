@@ -174,3 +174,80 @@ src/main/java/com/omnibid/
    ```
 
 6. **Cổng kiểm thử API:** `http://localhost:8080`.
+
+---
+
+## 7. DỮ LIỆU MẪU ĐỂ KIỂM THỬ API (SEED DEMO DATA)
+
+Toàn bộ dữ liệu mẫu được nạp tự động qua file script [db/seed_demo.sql](file:///d:/Code/omnibid-backend/db/seed_demo.sql). Thành viên dự án và kiểm thử viên có thể sử dụng trực tiếp các tài nguyên có sẵn dưới đây để gọi API mà không cần truy vấn trực tiếp vào Database.
+
+### 7.1. Danh sách tài khoản đăng nhập mẫu
+
+> [!NOTE]
+> Mật khẩu đăng nhập chung cho **tất cả** tài khoản demo là: **`Demo@123`** (đã được băm chuẩn BCrypt trong cơ sở dữ liệu).
+
+| ID | Vai trò / Mô tả | Họ và tên | Email đăng nhập | Mật khẩu | Trạng thái |
+| :---: | :--- | :--- | :--- | :---: | :---: |
+| **1** | **Quản trị viên hệ thống (Admin)** | Admin OmniBid | `admin@omnibid.com` | `Demo@123` | `ACTIVE` |
+| **2** | **Người bán mẫu (Seller 1)** | Nguyen Van Seller | `seller1@omnibid.com` | `Demo@123` | `ACTIVE` |
+| **3** | **Người mua 1 (Buyer 1 - Đã thắng phiên 4)** | Tran Thi Buyer 1 | `buyer1@omnibid.com` | `Demo@123` | `ACTIVE` |
+| **4** | **Người mua 2 (Buyer 2 - Đã tham gia đặt giá)** | Le Van Buyer 2 | `buyer2@omnibid.com` | `Demo@123` | `ACTIVE` |
+| **5** | **Người mua 3 (Buyer 3 - Đang dẫn đầu phiên 3)** | Pham Van Buyer 3 | `buyer3@omnibid.com` | `Demo@123` | `ACTIVE` |
+
+---
+
+### 7.2. Danh mục sản phẩm (Categories)
+
+| ID | Tên danh mục | Slug | Mục đích / Sản phẩm mẫu liên kết |
+| :---: | :--- | :--- | :--- |
+| **1** | Đồng hồ & Trang sức | `dong-ho-trang-suc` | Đồng hồ Rolex Submariner (SP 1), Omega Moonwatch (SP 4) |
+| **2** | Đồ điện tử & Công nghệ | `dien-tu-cong-nghe` | iPhone 15 Pro Max (SP 2), MacBook Pro M3 (SP 3), PS5 Slim (SP 7) |
+| **3** | Đồ cổ & Sưu tầm | `do-co-suu-tam` | Bình gốm thời Chu (SP 5), Tiền xu Đông Dương (SP 6), Tranh cổ (SP 8) |
+
+---
+
+### 7.3. Sản phẩm mẫu (Products)
+
+> [!TIP]
+> Tất cả 8 sản phẩm mẫu thuộc quyền sở hữu của **Seller 1 (ID = 2)**.
+
+| ID | Tên sản phẩm | Danh mục | Tình trạng | Trạng thái | Khuyến nghị sử dụng để kiểm thử API |
+| :---: | :--- | :---: | :---: | :---: | :--- |
+| **1** | Đồng hồ Rolex Submariner Date | 1 | `LIKE_NEW` | `IN_AUCTION` | Gắn với phiên đấu giá `SCHEDULED` (ID 1). |
+| **2** | iPhone 15 Pro Max 256GB | 2 | `NEW` | `IN_AUCTION` | Gắn với phiên đấu giá `ACTIVE` chưa có lượt bid (ID 2). |
+| **3** | MacBook Pro 16 inch M3 Max | 2 | `LIKE_NEW` | `IN_AUCTION` | Gắn với phiên đấu giá `ACTIVE` đã có 3 lượt bid (ID 3). |
+| **4** | Đồng hồ Omega Speedmaster Moonwatch | 1 | `GOOD` | `RESERVED` | Đã chốt đấu giá thành công (Phiên 4), sinh đơn hàng `Order ID = 1`. |
+| **5** | Bình gốm thời Chu thế kỷ 18 | 3 | `GOOD` | `AVAILABLE` | **Sẵn sàng test:** Thử gọi `PATCH /api/v1/products/5` sửa thông tin, upload ảnh `POST /api/v1/products/5/images`, hoặc tạo phiên đấu giá mới. |
+| **6** | Tiền xu cổ Đông Dương 1885 | 3 | `GOOD` | `AVAILABLE` | **Sẵn sàng test:** Thử tạo phiên đấu giá mới hoặc gọi `DELETE /api/v1/products/6` để xóa sản phẩm. |
+| **7** | Sony PlayStation 5 Slim | 2 | `GOOD` | `SOLD` | Sản phẩm đã bán thành công và hoàn tất giao dịch. |
+| **8** | Tranh sơn dầu nghệ thuật cổ | 3 | `GOOD` | `HIDDEN` | **Sẵn sàng test Admin:** Dùng tài khoản Admin gọi `PATCH /api/v1/admin/products/8/status` để bỏ ẩn (`AVAILABLE`). |
+
+---
+
+### 7.4. Phiên đấu giá mẫu (Auctions)
+
+| ID | Sản phẩm liên kết | Trạng thái | Giá hiện tại | Giá sàn (Reserve) | Người dẫn đầu | Số lượt bid | Khuyến nghị sử dụng để kiểm thử |
+| :---: | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **1** | Rolex Submariner (SP 1) | `SCHEDULED` | 50.000.000 đ | Không có | *Chưa có* | 0 | Kiểm thử phiên sắp diễn ra (hệ thống chặn không cho đặt giá trước giờ bắt đầu). |
+| **2** | iPhone 15 Pro Max (SP 2) | `ACTIVE` | 25.000.000 đ | Không có | *Chưa có* | 0 | Kiểm thử đặt lượt giá đầu tiên (`POST /api/v1/bids` với giá tối thiểu 25.000.000 đ). |
+| **3** | MacBook Pro M3 (SP 3) | `ACTIVE` | 63.000.000 đ | Không có | Buyer 3 (ID 5) | 3 | Kiểm thử đặt giá cạnh tranh (bước giá 1.000.000 đ, giá tối thiểu tiếp theo 64.000.000 đ) và bắn tin WebSocket thời gian thực `/topic/auction/3`. |
+| **4** | Omega Moonwatch (SP 4) | `ENDED` | 43.000.000 đ | 42.000.000 đ | Buyer 1 (ID 3) | 2 | Phiên đã kết thúc thành công (đạt giá sàn), đã sinh ra hóa đơn `Order ID = 1`. |
+| **5** | Bình gốm thời Chu (SP 5) | `UNSOLD` | 12.000.000 đ | 15.000.000 đ | Buyer 2 (ID 4) | 1 | Phiên kết thúc không thành công vì bid cao nhất (12tr) chưa đạt giá sàn (15tr). |
+| **6** | Tiền xu Đông Dương (SP 6) | `CANCELLED` | 2.000.000 đ | Không có | *Chưa có* | 0 | Phiên bị hủy bởi người bán khi chưa có ai đặt giá. |
+
+---
+
+### 7.5. Đơn hàng & Danh sách theo dõi mẫu (Orders & Watchlists)
+
+* **Hóa đơn mua hàng (Order ID = 1):**
+  - **Phiên đấu giá:** Phiên ID 4 (Omega Moonwatch).
+  - **Người bán:** `seller1@omnibid.com` (ID = 2) | **Người mua trúng đấu giá:** `buyer1@omnibid.com` (ID = 3).
+  - **Số tiền thanh toán:** `43.000.000 đ`.
+  - **Trạng thái:** `PENDING_PAYMENT` (Chờ người mua thanh toán).
+  - **Khuyến nghị test:** Đăng nhập dưới tài khoản `buyer1@omnibid.com`, gọi API tạo giao dịch thanh toán mô phỏng `POST /api/v1/payments` để chuyển đơn hàng sang trạng thái `PAID` và sinh vận đơn `Shipment`.
+
+* **Danh sách theo dõi (Watchlists):**
+  - `buyer1@omnibid.com` (ID = 3) đang theo dõi Phiên 1 (Rolex Submariner).
+  - `buyer2@omnibid.com` (ID = 4) đang theo dõi Phiên 2 (iPhone 15 Pro Max).
+  - `buyer3@omnibid.com` (ID = 5) đang theo dõi Phiên 3 (MacBook Pro M3 Max).
+

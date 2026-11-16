@@ -20,6 +20,8 @@ public interface OrderService {
 
     OrderDetailResponse updateShippingInfo(CurrentUser currentUser, Long id, ShippingInfoRequest request);
 
+    com.omnibid.dto.order.OrderUserSummaryResponse getOrderSummary(CurrentUser currentUser);
+
     void sendPaymentReminders();
 
     void expireOverdueOrders();

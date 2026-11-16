@@ -24,6 +24,12 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     List<Product> findBySellerId(Long sellerId);
 
+    Page<Product> findBySellerId(Long sellerId, Pageable pageable);
+
+    Page<Product> findBySellerIdAndStatus(Long sellerId, ProductStatus status, Pageable pageable);
+
+    Page<Product> findByStatus(ProductStatus status, Pageable pageable);
+
     List<Product> findBySellerIdAndStatusIn(Long sellerId, Collection<ProductStatus> statuses);
 
     List<Product> findByCategoryIdAndStatus(Long categoryId, ProductStatus status);
@@ -31,6 +37,10 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
     boolean existsByCategoryId(Long categoryId);
 
     long countByStatus(ProductStatus status);
+
+    long countBySellerId(Long sellerId);
+
+    long countBySellerIdAndStatus(Long sellerId, ProductStatus status);
 
     @Query("""
         SELECT p FROM Product p

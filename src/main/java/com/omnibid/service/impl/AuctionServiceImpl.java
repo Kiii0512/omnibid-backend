@@ -1,17 +1,22 @@
 package com.omnibid.service.impl;
 
 import com.omnibid.common.AppException;
+import com.omnibid.common.PageResponse;
 import com.omnibid.dto.auction.AuctionCreateRequest;
 import com.omnibid.dto.auction.AuctionResponse;
+import com.omnibid.dto.auction.AuctionUpdateRequest;
 import com.omnibid.entity.Auction;
 import com.omnibid.entity.Product;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.enums.UserRole;
+import com.omnibid.mapper.AuctionMapper;
 import com.omnibid.repository.AuctionRepository;
+import com.omnibid.repository.ProductImageRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.repository.UserRepository;
+import com.omnibid.repository.specification.AuctionSpecification;
 import com.omnibid.service.AuctionCloser;
 import com.omnibid.service.AuctionLifecycleSupport;
 import com.omnibid.service.AuctionService;
@@ -19,11 +24,15 @@ import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
+import org.springframework.data.jpa.domain.Specification;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.LocalDateTime;
@@ -36,10 +45,12 @@ public class AuctionServiceImpl implements AuctionService {
 
     private final AuctionRepository auctionRepository;
     private final ProductRepository productRepository;
+    private final ProductImageRepository productImageRepository;
     private final UserRepository userRepository;
     private final WebSocketPublisher webSocketPublisher;
     private final AuctionCloser auctionCloser;
     private final AuctionLifecycleSupport auctionLifecycleSupport;
+    private final AuctionMapper auctionMapper;
     private final Clock clock;
 
     @Override
@@ -72,6 +83,10 @@ public class AuctionServiceImpl implements AuctionService {
             throw new AppException("PRODUCT_NOT_AVAILABLE", "Product is not available for auction", HttpStatus.CONFLICT);
         }
 
+        if (productImageRepository.countByProductId(product.getId()) < 1) {
+            throw new AppException("BAD_REQUEST", "Product must have at least one image before creating an auction", HttpStatus.BAD_REQUEST);
+        }
+
         product.setStatus(ProductStatus.IN_AUCTION);
         productRepository.save(product);
 
@@ -94,7 +109,7 @@ public class AuctionServiceImpl implements AuctionService {
                 .build();
 
         Auction savedAuction = auctionRepository.save(auction);
-        AuctionResponse response = mapToAuctionResponse(savedAuction);
+        AuctionResponse response = auctionMapper.toAuctionResponse(savedAuction, userId);
 
         if (initialStatus == AuctionStatus.ACTIVE) {
             webSocketPublisher.publishAuctionUpdate(savedAuction.getId(), response);
@@ -106,21 +121,121 @@ public class AuctionServiceImpl implements AuctionService {
     @Override
     @Transactional(readOnly = true)
     public AuctionResponse getAuctionById(Long id) {
+        return getAuctionById(id, null);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public AuctionResponse getAuctionById(Long id, Long currentUserId) {
         Auction auction = auctionRepository.findById(id)
                 .orElseThrow(() -> new AppException("Auction not found with id: " + id, HttpStatus.NOT_FOUND));
-        return mapToAuctionResponse(auction);
+        return auctionMapper.toAuctionResponse(auction, currentUserId);
     }
 
     @Override
     @Transactional(readOnly = true)
     public Page<AuctionResponse> getAuctions(AuctionStatus status, Pageable pageable) {
-        Page<Auction> auctionPage;
-        if (status != null) {
-            auctionPage = auctionRepository.findByStatus(status, pageable);
-        } else {
-            auctionPage = auctionRepository.findAll(pageable);
+        Page<Auction> auctionPage = (status != null)
+                ? auctionRepository.findByStatus(status, pageable)
+                : auctionRepository.findAll(pageable);
+        return auctionPage.map(a -> auctionMapper.toAuctionResponse(a, null));
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<AuctionResponse> searchAuctions(
+            Long currentUserId,
+            String q,
+            List<Long> categoryIds,
+            AuctionStatus status,
+            BigDecimal minPrice,
+            BigDecimal maxPrice,
+            Long sellerId,
+            String sort,
+            Pageable pageable
+    ) {
+        Sort customSort = resolveSort(sort, pageable);
+        Pageable resolvedPageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), customSort);
+
+        Specification<Auction> spec = AuctionSpecification.filter(q, categoryIds, status, minPrice, maxPrice, sellerId);
+        Page<Auction> page = auctionRepository.findAll(spec, resolvedPageable);
+
+        return auctionMapper.toAuctionResponsePage(page, currentUserId);
+    }
+
+    @Override
+    @Transactional
+    public AuctionResponse updateAuction(Long sellerId, Long auctionId, AuctionUpdateRequest request) {
+        Auction auction = auctionRepository.findById(auctionId)
+                .orElseThrow(() -> new AppException("NOT_FOUND", "Auction not found with id: " + auctionId, HttpStatus.NOT_FOUND));
+
+        if (!auction.getSellerId().equals(sellerId)) {
+            throw new AppException("FORBIDDEN", "You do not own this auction", HttpStatus.FORBIDDEN);
         }
-        return auctionPage.map(this::mapToAuctionResponse);
+
+        boolean isScheduled = auction.getStatus() == AuctionStatus.SCHEDULED;
+        boolean isActiveNoBids = auction.getStatus() == AuctionStatus.ACTIVE && (auction.getBidCount() == null || auction.getBidCount() == 0);
+        if (!isScheduled && !isActiveNoBids) {
+            throw new AppException("CANNOT_UPDATE", "Auction can only be updated when SCHEDULED or ACTIVE with no bids", HttpStatus.CONFLICT);
+        }
+
+        if (request.startPrice() != null) {
+            if (request.startPrice().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new AppException("VALIDATION_ERROR", "Start price must be greater than 0", HttpStatus.BAD_REQUEST);
+            }
+            auction.setStartPrice(request.startPrice());
+            if (auction.getBidCount() == null || auction.getBidCount() == 0) {
+                auction.setCurrentPrice(request.startPrice());
+            }
+        }
+
+        if (request.bidIncrement() != null) {
+            if (request.bidIncrement().compareTo(BigDecimal.ZERO) <= 0) {
+                throw new AppException("VALIDATION_ERROR", "Bid increment must be greater than 0", HttpStatus.BAD_REQUEST);
+            }
+            auction.setBidIncrement(request.bidIncrement());
+        }
+
+        if (request.reservePrice() != null) {
+            if (request.reservePrice().compareTo(auction.getStartPrice()) < 0) {
+                throw new AppException("VALIDATION_ERROR", "Reserve price must be greater than or equal to start price", HttpStatus.BAD_REQUEST);
+            }
+            auction.setReservePrice(request.reservePrice());
+        }
+
+        LocalDateTime now = LocalDateTime.now(clock);
+        if (request.startTime() != null) {
+            if (!isScheduled) {
+                throw new AppException("VALIDATION_ERROR", "Cannot change start time of an ACTIVE auction", HttpStatus.BAD_REQUEST);
+            }
+            if (request.startTime().isBefore(now)) {
+                throw new AppException("VALIDATION_ERROR", "Start time cannot be in the past", HttpStatus.BAD_REQUEST);
+            }
+            auction.setStartTime(request.startTime());
+        }
+
+        if (request.endTime() != null) {
+            if (!request.endTime().isAfter(auction.getStartTime())) {
+                throw new AppException("VALIDATION_ERROR", "End time must be after start time", HttpStatus.BAD_REQUEST);
+            }
+            Duration d = Duration.between(auction.getStartTime(), request.endTime());
+            if (d.toMinutes() < 60 || d.toDays() > 30) {
+                throw new AppException("VALIDATION_ERROR", "Auction duration must be between 1 hour and 30 days", HttpStatus.BAD_REQUEST);
+            }
+            auction.setEndTime(request.endTime());
+        }
+
+        Auction updated = auctionRepository.save(auction);
+        return auctionMapper.toAuctionResponse(updated, sellerId);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<AuctionResponse> getMyAuctions(Long sellerId, AuctionStatus status, Pageable pageable) {
+        Page<Auction> page = (status != null)
+                ? auctionRepository.findBySellerIdAndStatus(sellerId, status, pageable)
+                : auctionRepository.findBySellerId(sellerId, pageable);
+        return auctionMapper.toAuctionResponsePage(page, sellerId);
     }
 
     @Override
@@ -148,7 +263,7 @@ public class AuctionServiceImpl implements AuctionService {
         }
 
         Auction cancelled = auctionLifecycleSupport.cancelLocked(auction, reason);
-        return mapToAuctionResponse(cancelled);
+        return auctionMapper.toAuctionResponse(cancelled, userId);
     }
 
     @Override
@@ -179,66 +294,18 @@ public class AuctionServiceImpl implements AuctionService {
         }
     }
 
-    private AuctionResponse mapToAuctionResponse(Auction auction) {
-        String productTitle = null;
-        String sellerName = null;
-        String highestBidderName = null;
-
-        Product product = productRepository.findById(auction.getProductId()).orElse(null);
-        if (product != null) {
-            productTitle = product.getTitle();
+    private Sort resolveSort(String sort, Pageable pageable) {
+        if ("endingSoon".equalsIgnoreCase(sort)) {
+            return Sort.by(Sort.Direction.ASC, "endTime");
+        } else if ("newlyListed".equalsIgnoreCase(sort)) {
+            return Sort.by(Sort.Direction.DESC, "createdAt");
+        } else if ("priceAsc".equalsIgnoreCase(sort)) {
+            return Sort.by(Sort.Direction.ASC, "currentPrice");
+        } else if ("priceDesc".equalsIgnoreCase(sort)) {
+            return Sort.by(Sort.Direction.DESC, "currentPrice");
+        } else if ("mostBids".equalsIgnoreCase(sort)) {
+            return Sort.by(Sort.Direction.DESC, "bidCount");
         }
-
-        User seller = userRepository.findById(auction.getSellerId()).orElse(null);
-        if (seller != null) {
-            sellerName = seller.getFullName();
-        }
-
-        if (auction.getHighestBidderId() != null) {
-            User bidder = userRepository.findById(auction.getHighestBidderId()).orElse(null);
-            if (bidder != null) {
-                highestBidderName = maskName(bidder.getFullName());
-            }
-        }
-
-        return AuctionResponse.builder()
-                .id(auction.getId())
-                .productId(auction.getProductId())
-                .productTitle(productTitle)
-                .sellerId(auction.getSellerId())
-                .sellerName(sellerName)
-                .startPrice(auction.getStartPrice())
-                .bidIncrement(auction.getBidIncrement())
-                .currentPrice(auction.getCurrentPrice())
-                .highestBidderId(auction.getHighestBidderId())
-                .highestBidderName(highestBidderName)
-                .bidCount(auction.getBidCount())
-                .startTime(auction.getStartTime())
-                .endTime(auction.getEndTime())
-                .status(auction.getStatus())
-                .winnerId(auction.getWinnerId())
-                .finalPrice(auction.getFinalPrice())
-                .closedAt(auction.getClosedAt())
-                .cancelReason(auction.getCancelReason())
-                .createdAt(auction.getCreatedAt())
-                .build();
-    }
-
-    private String maskName(String fullName) {
-        if (fullName == null || fullName.isBlank()) return "***";
-        String[] parts = fullName.trim().split("\\s+");
-        StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < parts.length; i++) {
-            String p = parts[i];
-            if (p.length() <= 2) {
-                sb.append(p.charAt(0)).append("*");
-            } else {
-                sb.append(p.charAt(0))
-                        .append("*".repeat(p.length() - 2))
-                        .append(p.charAt(p.length() - 1));
-            }
-            if (i < parts.length - 1) sb.append(" ");
-        }
-        return sb.toString();
+        return pageable.getSort().isSorted() ? pageable.getSort() : Sort.by(Sort.Direction.DESC, "createdAt");
     }
 }

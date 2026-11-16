@@ -37,13 +37,15 @@ class CategoryServiceTest {
     @Mock
     private ProductRepository productRepository;
     @Mock
+    private com.omnibid.repository.AuctionRepository auctionRepository;
+    @Mock
     private AuditService auditService;
 
     private CategoryServiceImpl categoryService;
 
     @BeforeEach
     void setUp() {
-        categoryService = new CategoryServiceImpl(categoryRepository, productRepository, auditService);
+        categoryService = new CategoryServiceImpl(categoryRepository, productRepository, auctionRepository, auditService);
     }
 
     @Test

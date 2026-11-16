@@ -3,6 +3,7 @@ package com.omnibid.repository;
 import com.omnibid.entity.Bid;
 import com.omnibid.enums.BidStatus;
 import jakarta.persistence.LockModeType;
+import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -32,6 +33,18 @@ public interface BidRepository extends JpaRepository<Bid, Long> {
                                                 @Param("statuses") Collection<BidStatus> statuses);
 
     List<Bid> findByBidderId(Long bidderId);
+
+    Page<Bid> findByBidderIdOrderByCreatedAtDesc(Long bidderId, Pageable pageable);
+
+    long countByBidderId(Long bidderId);
+
+    long countByBidderIdAndStatus(Long bidderId, BidStatus status);
+
+    @Query("SELECT COUNT(DISTINCT b.auctionId) FROM Bid b WHERE b.bidderId = :bidderId")
+    long countDistinctAuctionsByBidderId(@Param("bidderId") Long bidderId);
+
+    @Query("SELECT COUNT(DISTINCT b.auctionId) FROM Bid b WHERE b.bidderId = :bidderId AND b.status = com.omnibid.enums.BidStatus.LEADING")
+    long countDistinctLeadingAuctionsByBidderId(@Param("bidderId") Long bidderId);
 
     List<Bid> findByAuctionId(Long auctionId);
 

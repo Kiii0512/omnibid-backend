@@ -150,21 +150,42 @@ public class BidServiceImpl implements BidService {
     @Transactional(readOnly = true)
     public List<BidResponse> getBidsByAuction(Long auctionId) {
         List<Bid> bids = bidRepository.findByAuctionIdOrderByAmountDesc(auctionId);
-        return bids.stream().map(bid -> {
-            String maskedName = "***";
-            User bidder = userRepository.findById(bid.getBidderId()).orElse(null);
-            if (bidder != null) {
-                maskedName = MaskingUtils.maskName(bidder.getFullName());
-            }
-            return BidResponse.builder()
-                    .id(bid.getId())
-                    .auctionId(bid.getAuctionId())
-                    .bidderId(bid.getBidderId())
-                    .bidderName(maskedName)
-                    .amount(bid.getAmount())
-                    .status(bid.getStatus())
-                    .createdAt(bid.getCreatedAt())
-                    .build();
-        }).collect(Collectors.toList());
+        return bids.stream().map(this::mapToResponse).collect(Collectors.toList());
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public com.omnibid.common.PageResponse<BidResponse> getMyBids(Long bidderId, org.springframework.data.domain.Pageable pageable) {
+        org.springframework.data.domain.Page<Bid> page = bidRepository.findByBidderIdOrderByCreatedAtDesc(bidderId, pageable);
+        return com.omnibid.common.PageResponse.from(page, this::mapToResponse);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public com.omnibid.dto.bid.BidSummaryResponse getMyBidSummary(Long bidderId) {
+        long totalBids = bidRepository.countByBidderId(bidderId);
+        long participatingAuctions = bidRepository.countDistinctAuctionsByBidderId(bidderId);
+        long leadingAuctions = bidRepository.countDistinctLeadingAuctionsByBidderId(bidderId);
+        long wonAuctions = bidRepository.countByBidderIdAndStatus(bidderId, BidStatus.WON);
+        long lostAuctions = bidRepository.countByBidderIdAndStatus(bidderId, BidStatus.NOT_WON);
+
+        return new com.omnibid.dto.bid.BidSummaryResponse(totalBids, participatingAuctions, leadingAuctions, wonAuctions, lostAuctions);
+    }
+
+    private BidResponse mapToResponse(Bid bid) {
+        String maskedName = "***";
+        User bidder = userRepository.findById(bid.getBidderId()).orElse(null);
+        if (bidder != null) {
+            maskedName = MaskingUtils.maskName(bidder.getFullName());
+        }
+        return BidResponse.builder()
+                .id(bid.getId())
+                .auctionId(bid.getAuctionId())
+                .bidderId(bid.getBidderId())
+                .bidderName(maskedName)
+                .amount(bid.getAmount())
+                .status(bid.getStatus())
+                .createdAt(bid.getCreatedAt())
+                .build();
     }
 }

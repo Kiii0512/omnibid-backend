@@ -339,13 +339,34 @@ public class AdminServiceImpl implements AdminService {
     public ProductHideResponse hideProduct(CurrentUser admin, Long productId, ProductHideRequest request) {
         requireAdmin(admin);
 
-        Map<String, Object> effects = hideProductInternal(productId, request.reason(), admin.id());
-        @SuppressWarnings("unchecked")
-        List<Long> cancelledAuctionIds = (List<Long>) effects.getOrDefault("cancelledAuctionIds", List.of());
-        @SuppressWarnings("unchecked")
-        List<Long> cancelledOrderIds = (List<Long>) effects.getOrDefault("cancelledOrderIds", List.of());
+        if (request.status() == ProductStatus.AVAILABLE) {
+            Product product = productRepository.findByIdForUpdate(productId)
+                    .or(() -> productRepository.findById(productId))
+                    .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
 
-        return new ProductHideResponse(productId, ProductStatus.HIDDEN, cancelledAuctionIds, cancelledOrderIds);
+            if (product.getStatus() != ProductStatus.HIDDEN) {
+                throw new AppException("INVALID_STATUS_TRANSITION", "Only HIDDEN products can be unhidden", HttpStatus.CONFLICT);
+            }
+
+            product.setStatus(ProductStatus.AVAILABLE);
+            productRepository.save(product);
+
+            auditService.log(admin.id(), "PRODUCT_UNHIDE", "PRODUCT", productId, request.reason());
+
+            return new ProductHideResponse(productId, ProductStatus.AVAILABLE, List.of(), List.of());
+        }
+
+        if (request.status() == ProductStatus.HIDDEN) {
+            Map<String, Object> effects = hideProductInternal(productId, request.reason(), admin.id());
+            @SuppressWarnings("unchecked")
+            List<Long> cancelledAuctionIds = (List<Long>) effects.getOrDefault("cancelledAuctionIds", List.of());
+            @SuppressWarnings("unchecked")
+            List<Long> cancelledOrderIds = (List<Long>) effects.getOrDefault("cancelledOrderIds", List.of());
+
+            return new ProductHideResponse(productId, ProductStatus.HIDDEN, cancelledAuctionIds, cancelledOrderIds);
+        }
+
+        throw new AppException("INVALID_STATUS_TRANSITION", "Only HIDDEN or AVAILABLE status is supported: " + request.status(), HttpStatus.CONFLICT);
     }
 
     @Override

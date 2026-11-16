@@ -33,6 +33,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -277,7 +278,7 @@ class NotificationServiceTest {
                 .build();
 
         PageImpl<Notification> page = new PageImpl<>(List.of(n), PageRequest.of(0, 20), 1);
-        when(notificationRepository.findByUserIdAndIsReadOrderByCreatedAtDesc(eq(userId), eq(false), any(PageRequest.class)))
+        when(notificationRepository.findNotifications(eq(userId), eq(false), isNull(), any(PageRequest.class)))
                 .thenReturn(page);
 
         PageResponse<NotificationResponse> result = notificationService.getNotifications(userId, false, PageRequest.of(0, 20));

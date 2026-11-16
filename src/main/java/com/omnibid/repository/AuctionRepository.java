@@ -6,6 +6,7 @@ import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
@@ -17,7 +18,7 @@ import java.util.List;
 import java.util.Optional;
 
 @Repository
-public interface AuctionRepository extends JpaRepository<Auction, Long> {
+public interface AuctionRepository extends JpaRepository<Auction, Long>, JpaSpecificationExecutor<Auction> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
     @Query("SELECT a FROM Auction a WHERE a.id = :id")
@@ -44,4 +45,16 @@ public interface AuctionRepository extends JpaRepository<Auction, Long> {
     List<Auction> findBySellerIdAndStatusIn(Long sellerId, Collection<AuctionStatus> statuses);
 
     long countByStatus(AuctionStatus status);
+
+    boolean existsByProductId(Long productId);
+
+    Page<Auction> findBySellerId(Long sellerId, Pageable pageable);
+
+    Page<Auction> findBySellerIdAndStatus(Long sellerId, AuctionStatus status, Pageable pageable);
+
+    @Query("SELECT COUNT(a) FROM Auction a JOIN Product p ON a.productId = p.id WHERE p.categoryId = :categoryId AND a.status = com.omnibid.enums.AuctionStatus.ACTIVE")
+    long countActiveAuctionsByCategoryId(@Param("categoryId") Long categoryId);
+
+    @Query("SELECT p.categoryId, COUNT(a) FROM Auction a JOIN Product p ON a.productId = p.id WHERE a.status = com.omnibid.enums.AuctionStatus.ACTIVE GROUP BY p.categoryId")
+    List<Object[]> countActiveAuctionsGroupedByCategory();
 }

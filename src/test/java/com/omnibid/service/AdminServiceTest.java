@@ -613,15 +613,28 @@ class AdminServiceTest {
     }
 
     @ParameterizedTest
-    @EnumSource(value = ProductStatus.class, names = {"HIDDEN", "SOLD", "REMOVED"})
-    @DisplayName("hideProduct on product already HIDDEN/SOLD/REMOVED throws 409 INVALID_STATUS_TRANSITION")
+    @EnumSource(value = ProductStatus.class, names = {"IN_AUCTION", "SOLD", "REMOVED"})
+    @DisplayName("hideProduct on invalid status throws 409 INVALID_STATUS_TRANSITION")
     void hideProduct_InvalidStatus_ThrowsConflict(ProductStatus invalidStatus) {
         Product p = Product.builder().id(PRODUCT_ID).sellerId(SELLER_ID).status(invalidStatus).build();
-        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(p));
+        lenient().when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(p));
 
         assertThatThrownBy(() -> adminService.hideProduct(adminUser, PRODUCT_ID, new ProductHideRequest(invalidStatus, "Ly do an san pham hop le")))
                 .isInstanceOf(AppException.class)
                 .matches(e -> ((AppException) e).getCode().equals("INVALID_STATUS_TRANSITION") && ((AppException) e).getStatus() == HttpStatus.CONFLICT);
+    }
+
+    @Test
+    @DisplayName("hideProduct with status AVAILABLE unhides HIDDEN product successfully")
+    void unhideProduct_Success() {
+        Product p = Product.builder().id(PRODUCT_ID).sellerId(SELLER_ID).status(ProductStatus.HIDDEN).build();
+        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(p));
+        when(productRepository.save(any(Product.class))).thenAnswer(i -> i.getArgument(0));
+
+        ProductHideResponse response = adminService.hideProduct(adminUser, PRODUCT_ID, new ProductHideRequest(ProductStatus.AVAILABLE, "Bo an san pham"));
+        assertThat(response.status()).isEqualTo(ProductStatus.AVAILABLE);
+        assertThat(p.getStatus()).isEqualTo(ProductStatus.AVAILABLE);
+        verify(auditService).log(eq(ADMIN_ID), eq("PRODUCT_UNHIDE"), eq("PRODUCT"), eq(PRODUCT_ID), eq("Bo an san pham"));
     }
 
     @ParameterizedTest

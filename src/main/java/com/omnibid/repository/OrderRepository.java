@@ -59,6 +59,12 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     long countByStatus(OrderStatus status);
 
+    @Query("SELECT o.status, COUNT(o) FROM Order o WHERE o.buyerId = :buyerId GROUP BY o.status")
+    List<Object[]> countByBuyerIdGroupByStatus(@Param("buyerId") Long buyerId);
+
+    @Query("SELECT o.status, COUNT(o) FROM Order o WHERE o.sellerId = :sellerId GROUP BY o.status")
+    List<Object[]> countBySellerIdGroupByStatus(@Param("sellerId") Long sellerId);
+
     @Query("SELECT COALESCE(SUM(o.finalPrice), 0) FROM Order o WHERE o.status = com.omnibid.enums.OrderStatus.COMPLETED AND o.completedAt >= :from AND o.completedAt <= :to")
     BigDecimal sumCompletedRevenue(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
 

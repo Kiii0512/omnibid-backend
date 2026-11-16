@@ -472,4 +472,45 @@ public class OrderServiceImpl implements OrderService {
         }
         return actions;
     }
+
+    @Override
+    @Transactional(readOnly = true)
+    public com.omnibid.dto.order.OrderUserSummaryResponse getOrderSummary(CurrentUser currentUser) {
+        Long userId = currentUser.id();
+
+        var buyerSummary = buildRoleSummary(orderRepository.countByBuyerIdGroupByStatus(userId));
+        var sellerSummary = buildRoleSummary(orderRepository.countBySellerIdGroupByStatus(userId));
+
+        return new com.omnibid.dto.order.OrderUserSummaryResponse(buyerSummary, sellerSummary);
+    }
+
+    private com.omnibid.dto.order.OrderUserSummaryResponse.RoleSummary buildRoleSummary(List<Object[]> rows) {
+        long total = 0;
+        long pending = 0;
+        long paid = 0;
+        long shipping = 0;
+        long completed = 0;
+        long cancelled = 0;
+        long expired = 0;
+
+        for (Object[] row : rows) {
+            if (row != null && row.length >= 2 && row[0] != null) {
+                OrderStatus status = (OrderStatus) row[0];
+                long count = ((Number) row[1]).longValue();
+                total += count;
+                switch (status) {
+                    case PENDING_PAYMENT -> pending = count;
+                    case PAID -> paid = count;
+                    case SHIPPING -> shipping = count;
+                    case COMPLETED -> completed = count;
+                    case CANCELLED -> cancelled = count;
+                    case EXPIRED -> expired = count;
+                }
+            }
+        }
+
+        return new com.omnibid.dto.order.OrderUserSummaryResponse.RoleSummary(
+                total, pending, paid, shipping, completed, cancelled, expired
+        );
+    }
 }
