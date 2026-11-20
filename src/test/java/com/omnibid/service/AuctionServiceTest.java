@@ -10,18 +10,26 @@ import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
-import com.omnibid.repository.*;
+import com.omnibid.mapper.AuctionMapper;
+import com.omnibid.repository.AuctionRepository;
+import com.omnibid.repository.CategoryRepository;
+import com.omnibid.repository.ProductImageRepository;
+import com.omnibid.repository.ProductRepository;
+import com.omnibid.repository.UserRepository;
+import com.omnibid.repository.WatchlistRepository;
 import com.omnibid.service.impl.AuctionServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -31,6 +39,9 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class AuctionServiceTest {
 
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 11, 2, 10, 0);
+    private final Clock clock = Clock.fixed(NOW.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant(), ZoneId.of("Asia/Ho_Chi_Minh"));
+
     @Mock
     private AuctionRepository auctionRepository;
 
@@ -38,18 +49,27 @@ class AuctionServiceTest {
     private ProductRepository productRepository;
 
     @Mock
+    private ProductImageRepository productImageRepository;
+
+    @Mock
+    private CategoryRepository categoryRepository;
+
+    @Mock
+    private WatchlistRepository watchlistRepository;
+
+    @Mock
     private UserRepository userRepository;
-
-    @Mock
-    private BidRepository bidRepository;
-
-    @Mock
-    private OrderRepository orderRepository;
 
     @Mock
     private WebSocketPublisher webSocketPublisher;
 
-    @InjectMocks
+    @Mock
+    private AuctionCloser auctionCloser;
+
+    @Mock
+    private AuctionLifecycleSupport auctionLifecycleSupport;
+
+    private AuctionMapper auctionMapper;
     private AuctionServiceImpl auctionService;
 
     private User sampleSeller;
@@ -58,6 +78,27 @@ class AuctionServiceTest {
 
     @BeforeEach
     void setUp() {
+        auctionMapper = new AuctionMapper(
+                productRepository,
+                productImageRepository,
+                categoryRepository,
+                userRepository,
+                watchlistRepository,
+                clock
+        );
+
+        auctionService = new AuctionServiceImpl(
+                auctionRepository,
+                productRepository,
+                productImageRepository,
+                userRepository,
+                webSocketPublisher,
+                auctionCloser,
+                auctionLifecycleSupport,
+                auctionMapper,
+                clock
+        );
+
         sampleSeller = User.builder()
                 .id(1L)
                 .fullName("Seller Name")
@@ -81,8 +122,8 @@ class AuctionServiceTest {
                 .bidIncrement(BigDecimal.valueOf(10))
                 .currentPrice(BigDecimal.valueOf(100))
                 .bidCount(0)
-                .startTime(LocalDateTime.now().plusHours(1))
-                .endTime(LocalDateTime.now().plusHours(5))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(5))
                 .status(AuctionStatus.SCHEDULED)
                 .build();
     }
@@ -94,11 +135,12 @@ class AuctionServiceTest {
                 .startPrice(BigDecimal.valueOf(100))
                 .bidIncrement(BigDecimal.valueOf(10))
                 .reservePrice(BigDecimal.valueOf(200))
-                .startTime(LocalDateTime.now().plusHours(1))
-                .endTime(LocalDateTime.now().plusHours(5))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(5))
                 .build();
 
         when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(productImageRepository.countByProductId(10L)).thenReturn(1L);
         when(auctionRepository.save(any(Auction.class))).thenReturn(sampleAuction);
         when(productRepository.save(any(Product.class))).thenReturn(sampleProduct);
         when(userRepository.findById(1L)).thenReturn(Optional.of(sampleSeller));
@@ -119,8 +161,8 @@ class AuctionServiceTest {
                 .productId(10L)
                 .startPrice(BigDecimal.valueOf(100))
                 .bidIncrement(BigDecimal.valueOf(10))
-                .startTime(LocalDateTime.now().plusHours(1))
-                .endTime(LocalDateTime.now().plusHours(5))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(5))
                 .build();
 
         when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
@@ -131,27 +173,170 @@ class AuctionServiceTest {
 
     @Test
     void cancelAuction_Success_WhenNoBids() {
-        when(auctionRepository.findById(100L)).thenReturn(Optional.of(sampleAuction));
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
         when(userRepository.findById(1L)).thenReturn(Optional.of(sampleSeller));
-        when(auctionRepository.save(any(Auction.class))).thenReturn(sampleAuction);
+
+        Auction cancelledAuction = Auction.builder()
+                .id(100L)
+                .productId(10L)
+                .sellerId(1L)
+                .status(AuctionStatus.CANCELLED)
+                .closedAt(NOW)
+                .cancelReason("Cancelled by seller")
+                .build();
+        when(auctionLifecycleSupport.cancelLocked(sampleAuction, "Cancelled by seller")).thenReturn(cancelledAuction);
         when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
 
         AuctionResponse response = auctionService.cancelAuction(1L, 100L, "Cancelled by seller");
 
         assertNotNull(response);
-        assertEquals(AuctionStatus.CANCELLED, sampleAuction.getStatus());
-        assertEquals(ProductStatus.AVAILABLE, sampleProduct.getStatus());
-        verify(webSocketPublisher).publishAuctionUpdate(eq(100L), any());
+        assertEquals(AuctionStatus.CANCELLED, response.getStatus());
+        verify(auctionLifecycleSupport).cancelLocked(sampleAuction, "Cancelled by seller");
     }
 
     @Test
+    @DisplayName("UT-CORE-03 Seller hủy phiên ACTIVE có Bid bị 409 CANNOT_CANCEL")
     void cancelAuction_WithBids_ThrowsBadRequest() {
+        sampleAuction.setStatus(AuctionStatus.ACTIVE);
         sampleAuction.setBidCount(2);
-        when(auctionRepository.findById(100L)).thenReturn(Optional.of(sampleAuction));
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
         when(userRepository.findById(1L)).thenReturn(Optional.of(sampleSeller));
 
         AppException ex = assertThrows(AppException.class, () -> auctionService.cancelAuction(1L, 100L, "Try cancel"));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("CANNOT_CANCEL", ex.getCode());
+        verifyNoInteractions(auctionLifecycleSupport);
+    }
+
+    @Test
+    @DisplayName("UT-CORE-04 Seller hủy khi Product HIDDEN thì Product giữ HIDDEN")
+    void cancelAuction_WhenProductHidden_ProductKeepsHidden() {
+        Product hiddenProduct = Product.builder()
+                .id(10L)
+                .sellerId(1L)
+                .title("Hidden Product")
+                .status(ProductStatus.HIDDEN)
+                .build();
+
+        AuctionLifecycleSupport support = new AuctionLifecycleSupport(
+                auctionRepository,
+                mock(com.omnibid.repository.BidRepository.class),
+                productRepository,
+                webSocketPublisher,
+                clock
+        );
+
+        when(auctionRepository.save(any(Auction.class))).thenAnswer(i -> i.getArgument(0));
+        when(productRepository.findById(10L)).thenReturn(Optional.of(hiddenProduct));
+
+        Auction cancelled = support.cancelLocked(sampleAuction, "Cancelled");
+        assertEquals(AuctionStatus.CANCELLED, cancelled.getStatus());
+        assertEquals(ProductStatus.HIDDEN, hiddenProduct.getStatus());
+        verify(productRepository, never()).save(any(Product.class));
+    }
+
+    @Test
+    @DisplayName("UT-CORE-05 Tạo phiên start_time quá khứ / độ dài < 1 giờ / > 30 ngày / giá sàn < giá khởi điểm -> 400 VALIDATION_ERROR")
+    void createAuction_InvalidTimesOrPrices_ThrowsValidationError() {
+        // 1. start_time in past
+        AuctionCreateRequest pastRequest = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.minusHours(1))
+                .endTime(NOW.plusHours(2))
+                .build();
+        AppException ex1 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, pastRequest));
+        assertEquals(HttpStatus.BAD_REQUEST, ex1.getStatus());
+        assertEquals("VALIDATION_ERROR", ex1.getCode());
+
+        // 2. duration < 1 hour
+        AuctionCreateRequest shortDuration = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(1).plusMinutes(30))
+                .build();
+        AppException ex2 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, shortDuration));
+        assertEquals(HttpStatus.BAD_REQUEST, ex2.getStatus());
+        assertEquals("VALIDATION_ERROR", ex2.getCode());
+
+        // 3. duration > 30 days
+        AuctionCreateRequest longDuration = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(1).plusDays(31))
+                .build();
+        AppException ex3 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, longDuration));
+        assertEquals(HttpStatus.BAD_REQUEST, ex3.getStatus());
+        assertEquals("VALIDATION_ERROR", ex3.getCode());
+
+        // 4. reserve_price < start_price
+        AuctionCreateRequest lowReserve = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .reservePrice(BigDecimal.valueOf(50))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(5))
+                .build();
+        AppException ex4 = assertThrows(AppException.class, () -> auctionService.createAuction(1L, lowReserve));
+        assertEquals(HttpStatus.BAD_REQUEST, ex4.getStatus());
+        assertEquals("VALIDATION_ERROR", ex4.getCode());
+    }
+
+    @Test
+    void createAuction_NoImages_ThrowsBadRequest() {
+        AuctionCreateRequest request = AuctionCreateRequest.builder()
+                .productId(10L)
+                .startPrice(BigDecimal.valueOf(100))
+                .bidIncrement(BigDecimal.valueOf(10))
+                .startTime(NOW.plusHours(1))
+                .endTime(NOW.plusHours(5))
+                .build();
+
+        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(productImageRepository.countByProductId(10L)).thenReturn(0L);
+
+        AppException ex = assertThrows(AppException.class, () -> auctionService.createAuction(1L, request));
         assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
+        assertEquals("BAD_REQUEST", ex.getCode());
+    }
+
+    @Test
+    void updateAuction_Success_WhenScheduled() {
+        when(auctionRepository.findById(100L)).thenReturn(Optional.of(sampleAuction));
+        when(auctionRepository.save(any(Auction.class))).thenAnswer(i -> i.getArgument(0));
+
+        com.omnibid.dto.auction.AuctionUpdateRequest updateRequest = new com.omnibid.dto.auction.AuctionUpdateRequest(
+                BigDecimal.valueOf(150),
+                BigDecimal.valueOf(15),
+                BigDecimal.valueOf(250),
+                NOW.plusHours(2),
+                NOW.plusHours(6)
+        );
+
+        AuctionResponse response = auctionService.updateAuction(1L, 100L, updateRequest);
+        assertNotNull(response);
+        assertEquals(BigDecimal.valueOf(150), sampleAuction.getStartPrice());
+        assertEquals(BigDecimal.valueOf(15), sampleAuction.getBidIncrement());
+    }
+
+    @Test
+    void updateAuction_ActiveWithBids_ThrowsConflict() {
+        sampleAuction.setStatus(AuctionStatus.ACTIVE);
+        sampleAuction.setBidCount(1);
+        when(auctionRepository.findById(100L)).thenReturn(Optional.of(sampleAuction));
+
+        com.omnibid.dto.auction.AuctionUpdateRequest updateRequest = new com.omnibid.dto.auction.AuctionUpdateRequest(
+                BigDecimal.valueOf(150), null, null, null, null
+        );
+
+        AppException ex = assertThrows(AppException.class, () -> auctionService.updateAuction(1L, 100L, updateRequest));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("CANNOT_UPDATE", ex.getCode());
     }
 }
-

@@ -28,7 +28,7 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new AppException("Email is already registered", HttpStatus.BAD_REQUEST);
+            throw new AppException("EMAIL_ALREADY_EXISTS", "Email is already registered", HttpStatus.CONFLICT);
         }
 
         User user = User.builder()
@@ -59,14 +59,14 @@ public class AuthServiceImpl implements AuthService {
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new AppException("Invalid email or password", HttpStatus.UNAUTHORIZED));
+                .orElseThrow(() -> new AppException("INVALID_CREDENTIALS", "Invalid email or password", HttpStatus.UNAUTHORIZED));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            throw new AppException("Invalid email or password", HttpStatus.UNAUTHORIZED);
+            throw new AppException("INVALID_CREDENTIALS", "Invalid email or password", HttpStatus.UNAUTHORIZED);
         }
 
         if (user.getStatus() == UserStatus.BANNED) {
-            throw new AppException("User account is banned", HttpStatus.FORBIDDEN);
+            throw new AppException("ACCOUNT_BANNED", "User account is banned", HttpStatus.FORBIDDEN);
         }
 
         String token = jwtTokenProvider.generateToken(user.getEmail(), user.getRole().name());
@@ -81,4 +81,3 @@ public class AuthServiceImpl implements AuthService {
                 .build();
     }
 }
-

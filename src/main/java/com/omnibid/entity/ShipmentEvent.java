@@ -26,9 +26,8 @@ public class ShipmentEvent {
     @Column(nullable = false)
     private ShipmentStatus status;
 
-    private String location;
-
-    private String description;
+    @Column(name = "note")
+    private String note;
 
     @Column(name = "updated_by")
     private Long updatedBy;

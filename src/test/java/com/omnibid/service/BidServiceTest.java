@@ -15,6 +15,7 @@ import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.service.impl.BidServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -23,7 +24,11 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
+import java.time.Clock;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
+import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -33,6 +38,9 @@ import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class BidServiceTest {
+
+    private static final LocalDateTime NOW = LocalDateTime.of(2026, 11, 2, 10, 0);
+    private final Clock clock = Clock.fixed(NOW.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant(), ZoneId.of("Asia/Ho_Chi_Minh"));
 
     @Mock
     private AuctionRepository auctionRepository;
@@ -46,7 +54,9 @@ class BidServiceTest {
     @Mock
     private WebSocketPublisher webSocketPublisher;
 
-    @InjectMocks
+    @Mock
+    private NotificationService notificationService;
+
     private BidServiceImpl bidService;
 
     private Auction sampleAuction;
@@ -54,6 +64,8 @@ class BidServiceTest {
 
     @BeforeEach
     void setUp() {
+        bidService = new BidServiceImpl(auctionRepository, bidRepository, userRepository, webSocketPublisher, notificationService, clock);
+
         sampleBidder = User.builder()
                 .id(2L)
                 .fullName("Nguyen Van A")
@@ -71,8 +83,8 @@ class BidServiceTest {
                 .currentPrice(BigDecimal.valueOf(100))
                 .highestBidderId(null)
                 .bidCount(0)
-                .startTime(LocalDateTime.now().minusHours(1))
-                .endTime(LocalDateTime.now().plusHours(2))
+                .startTime(NOW.minusHours(1))
+                .endTime(NOW.plusHours(2))
                 .status(AuctionStatus.ACTIVE)
                 .build();
     }
@@ -90,14 +102,14 @@ class BidServiceTest {
                 .bidderId(2L)
                 .amount(BigDecimal.valueOf(100))
                 .status(BidStatus.LEADING)
-                .createdAt(LocalDateTime.now())
+                .createdAt(NOW)
                 .build();
 
-        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(100L, BidStatus.LEADING))
-                .thenReturn(Optional.empty());
-        when(bidRepository.save(any(Bid.class))).thenReturn(savedBid);
         when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
+        when(bidRepository.findByAuctionIdAndStatusForUpdate(100L, BidStatus.LEADING))
+                .thenReturn(List.of());
+        when(bidRepository.save(any(Bid.class))).thenReturn(savedBid);
 
         BidResponse response = bidService.placeBid(2L, request);
 
@@ -115,20 +127,24 @@ class BidServiceTest {
     }
 
     @Test
+    @DisplayName("D-02 Người bán tự đặt giá bị 422 SELF_BID_NOT_ALLOWED")
     void placeBid_SellerCannotBid_ThrowsBadRequest() {
         BidRequest request = BidRequest.builder()
                 .auctionId(100L)
                 .amount(BigDecimal.valueOf(120))
                 .build();
 
+        User seller = User.builder().id(1L).status(UserStatus.ACTIVE).fullName("Seller").build();
+        when(userRepository.findById(1L)).thenReturn(Optional.of(seller));
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
 
         AppException ex = assertThrows(AppException.class, () -> bidService.placeBid(1L, request));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertEquals("Seller cannot bid on their own auction", ex.getMessage());
+        assertEquals(HttpStatus.UNPROCESSABLE_ENTITY, ex.getStatus());
+        assertEquals("SELF_BID_NOT_ALLOWED", ex.getCode());
     }
 
     @Test
+    @DisplayName("D-02 Đang dẫn đầu đặt tiếp bị 409 ALREADY_LEADING")
     void placeBid_CurrentHighestBidderCannotBid_ThrowsBadRequest() {
         sampleAuction.setHighestBidderId(2L);
         sampleAuction.setBidCount(1);
@@ -138,14 +154,16 @@ class BidServiceTest {
                 .amount(BigDecimal.valueOf(120))
                 .build();
 
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
 
         AppException ex = assertThrows(AppException.class, () -> bidService.placeBid(2L, request));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertEquals("You are already the highest bidder", ex.getMessage());
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("ALREADY_LEADING", ex.getCode());
     }
 
     @Test
+    @DisplayName("D-02 Đặt giá không đủ bước giá bị 409 BID_TOO_LOW")
     void placeBid_AmountBelowIncrement_ThrowsBadRequest() {
         sampleAuction.setBidCount(1);
         sampleAuction.setCurrentPrice(BigDecimal.valueOf(100));
@@ -156,11 +174,90 @@ class BidServiceTest {
                 .amount(BigDecimal.valueOf(105)) // Requires at least 110 (100 + 10)
                 .build();
 
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
 
         AppException ex = assertThrows(AppException.class, () -> bidService.placeBid(2L, request));
-        assertEquals(HttpStatus.BAD_REQUEST, ex.getStatus());
-        assertTrue(ex.getMessage().contains("must be at least"));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("BID_TOO_LOW", ex.getCode());
+        assertNotNull(ex.getData());
+    }
+
+    @Test
+    @DisplayName("UT-CORE-01 Đặt giá khi bidder BANNED bị 403 ACCOUNT_BANNED")
+    void placeBid_BannedBidder_ThrowsForbidden() {
+        sampleBidder.setStatus(UserStatus.BANNED);
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
+
+        BidRequest request = BidRequest.builder()
+                .auctionId(100L)
+                .amount(BigDecimal.valueOf(120))
+                .build();
+
+        AppException ex = assertThrows(AppException.class, () -> bidService.placeBid(2L, request));
+        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
+        assertEquals("ACCOUNT_BANNED", ex.getCode());
+    }
+
+    @Test
+    @DisplayName("UT-CORE-02 Đặt giá tạo thông báo OUTBID cho người bị vượt")
+    void placeBid_OutbidsPreviousLeader_SendsOutbidNotification() {
+        Long previousLeaderId = 3L;
+        Bid previousLeadingBid = Bid.builder()
+                .id(10L)
+                .auctionId(100L)
+                .bidderId(previousLeaderId)
+                .amount(BigDecimal.valueOf(100))
+                .status(BidStatus.LEADING)
+                .build();
+
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
+        when(bidRepository.findByAuctionIdAndStatusForUpdate(100L, BidStatus.LEADING))
+                .thenReturn(List.of(previousLeadingBid));
+        when(bidRepository.save(any(Bid.class))).thenAnswer(invocation -> invocation.getArgument(0));
+
+        BidRequest request = BidRequest.builder()
+                .auctionId(100L)
+                .amount(BigDecimal.valueOf(120))
+                .build();
+
+        BidResponse response = bidService.placeBid(2L, request);
+
+        assertNotNull(response);
+        assertEquals(BidStatus.OUTBID, previousLeadingBid.getStatus());
+        verify(bidRepository).save(previousLeadingBid);
+        verify(notificationService).notify(
+                eq(previousLeaderId),
+                eq(com.omnibid.enums.NotificationType.OUTBID),
+                any(),
+                any(),
+                eq("AUCTION"),
+                eq(100L)
+        );
+    }
+
+    @Test
+    @DisplayName("UT-CORE-06 Đặt giá trúng mức đã có (đua ở DB): DataIntegrityViolationException -> 409 BID_TOO_LOW")
+    void placeBid_DuplicateAmountRaceCondition_ThrowsBidTooLow() {
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleBidder));
+        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
+        when(bidRepository.findByAuctionIdAndStatusForUpdate(100L, BidStatus.LEADING))
+                .thenReturn(List.of());
+        when(bidRepository.save(any(Bid.class)))
+                .thenThrow(new org.springframework.dao.DataIntegrityViolationException("Duplicate entry for key 'uq_bids_auction_amount'"));
+
+        BidRequest request = BidRequest.builder()
+                .auctionId(100L)
+                .amount(BigDecimal.valueOf(100))
+                .build();
+
+        AppException ex = assertThrows(AppException.class, () -> bidService.placeBid(2L, request));
+        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
+        assertEquals("BID_TOO_LOW", ex.getCode());
+        assertNotNull(ex.getData());
+        assertTrue(ex.getData() instanceof java.util.Map);
+        assertEquals(BigDecimal.valueOf(110), ((java.util.Map<?, ?>) ex.getData()).get("minNextBid"));
     }
 }
-

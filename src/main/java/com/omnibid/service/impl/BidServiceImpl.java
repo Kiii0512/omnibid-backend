@@ -1,6 +1,8 @@
 package com.omnibid.service.impl;
 
 import com.omnibid.common.AppException;
+import com.omnibid.common.MaskingUtils;
+import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.bid.BidRequest;
 import com.omnibid.dto.bid.BidResponse;
 import com.omnibid.entity.Auction;
@@ -8,20 +10,27 @@ import com.omnibid.entity.Bid;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.BidStatus;
+import com.omnibid.enums.NotificationType;
+import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.service.BidService;
+import com.omnibid.service.NotificationService;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
@@ -34,24 +43,35 @@ public class BidServiceImpl implements BidService {
     private final BidRepository bidRepository;
     private final UserRepository userRepository;
     private final WebSocketPublisher webSocketPublisher;
+    private final NotificationService notificationService;
+    private final Clock clock;
 
     @Override
     @Transactional
     public BidResponse placeBid(Long bidderId, BidRequest request) {
+        // REPEATABLE READ snapshot isolation: Phải khóa Auction (SELECT ... FOR UPDATE)
+        // là lệnh đầu tiên trong transaction để tránh đọc snapshot cũ.
         Auction auction = auctionRepository.findByIdForUpdate(request.getAuctionId())
-                .orElseThrow(() -> new AppException("Auction not found with id: " + request.getAuctionId(), HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new AppException("AUCTION_NOT_FOUND", "Auction not found with id: " + request.getAuctionId(), HttpStatus.NOT_FOUND));
 
-        LocalDateTime now = LocalDateTime.now();
+        User bidder = userRepository.findById(bidderId)
+                .orElseThrow(() -> new AppException("USER_NOT_FOUND", "User not found with id: " + bidderId, HttpStatus.NOT_FOUND));
+
+        if (bidder.getStatus() == UserStatus.BANNED) {
+            throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
+        }
+
+        LocalDateTime now = LocalDateTime.now(clock);
         if (auction.getStatus() != AuctionStatus.ACTIVE || !now.isBefore(auction.getEndTime())) {
-            throw new AppException("Auction is not active or has ended", HttpStatus.BAD_REQUEST);
+            throw new AppException("AUCTION_NOT_ACTIVE", "Auction is not active or has ended", HttpStatus.CONFLICT);
         }
 
         if (auction.getSellerId().equals(bidderId)) {
-            throw new AppException("Seller cannot bid on their own auction", HttpStatus.BAD_REQUEST);
+            throw new AppException("SELF_BID_NOT_ALLOWED", "Seller cannot bid on their own auction", HttpStatus.UNPROCESSABLE_ENTITY);
         }
 
         if (bidderId.equals(auction.getHighestBidderId())) {
-            throw new AppException("You are already the highest bidder", HttpStatus.BAD_REQUEST);
+            throw new AppException("ALREADY_LEADING", "You are already the highest bidder", HttpStatus.CONFLICT);
         }
 
         BigDecimal minRequiredAmount;
@@ -62,15 +82,24 @@ public class BidServiceImpl implements BidService {
         }
 
         if (request.getAmount().compareTo(minRequiredAmount) < 0) {
-            throw new AppException("Bid amount must be at least " + minRequiredAmount, HttpStatus.BAD_REQUEST);
+            throw new AppException("BID_TOO_LOW", "Bid amount must be at least " + minRequiredAmount, HttpStatus.CONFLICT, Map.of("minNextBid", minRequiredAmount));
         }
 
-        Optional<Bid> currentLeadingBid = bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(
+        List<Bid> currentLeadingBids = bidRepository.findByAuctionIdAndStatusForUpdate(
                 auction.getId(), BidStatus.LEADING);
-        currentLeadingBid.ifPresent(leadingBid -> {
+        for (Bid leadingBid : currentLeadingBids) {
             leadingBid.setStatus(BidStatus.OUTBID);
             bidRepository.save(leadingBid);
-        });
+
+            notificationService.notify(
+                    leadingBid.getBidderId(),
+                    NotificationType.OUTBID,
+                    NotificationTemplates.outbidTitle(),
+                    NotificationTemplates.outbidContent(auction.getId(), request.getAmount()),
+                    "AUCTION",
+                    auction.getId()
+            );
+        }
 
         Bid newBid = Bid.builder()
                 .auctionId(auction.getId())
@@ -78,15 +107,26 @@ public class BidServiceImpl implements BidService {
                 .amount(request.getAmount())
                 .status(BidStatus.LEADING)
                 .build();
-        Bid savedBid = bidRepository.save(newBid);
+        Bid savedBid;
+        try {
+            savedBid = bidRepository.save(newBid);
+            bidRepository.flush();
+        } catch (DataIntegrityViolationException dive) {
+            log.warn("Duplicate bid amount detected at DB level: auctionId={}, amount={}", auction.getId(), request.getAmount());
+            BigDecimal nextMin = request.getAmount().add(auction.getBidIncrement());
+            throw new AppException("BID_TOO_LOW", "Mức giá đã có người đặt", HttpStatus.CONFLICT, Map.of("minNextBid", nextMin));
+        }
+
+        if ("BANNED".equals(userRepository.checkCurrentStatus(bidderId))) {
+            throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
+        }
 
         auction.setCurrentPrice(request.getAmount());
         auction.setHighestBidderId(bidderId);
         auction.setBidCount((auction.getBidCount() == null ? 0 : auction.getBidCount()) + 1);
         auctionRepository.save(auction);
 
-        User bidder = userRepository.findById(bidderId).orElse(null);
-        String maskedBidderName = bidder != null ? maskName(bidder.getFullName()) : "***";
+        String maskedBidderName = MaskingUtils.maskName(bidder.getFullName());
 
         BidResponse bidResponse = BidResponse.builder()
                 .id(savedBid.getId())
@@ -95,10 +135,13 @@ public class BidServiceImpl implements BidService {
                 .bidderName(maskedBidderName)
                 .amount(savedBid.getAmount())
                 .status(savedBid.getStatus())
-                .createdAt(savedBid.getCreatedAt() != null ? savedBid.getCreatedAt() : LocalDateTime.now())
+                .createdAt(savedBid.getCreatedAt() != null ? savedBid.getCreatedAt() : now)
                 .build();
 
         webSocketPublisher.publishAuctionUpdate(auction.getId(), bidResponse);
+
+        log.info("Bid placed successfully: auctionId={}, bidderId={}, amount={}",
+                auction.getId(), bidderId, request.getAmount());
 
         return bidResponse;
     }
@@ -107,38 +150,42 @@ public class BidServiceImpl implements BidService {
     @Transactional(readOnly = true)
     public List<BidResponse> getBidsByAuction(Long auctionId) {
         List<Bid> bids = bidRepository.findByAuctionIdOrderByAmountDesc(auctionId);
-        return bids.stream()
-                .map(this::mapToBidResponse)
-                .collect(Collectors.toList());
+        return bids.stream().map(this::mapToResponse).collect(Collectors.toList());
     }
 
-    private BidResponse mapToBidResponse(Bid bid) {
-        User bidder = userRepository.findById(bid.getBidderId()).orElse(null);
-        String maskedBidderName = bidder != null ? maskName(bidder.getFullName()) : "***";
+    @Override
+    @Transactional(readOnly = true)
+    public com.omnibid.common.PageResponse<BidResponse> getMyBids(Long bidderId, org.springframework.data.domain.Pageable pageable) {
+        org.springframework.data.domain.Page<Bid> page = bidRepository.findByBidderIdOrderByCreatedAtDesc(bidderId, pageable);
+        return com.omnibid.common.PageResponse.from(page, this::mapToResponse);
+    }
 
+    @Override
+    @Transactional(readOnly = true)
+    public com.omnibid.dto.bid.BidSummaryResponse getMyBidSummary(Long bidderId) {
+        long totalBids = bidRepository.countByBidderId(bidderId);
+        long participatingAuctions = bidRepository.countDistinctAuctionsByBidderId(bidderId);
+        long leadingAuctions = bidRepository.countDistinctLeadingAuctionsByBidderId(bidderId);
+        long wonAuctions = bidRepository.countByBidderIdAndStatus(bidderId, BidStatus.WON);
+        long lostAuctions = bidRepository.countByBidderIdAndStatus(bidderId, BidStatus.NOT_WON);
+
+        return new com.omnibid.dto.bid.BidSummaryResponse(totalBids, participatingAuctions, leadingAuctions, wonAuctions, lostAuctions);
+    }
+
+    private BidResponse mapToResponse(Bid bid) {
+        String maskedName = "***";
+        User bidder = userRepository.findById(bid.getBidderId()).orElse(null);
+        if (bidder != null) {
+            maskedName = MaskingUtils.maskName(bidder.getFullName());
+        }
         return BidResponse.builder()
                 .id(bid.getId())
                 .auctionId(bid.getAuctionId())
                 .bidderId(bid.getBidderId())
-                .bidderName(maskedBidderName)
+                .bidderName(maskedName)
                 .amount(bid.getAmount())
                 .status(bid.getStatus())
                 .createdAt(bid.getCreatedAt())
                 .build();
     }
-
-    private String maskName(String fullName) {
-        if (fullName == null || fullName.trim().isEmpty()) {
-            return "***";
-        }
-        String name = fullName.trim();
-        if (name.length() == 1) {
-            return name + "***";
-        }
-        if (name.length() == 2) {
-            return name.charAt(0) + "*";
-        }
-        return name.charAt(0) + "***" + name.charAt(name.length() - 1);
-    }
 }
-
