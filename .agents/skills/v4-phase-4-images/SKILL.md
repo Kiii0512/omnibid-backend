@@ -25,5 +25,8 @@ description: Phase 4 đồng bộ v4 Omnibid — kiểm tra ảnh theo magic byt
 7. Danh mục: `icon` (≤ 50 ký tự, `@Pattern("^[a-z0-9-]+$")`); `GET /categories` công khai có keyword + phân trang; admin CRUD ở phase 8 dùng chung Service; xóa `GET /categories/{id}`. Slug trùng → 400 VALIDATION_ERROR; xóa khi còn sản phẩm → 409 CATEGORY_IN_USE.
 8. Ghi thay đổi hợp đồng vào `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
 
+## Hình dạng response
+Mọi DTO trả về của phase này phải khớp `omnibid-v4-sync/references/RESPONSE_DTO_v4.md` (kể cả các trường dẫn xuất như `viewerIsSeller`, `viewerIsLeading`, `orderId`, `activeAuctionId`, `everAuctioned`, `productCount`, `bannedUsers`, `targets`). Mô tả trường trong skill này chỉ là tóm tắt.
+
 ## Cổng
 `compile` sạch. Commit `refactor(v4): phase 4 - images, products, categories`.

@@ -24,5 +24,8 @@ description: Phase 3 đồng bộ v4 Omnibid — JWT với claim ver/token_versi
 9. `config/WebSocketConfig`: endpoint `/ws` (bỏ SockJS và endpoint cũ), `setAllowedOrigins(<app.cors.allowed-origins>)`, broker `/topic` (bỏ `/queue`, `/user` nếu không dùng), interceptor: CONNECT xác thực tùy chọn như REST (ver/BANNED → từ chối kết nối nếu có token sai), SUBSCRIBE chỉ `/topic/auctions/{id}`, SEND → từ chối (`MessageDeliveryException`/`AccessDeniedException`). Đổi topic trong `WebSocketPublisherImpl` → `/topic/auctions/{id}`.
 10. Ghi các thay đổi hợp đồng vào `docs/v4/API_CHANGES_FOR_FRONTEND.md` (login response, register không trả token, logout, `/ws`, topic mới).
 
+## Hình dạng response
+Mọi DTO trả về của phase này phải khớp `omnibid-v4-sync/references/RESPONSE_DTO_v4.md` (kể cả các trường dẫn xuất như `viewerIsSeller`, `viewerIsLeading`, `orderId`, `activeAuctionId`, `everAuctioned`, `productCount`, `bannedUsers`, `targets`). Mô tả trường trong skill này chỉ là tóm tắt.
+
 ## Cổng
 `compile` sạch. Nếu kịp, sửa `JwtTokenProviderTest`, `AuthServiceTest` theo hành vi mới. Commit `refactor(v4): phase 3 - security`.

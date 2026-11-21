@@ -25,6 +25,7 @@ description: Điều phối việc sửa backend Omnibid cho khớp bộ tài li
 
 ## Tài liệu tham chiếu (trong `references/`)
 - `API_SPEC_v4.md` — 54 endpoint, tham số, HTTP, mã lỗi, JSON mẫu, phân quyền.
+- `RESPONSE_DTO_v4.md` — hình dạng `data` của từng endpoint (hợp đồng chung với frontend; bản giống hệt ở repo frontend). Khi mô tả response trong skill phase khác tệp này, **tệp này thắng**. Không đổi tên trường nếu chưa sửa cả bản ở frontend.
 - `DB_SPEC_v4.md` + `sql/` — schema, kiểu dữ liệu, Flyway.
 - `BUSINESS_RULES_v4.md` — BR/NFR nguyên văn, chuyển trạng thái, khóa dòng, chốt phiên, thông báo, ảnh, xác thực.
 - `CONFIG_v4.md` — properties, profile demo, bẫy Instant/+07:00.

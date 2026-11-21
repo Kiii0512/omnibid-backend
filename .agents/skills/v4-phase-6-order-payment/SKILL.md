@@ -34,5 +34,8 @@ description: Phase 6 đồng bộ v4 Omnibid — thanh toán mô phỏng đồng
 - Id đơn SHIPPING quá `confirm_deadline` → `autoComplete(now)` → product `markSold()` (trừ HIDDEN) → ORDER_UPDATE hai bên.
 - Báo cáo vi phạm không ảnh hưởng (BR-19).
 
+## Hình dạng response
+Mọi DTO trả về của phase này phải khớp `omnibid-v4-sync/references/RESPONSE_DTO_v4.md` (kể cả các trường dẫn xuất như `viewerIsSeller`, `viewerIsLeading`, `orderId`, `activeAuctionId`, `everAuctioned`, `productCount`, `bannedUsers`, `targets`). Mô tả trường trong skill này chỉ là tóm tắt.
+
 ## Cổng
 `compile` sạch. Nếu kịp: sửa `PaymentServiceTest`, `OrderServiceTest`, `OrderSchedulerTest`, `DefaultMockPaymentGatewayTest`. Commit `refactor(v4): phase 6 - orders and payments`.

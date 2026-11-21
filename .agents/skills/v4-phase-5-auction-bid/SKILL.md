@@ -35,5 +35,8 @@ description: Phase 5 đồng bộ v4 Omnibid — tạo/sửa/hủy/tìm kiếm p
 - Thay `AuctionWebSocketMessage` bằng `AuctionEvent(type, auctionId, status, currentPrice, minNextBid, bidCount, highestBidderName, reserveStatus, startTime, endTime, bid, createdAt)`; `bid` chỉ ở BID_PLACED (`BidHistoryItem`).
 - Chỉ phát sau COMMIT (giữ cơ chế `afterCommit` hiện có hoặc chuyển sang sự kiện + `@TransactionalEventListener`).
 
+## Hình dạng response
+Mọi DTO trả về của phase này phải khớp `omnibid-v4-sync/references/RESPONSE_DTO_v4.md` (kể cả các trường dẫn xuất như `viewerIsSeller`, `viewerIsLeading`, `orderId`, `activeAuctionId`, `everAuctioned`, `productCount`, `bannedUsers`, `targets`). Mô tả trường trong skill này chỉ là tóm tắt.
+
 ## Cổng
 `compile` sạch. Nếu kịp: sửa `BidServiceTest`, `AuctionServiceTest`, `AuctionCloserTest`. Commit `refactor(v4): phase 5 - auctions and bids`.

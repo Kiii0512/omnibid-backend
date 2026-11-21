@@ -7,6 +7,7 @@ Bản tóm tắt dùng cho agent nằm trong `.agents/skills/omnibid-v4-sync/ref
 | Tệp | Nội dung |
 |---|---|
 | `API_SPEC_v4.md` | 54 endpoint REST + WebSocket, tham số, mã HTTP, mã lỗi, JSON mẫu |
+| `RESPONSE_DTO_v4.md` | **Hình dạng `data` của mọi response** — hợp đồng chung với frontend, phải trả đúng tên trường |
 | `DB_SPEC_v4.md`, `sql/V1__init_schema.sql`, `sql/V2__seed_data.sql` | 10 bảng, kiểu dữ liệu, Flyway |
 | `BUSINESS_RULES_v4.md` | BR-01…BR-23, NFR, chuyển trạng thái, khóa dòng, thông báo |
 | `CONFIG_v4.md` | `application*.properties`, profile `demo`, UTC |

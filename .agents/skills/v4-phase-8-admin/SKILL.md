@@ -40,5 +40,8 @@ Không tham số. `{ totalUsers, auctionsByStatus{SCHEDULED,ACTIVE,ENDED,UNSOLD,
 ## 7. Danh mục admin
 `GET/POST/PUT/DELETE /admin/categories` dùng `CategoryService` (phase 4): name, slug (unique, kebab), icon.
 
+## Hình dạng response
+Mọi DTO trả về của phase này phải khớp `omnibid-v4-sync/references/RESPONSE_DTO_v4.md` (kể cả các trường dẫn xuất như `viewerIsSeller`, `viewerIsLeading`, `orderId`, `activeAuctionId`, `everAuctioned`, `productCount`, `bannedUsers`, `targets`). Mô tả trường trong skill này chỉ là tóm tắt.
+
 ## Cổng
 `compile` sạch và `verify-v4.ps1` mục endpoint báo đúng 54. Commit `refactor(v4): phase 8 - admin`.

@@ -22,5 +22,8 @@ description: Phase 7 đồng bộ v4 Omnibid — 5 loại thông báo phát sau 
   - `POST /admin/reports/{id}/resolve` body `ReportResolveRequest(decision: ReportDecision, note @NotBlank)`: khóa report, phải PENDING (khác → `INVALID_STATUS_TRANSITION`), `resolve/reject(note, adminId, now)`; sau COMMIT REPORT_RESOLVED cho người gửi. **Không** khóa user, ẩn sản phẩm, hủy phiên hay đổi đơn.
 - Xóa mọi nhánh xử lý `ReportAction`, `ReportType`, `INVALID_REPORT_ACTION`.
 
+## Hình dạng response
+Mọi DTO trả về của phase này phải khớp `omnibid-v4-sync/references/RESPONSE_DTO_v4.md` (kể cả các trường dẫn xuất như `viewerIsSeller`, `viewerIsLeading`, `orderId`, `activeAuctionId`, `everAuctioned`, `productCount`, `bannedUsers`, `targets`). Mô tả trường trong skill này chỉ là tóm tắt.
+
 ## Cổng
 `compile` sạch. Nếu kịp: sửa `ReportServiceTest`, `NotificationServiceTest`, `ReportControllerTest`, `NotificationControllerTest`. Commit `refactor(v4): phase 7 - notifications and reports`.

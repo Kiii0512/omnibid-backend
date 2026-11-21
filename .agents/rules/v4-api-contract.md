@@ -5,6 +5,7 @@ description: "Hợp đồng REST v4: 54 endpoint, ApiResponse, ErrorCode, phân 
 ---
 # API contract (v4)
 - Chỉ đúng 54 endpoint trong `references/API_SPEC_v4.md` §2. Thêm/bớt endpoint là vi phạm. Kiểm tra bằng `verify-v4.ps1`.
+- Response DTO đúng tên và kiểu trường trong `references/RESPONSE_DTO_v4.md` (frontend code theo tệp này).
 - Trả `ApiResponse<T>`: thành công `{success:true, data}`, lỗi `{success:false, error:{code, message, details?}}`.
 - HTTP: tạo mới 201 (register, products, images, auctions, bids, reports, admin categories); mọi hành động POST khác, PATCH, PUT, DELETE, GET: 200. Avatar 200.
 - Lỗi: `throw new BusinessException(ErrorCode.X, "thông điệp tiếng Việt"[, details])`. Chỉ 24 mã của `ErrorCode`.
