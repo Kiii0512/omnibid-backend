@@ -1,47 +1,32 @@
 package com.omnibid.dto.auction;
 
-import jakarta.validation.constraints.AssertTrue;
-import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
 import java.time.Instant;
 
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class AuctionCreateRequest {
+public record AuctionCreateRequest(
+        @NotNull(message = "Mã sản phẩm là bắt buộc")
+        Long productId,
 
-    @NotNull(message = "Product ID cannot be null")
-    private Long productId;
+        @NotNull(message = "Giá khởi điểm là bắt buộc")
+        @Positive(message = "Giá khởi điểm phải lớn hơn 0")
+        @Digits(integer = 15, fraction = 0, message = "Giá khởi điểm phải là số nguyên")
+        BigDecimal startPrice,
 
-    @NotNull(message = "Start price cannot be null")
-    @DecimalMin(value = "0.01", message = "Start price must be greater than 0")
-    private BigDecimal startPrice;
+        @NotNull(message = "Bước giá là bắt buộc")
+        @Positive(message = "Bước giá phải lớn hơn 0")
+        @Digits(integer = 15, fraction = 0, message = "Bước giá phải là số nguyên")
+        BigDecimal bidIncrement,
 
-    @NotNull(message = "Bid increment cannot be null")
-    @DecimalMin(value = "0.01", message = "Bid increment must be greater than 0")
-    private BigDecimal bidIncrement;
+        @Digits(integer = 15, fraction = 0, message = "Giá sàn phải là số nguyên")
+        BigDecimal reservePrice,
 
-    @DecimalMin(value = "0.01", message = "Reserve price must be greater than 0")
-    private BigDecimal reservePrice;
+        @NotNull(message = "Thời gian bắt đầu là bắt buộc")
+        Instant startTime,
 
-    @NotNull(message = "Start time cannot be null")
-    private Instant startTime;
-
-    @NotNull(message = "End time cannot be null")
-    private Instant endTime;
-
-    @AssertTrue(message = "Start time must be before end time")
-    public boolean isStartBeforeEnd() {
-        if (startTime == null || endTime == null) {
-            return true;
-        }
-        return startTime.isBefore(endTime);
-    }
-}
+        @NotNull(message = "Thời gian kết thúc là bắt buộc")
+        Instant endTime
+) {}

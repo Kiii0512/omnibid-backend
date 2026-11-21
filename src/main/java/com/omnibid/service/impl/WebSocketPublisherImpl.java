@@ -1,7 +1,6 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.dto.bid.BidResponse;
-import com.omnibid.dto.websocket.AuctionWebSocketMessage;
+import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
@@ -20,16 +19,18 @@ public class WebSocketPublisherImpl implements WebSocketPublisher {
     private final UserRepository userRepository;
 
     @Override
-    public void publishAuctionUpdate(Long auctionId, Object payload) {
-        AuctionWebSocketMessage wrapped = wrapAuctionMessage(auctionId, payload);
-        String destination = "/topic/auctions/" + auctionId;
-
+    public void publishAuctionEvent(AuctionEvent event) {
+        if (event == null || event.auctionId() == null) {
+            return;
+        }
+        String destination = "/topic/auctions/" + event.auctionId();
         Runnable sendTask = () -> {
             try {
-                log.info("Broadcasting auction update to {}: {}", destination, wrapped);
-                messagingTemplate.convertAndSend(destination, wrapped);
+                log.info("Broadcasting AuctionEvent to {}: type={}, status={}",
+                        destination, event.type(), event.status());
+                messagingTemplate.convertAndSend(destination, event);
             } catch (Exception ex) {
-                log.warn("Failed to broadcast WebSocket auction update to {}: {}", destination, ex.getMessage(), ex);
+                log.warn("Failed to broadcast WebSocket AuctionEvent to {}: {}", destination, ex.getMessage());
             }
         };
 
@@ -45,22 +46,28 @@ public class WebSocketPublisherImpl implements WebSocketPublisher {
         }
     }
 
-    private AuctionWebSocketMessage wrapAuctionMessage(Long auctionId, Object payload) {
-        if (payload instanceof AuctionWebSocketMessage msg) {
-            return msg;
+    @Override
+    public void publishAuctionUpdate(Long auctionId, Object payload) {
+        String destination = "/topic/auctions/" + auctionId;
+        Runnable sendTask = () -> {
+            try {
+                log.info("Broadcasting auction update to {}: {}", destination, payload);
+                messagingTemplate.convertAndSend(destination, payload);
+            } catch (Exception ex) {
+                log.warn("Failed to broadcast WebSocket auction update to {}: {}", destination, ex.getMessage());
+            }
+        };
+
+        if (TransactionSynchronizationManager.isActualTransactionActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    sendTask.run();
+                }
+            });
+        } else {
+            sendTask.run();
         }
-        if (payload instanceof BidResponse) {
-            return AuctionWebSocketMessage.builder()
-                    .type("BID_PLACED")
-                    .auctionId(auctionId)
-                    .data(payload)
-                    .build();
-        }
-        return AuctionWebSocketMessage.builder()
-                .type("AUCTION_UPDATED")
-                .auctionId(auctionId)
-                .data(payload)
-                .build();
     }
 
     @Override
@@ -69,7 +76,7 @@ public class WebSocketPublisherImpl implements WebSocketPublisher {
             log.info("Publishing WebSocket notification to user {}: {}", username, payload);
             messagingTemplate.convertAndSendToUser(username, "/queue/notifications", payload);
         } catch (Exception ex) {
-            log.warn("Failed to send WebSocket notification to user {}: {}", username, ex.getMessage(), ex);
+            log.warn("Failed to send WebSocket notification to user {}: {}", username, ex.getMessage());
         }
     }
 

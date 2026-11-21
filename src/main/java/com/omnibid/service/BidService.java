@@ -1,20 +1,17 @@
 package com.omnibid.service;
 
 import com.omnibid.common.PageResponse;
+import com.omnibid.dto.bid.BidHistoryItem;
 import com.omnibid.dto.bid.BidRequest;
-import com.omnibid.dto.bid.BidResponse;
-import com.omnibid.dto.bid.BidSummaryResponse;
+import com.omnibid.dto.bid.MyBidResponse;
+import com.omnibid.dto.bid.PlaceBidResponse;
 import org.springframework.data.domain.Pageable;
-
-import java.util.List;
 
 public interface BidService {
 
-    BidResponse placeBid(Long bidderId, BidRequest request);
+    PlaceBidResponse placeBid(Long bidderId, Long auctionId, BidRequest request);
 
-    List<BidResponse> getBidsByAuction(Long auctionId);
+    PageResponse<BidHistoryItem> getBidsByAuction(Long auctionId, Pageable pageable);
 
-    PageResponse<BidResponse> getMyBids(Long bidderId, Pageable pageable);
-
-    BidSummaryResponse getMyBidSummary(Long bidderId);
+    PageResponse<MyBidResponse> getMyBids(Long bidderId, Long auctionId, Pageable pageable);
 }

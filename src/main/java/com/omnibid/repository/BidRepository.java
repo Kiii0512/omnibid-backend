@@ -36,4 +36,14 @@ public interface BidRepository extends JpaRepository<Bid, Long> {
     List<Bid> findByAuctionIdAndBidderId(Long auctionId, Long bidderId);
 
     long countByCreatedAtBetween(Instant from, Instant to);
+
+    @org.springframework.data.jpa.repository.Query("""
+        SELECT b FROM Bid b
+        WHERE b.bidderId = :bidderId
+          AND (:auctionId IS NULL OR b.auctionId = :auctionId)
+        ORDER BY b.createdAt DESC
+    """)
+    Page<Bid> findMyBids(@org.springframework.data.repository.query.Param("bidderId") Long bidderId,
+                         @org.springframework.data.repository.query.Param("auctionId") Long auctionId,
+                         Pageable pageable);
 }

@@ -2,34 +2,42 @@ package com.omnibid.service.impl;
 
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
+import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.PageResponse;
+import com.omnibid.common.SortWhitelist;
+import com.omnibid.config.AppProperties;
 import com.omnibid.dto.auction.AuctionCreateRequest;
+import com.omnibid.dto.auction.AuctionDetailResponse;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.dto.auction.AuctionUpdateRequest;
+import com.omnibid.dto.product.ProductImageResponse;
+import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.entity.Auction;
+import com.omnibid.entity.Category;
 import com.omnibid.entity.Product;
+import com.omnibid.entity.ProductImage;
 import com.omnibid.entity.User;
+import com.omnibid.enums.AuctionEventType;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.ProductStatus;
-import com.omnibid.enums.UserRole;
-import com.omnibid.mapper.AuctionMapper;
+import com.omnibid.enums.ReserveStatus;
 import com.omnibid.repository.AuctionRepository;
+import com.omnibid.repository.CategoryRepository;
 import com.omnibid.repository.ProductImageRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.repository.specification.AuctionSpecification;
 import com.omnibid.service.AuctionCloser;
-import com.omnibid.service.AuctionLifecycleSupport;
 import com.omnibid.service.AuctionService;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.data.jpa.domain.Specification;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -38,6 +46,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -47,266 +56,282 @@ public class AuctionServiceImpl implements AuctionService {
     private final AuctionRepository auctionRepository;
     private final ProductRepository productRepository;
     private final ProductImageRepository productImageRepository;
+    private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
-    private final WebSocketPublisher webSocketPublisher;
     private final AuctionCloser auctionCloser;
-    private final AuctionLifecycleSupport auctionLifecycleSupport;
-    private final AuctionMapper auctionMapper;
+    private final WebSocketPublisher webSocketPublisher;
+    private final AppProperties appProperties;
     private final Clock clock;
+
+    private static final Set<String> ALLOWED_SORTS = Set.of("endTime", "createdAt", "currentPrice");
 
     @Override
     @Transactional
-    public AuctionResponse createAuction(Long userId, AuctionCreateRequest request) {
+    public AuctionResponse createAuction(Long sellerId, AuctionCreateRequest request) {
         Instant now = Instant.now(clock);
-        if (request.getStartTime().isBefore(now)) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời gian bắt đầu không được ở quá khứ");
+        if (!request.startTime().isAfter(now)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời gian bắt đầu phải ở tương lai");
         }
-        if (!request.getStartTime().isBefore(request.getEndTime())) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Start time must be before end time");
+        if (!request.endTime().isAfter(request.startTime())) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời gian kết thúc phải sau thời gian bắt đầu");
         }
-        Duration duration = Duration.between(request.getStartTime(), request.getEndTime());
-        if (duration.toMinutes() < 60 || duration.toDays() > 30) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời lượng phiên phải từ 1 giờ đến 30 ngày");
+
+        Duration duration = Duration.between(request.startTime(), request.endTime());
+        Duration minDuration = appProperties.getAuction().getMinDuration();
+        Duration maxDuration = appProperties.getAuction().getMaxDuration();
+        if (duration.compareTo(minDuration) < 0 || duration.compareTo(maxDuration) > 0) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Độ dài phiên đấu giá phải từ " + minDuration.toHours() + " giờ đến " + maxDuration.toDays() + " ngày"
+            );
         }
-        if (request.getReservePrice() != null && request.getReservePrice().compareTo(request.getStartPrice()) < 0) {
+
+        if (request.reservePrice() != null && request.reservePrice().compareTo(request.startPrice()) < 0) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Giá sàn phải lớn hơn hoặc bằng giá khởi điểm");
         }
 
-        Product product = productRepository.findByIdForUpdate(request.getProductId())
-                .or(() -> productRepository.findById(request.getProductId()))
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
+        Product product = productRepository.findByIdForUpdate(request.productId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Sản phẩm không tồn tại"));
 
-        if (!product.getSellerId().equals(userId)) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "You do not own this product");
+        if (!product.getSellerId().equals(sellerId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền tạo phiên cho sản phẩm này");
         }
-
         if (product.getStatus() != ProductStatus.AVAILABLE) {
-            throw new BusinessException(ErrorCode.PRODUCT_NOT_AVAILABLE, "Product is not available for auction");
+            throw new BusinessException(ErrorCode.PRODUCT_NOT_AVAILABLE, "Sản phẩm không ở trạng thái sẵn sàng để tạo phiên");
         }
-
-        if (productImageRepository.countByProductId(product.getId()) < 1) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Product must have at least one image before creating an auction");
+        long imgCount = productImageRepository.countByProductId(request.productId());
+        if (imgCount < 1 || imgCount > 5) {
+            throw new BusinessException(ErrorCode.PRODUCT_NOT_AVAILABLE, "Sản phẩm phải có từ 1 đến 5 ảnh");
         }
-
-        product.setStatus(ProductStatus.IN_AUCTION);
-        productRepository.save(product);
-
-        AuctionStatus initialStatus = !request.getStartTime().isAfter(now)
-                ? AuctionStatus.ACTIVE
-                : AuctionStatus.SCHEDULED;
+        if (auctionRepository.findFirstByProductIdAndStatusIn(request.productId(), List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)).isPresent()) {
+            throw new BusinessException(ErrorCode.PRODUCT_NOT_AVAILABLE, "Sản phẩm đang có phiên đấu giá mở");
+        }
 
         Auction auction = Auction.builder()
-                .productId(product.getId())
-                .sellerId(userId)
-                .startPrice(request.getStartPrice())
-                .bidIncrement(request.getBidIncrement())
-                .reservePrice(request.getReservePrice())
-                .currentPrice(request.getStartPrice())
+                .productId(request.productId())
+                .sellerId(sellerId)
+                .startPrice(request.startPrice())
+                .bidIncrement(request.bidIncrement())
+                .reservePrice(request.reservePrice())
+                .currentPrice(request.startPrice())
                 .highestBidderId(null)
                 .bidCount(0)
-                .startTime(request.getStartTime())
-                .endTime(request.getEndTime())
-                .status(initialStatus)
+                .startTime(request.startTime())
+                .endTime(request.endTime())
+                .status(AuctionStatus.SCHEDULED)
                 .build();
 
-        Auction savedAuction = auctionRepository.save(auction);
-        AuctionResponse response = auctionMapper.toAuctionResponse(savedAuction, userId);
-
-        if (initialStatus == AuctionStatus.ACTIVE) {
-            webSocketPublisher.publishAuctionUpdate(savedAuction.getId(), response);
+        try {
+            auction = auctionRepository.saveAndFlush(auction);
+            product.markInAuction();
+            productRepository.save(product);
+        } catch (DataIntegrityViolationException dive) {
+            log.warn("Active auction constraint triggered: productId={}", request.productId());
+            throw new BusinessException(ErrorCode.CONFLICT, "Sản phẩm đã có phiên đấu giá mở");
         }
 
-        return response;
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public AuctionResponse getAuctionById(Long id) {
-        return getAuctionById(id, null);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public AuctionResponse getAuctionById(Long id, Long currentUserId) {
-        Auction auction = auctionRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + id));
-        return auctionMapper.toAuctionResponse(auction, currentUserId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public Page<AuctionResponse> getAuctions(AuctionStatus status, Pageable pageable) {
-        Page<Auction> auctionPage = (status != null)
-                ? auctionRepository.findByStatus(status, pageable)
-                : auctionRepository.findAll(pageable);
-        return auctionPage.map(a -> auctionMapper.toAuctionResponse(a, null));
+        return mapToResponse(auction);
     }
 
     @Override
     @Transactional(readOnly = true)
     public PageResponse<AuctionResponse> searchAuctions(
-            Long currentUserId,
-            String q,
-            List<Long> categoryIds,
-            AuctionStatus status,
-            BigDecimal minPrice,
-            BigDecimal maxPrice,
-            Long sellerId,
-            String sort,
-            Pageable pageable
+            String q, Long categoryId, AuctionStatus status, BigDecimal minPrice,
+            BigDecimal maxPrice, Instant endBefore, Pageable pageable
     ) {
-        Sort customSort = resolveSort(sort, pageable);
-        Pageable resolvedPageable = PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), customSort);
+        Pageable effectivePageable = resolvePageable(pageable, Sort.by(Sort.Direction.ASC, "endTime"), ALLOWED_SORTS);
+        Specification<Auction> spec = AuctionSpecification.filter(q, categoryId, status, minPrice, maxPrice, null, endBefore);
+        Page<Auction> page = auctionRepository.findAll(spec, effectivePageable);
+        return PageResponse.from(page, this::mapToResponse);
+    }
 
-        Specification<Auction> spec = AuctionSpecification.filter(q, categoryIds, status, minPrice, maxPrice, sellerId);
-        Page<Auction> page = auctionRepository.findAll(spec, resolvedPageable);
+    @Override
+    @Transactional(readOnly = true)
+    public AuctionDetailResponse getAuctionById(Long id, Long currentUserId) {
+        Auction auction = auctionRepository.findById(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Phiên đấu giá không tồn tại"));
 
-        return auctionMapper.toAuctionResponsePage(page, currentUserId);
+        Product product = productRepository.findById(auction.getProductId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Sản phẩm không tồn tại"));
+
+        if (product.getStatus() == ProductStatus.HIDDEN) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Phiên đấu giá không tồn tại");
+        }
+
+        return mapToDetailResponse(auction, product, currentUserId);
     }
 
     @Override
     @Transactional
-    public AuctionResponse updateAuction(Long sellerId, Long auctionId, AuctionUpdateRequest request) {
-        Auction auction = auctionRepository.findById(auctionId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + auctionId));
+    public AuctionResponse updateAuction(Long sellerId, Long id, AuctionUpdateRequest request) {
+        Auction auction = auctionRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Phiên đấu giá không tồn tại"));
 
         if (!auction.getSellerId().equals(sellerId)) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "You do not own this auction");
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền chỉnh sửa phiên này");
+        }
+        if (auction.getStatus() != AuctionStatus.SCHEDULED) {
+            throw new BusinessException(ErrorCode.AUCTION_NOT_EDITABLE, "Chỉ có thể sửa phiên khi còn ở trạng thái SCHEDULED");
         }
 
-        boolean isScheduled = auction.getStatus() == AuctionStatus.SCHEDULED;
-        boolean isActiveNoBids = auction.getStatus() == AuctionStatus.ACTIVE && (auction.getBidCount() == null || auction.getBidCount() == 0);
-        if (!isScheduled && !isActiveNoBids) {
-            throw new BusinessException(ErrorCode.PRODUCT_NOT_EDITABLE, "Auction can only be updated when SCHEDULED or ACTIVE with no bids");
+        Instant now = Instant.now(clock);
+        if (request.startTime() != null) {
+            if (!request.startTime().isAfter(now)) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời gian bắt đầu phải ở tương lai");
+            }
+            auction.setStartTime(request.startTime());
+        }
+        if (request.endTime() != null) {
+            if (!request.endTime().isAfter(auction.getStartTime())) {
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời gian kết thúc phải sau thời gian bắt đầu");
+            }
+            auction.setEndTime(request.endTime());
+        }
+
+        Duration duration = Duration.between(auction.getStartTime(), auction.getEndTime());
+        Duration minDuration = appProperties.getAuction().getMinDuration();
+        Duration maxDuration = appProperties.getAuction().getMaxDuration();
+        if (duration.compareTo(minDuration) < 0 || duration.compareTo(maxDuration) > 0) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Độ dài phiên đấu giá không hợp lệ");
         }
 
         if (request.startPrice() != null) {
-            if (request.startPrice().compareTo(BigDecimal.ZERO) <= 0) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Start price must be greater than 0");
-            }
             auction.setStartPrice(request.startPrice());
             if (auction.getBidCount() == null || auction.getBidCount() == 0) {
                 auction.setCurrentPrice(request.startPrice());
             }
         }
-
         if (request.bidIncrement() != null) {
-            if (request.bidIncrement().compareTo(BigDecimal.ZERO) <= 0) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Bid increment must be greater than 0");
-            }
             auction.setBidIncrement(request.bidIncrement());
         }
-
         if (request.reservePrice() != null) {
             if (request.reservePrice().compareTo(auction.getStartPrice()) < 0) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Reserve price must be greater than or equal to start price");
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Giá sàn phải lớn hơn hoặc bằng giá khởi điểm");
             }
             auction.setReservePrice(request.reservePrice());
         }
 
-        Instant now = Instant.now(clock);
-        if (request.startTime() != null) {
-            if (!isScheduled) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Cannot change start time of an ACTIVE auction");
-            }
-            if (request.startTime().isBefore(now)) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Start time cannot be in the past");
-            }
-            auction.setStartTime(request.startTime());
-        }
-
-        if (request.endTime() != null) {
-            if (!request.endTime().isAfter(auction.getStartTime())) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "End time must be after start time");
-            }
-            Duration d = Duration.between(auction.getStartTime(), request.endTime());
-            if (d.toMinutes() < 60 || d.toDays() > 30) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Auction duration must be between 1 hour and 30 days");
-            }
-            auction.setEndTime(request.endTime());
-        }
-
         Auction updated = auctionRepository.save(auction);
-        return auctionMapper.toAuctionResponse(updated, sellerId);
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public PageResponse<AuctionResponse> getMyAuctions(Long sellerId, AuctionStatus status, Pageable pageable) {
-        Page<Auction> page = (status != null)
-                ? auctionRepository.findBySellerIdAndStatus(sellerId, status, pageable)
-                : auctionRepository.findBySellerId(sellerId, pageable);
-        return auctionMapper.toAuctionResponsePage(page, sellerId);
+        publishAuctionEvent(updated, AuctionEventType.AUCTION_UPDATED);
+        return mapToResponse(updated);
     }
 
     @Override
     @Transactional
-    public AuctionResponse cancelAuction(Long userId, Long auctionId, String reason) {
-        Auction auction = auctionRepository.findByIdForUpdate(auctionId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + auctionId));
+    public AuctionResponse cancelAuction(Long sellerId, Long id, String reason) {
+        Auction auction = auctionRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Phiên đấu giá không tồn tại"));
 
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found with id: " + userId));
-
-        boolean isSeller = auction.getSellerId().equals(userId);
-        boolean isAdmin = user.getRole() == UserRole.ADMIN;
-
-        if (!isSeller && !isAdmin) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "You are not authorized to cancel this auction");
+        if (!auction.getSellerId().equals(sellerId)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền hủy phiên này");
         }
 
-        if (isSeller && auction.getStatus() == AuctionStatus.ACTIVE && auction.getBidCount() != null && auction.getBidCount() > 0) {
-            throw new BusinessException(ErrorCode.CANNOT_CANCEL, "Cannot cancel auction with existing bids");
+        if (auction.getStatus() == AuctionStatus.ACTIVE && auction.getBidCount() != null && auction.getBidCount() > 0) {
+            throw new BusinessException(ErrorCode.CANNOT_CANCEL, "Người bán không thể hủy phiên ACTIVE đã có lượt đặt giá");
         }
-
         if (auction.getStatus() != AuctionStatus.SCHEDULED && auction.getStatus() != AuctionStatus.ACTIVE) {
-            throw new BusinessException(ErrorCode.CANNOT_CANCEL, "Auction cannot be cancelled in status: " + auction.getStatus());
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Không thể hủy phiên ở trạng thái " + auction.getStatus());
         }
 
-        Auction cancelled = auctionLifecycleSupport.cancelLocked(auction, reason);
-        return auctionMapper.toAuctionResponse(cancelled, userId);
+        Product product = productRepository.findByIdForUpdate(auction.getProductId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Sản phẩm không tồn tại"));
+
+        auction.cancel(reason);
+        auction.setClosedAt(Instant.now(clock));
+        auctionRepository.save(auction);
+
+        product.release();
+        productRepository.save(product);
+
+        publishAuctionEvent(auction, AuctionEventType.AUCTION_CANCELLED);
+        return mapToResponse(auction);
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<AuctionResponse> getMyAuctions(Long sellerId, String keyword, AuctionStatus status, Pageable pageable) {
+        Page<Auction> page = (status != null)
+                ? auctionRepository.findBySellerIdAndStatus(sellerId, status, pageable)
+                : auctionRepository.findBySellerId(sellerId, pageable);
+        return PageResponse.from(page, this::mapToResponse);
     }
 
     @Override
     public void startScheduledAuctions() {
-        Instant now = Instant.now(clock);
-        List<Long> scheduledIds = auctionRepository.findIdsByStatusAndStartTimeLessThanEqual(AuctionStatus.SCHEDULED, now);
-
-        for (Long id : scheduledIds) {
-            try {
-                auctionCloser.startOne(id);
-            } catch (Exception e) {
-                log.error("Failed to start scheduled auction {}", id, e);
-            }
-        }
+        auctionCloser.startOne(null);
     }
 
     @Override
     public void closeEndedAuctions() {
-        Instant now = Instant.now(clock);
-        List<Long> activeIds = auctionRepository.findIdsByStatusAndEndTimeLessThanEqual(AuctionStatus.ACTIVE, now);
-
-        for (Long id : activeIds) {
-            try {
-                auctionCloser.closeOne(id);
-            } catch (Exception e) {
-                log.error("Failed to close auction {}", id, e);
-            }
-        }
+        auctionCloser.closeOne(null);
     }
 
-    private Sort resolveSort(String sort, Pageable pageable) {
-        if ("endingSoon".equalsIgnoreCase(sort)) {
-            return Sort.by(Sort.Direction.ASC, "endTime");
-        } else if ("newlyListed".equalsIgnoreCase(sort)) {
-            return Sort.by(Sort.Direction.DESC, "createdAt");
-        } else if ("priceAsc".equalsIgnoreCase(sort)) {
-            return Sort.by(Sort.Direction.ASC, "currentPrice");
-        } else if ("priceDesc".equalsIgnoreCase(sort)) {
-            return Sort.by(Sort.Direction.DESC, "currentPrice");
-        } else if ("mostBids".equalsIgnoreCase(sort)) {
-            return Sort.by(Sort.Direction.DESC, "bidCount");
+    private Pageable resolvePageable(Pageable pageable, Sort defaultSort, Set<String> allowedSorts) {
+        if (pageable.getSort().isSorted()) {
+            SortWhitelist.validate(pageable, allowedSorts);
+            return pageable;
         }
-        return pageable.getSort().isSorted() ? pageable.getSort() : Sort.by(Sort.Direction.DESC, "createdAt");
+        return PageRequest.of(pageable.getPageNumber(), pageable.getPageSize(), defaultSort);
+    }
+
+    private AuctionResponse mapToResponse(Auction a) {
+        Product p = productRepository.findById(a.getProductId()).orElse(null);
+        String title = p != null ? p.getTitle() : null;
+        Long catId = p != null ? p.getCategoryId() : null;
+        String catName = catId != null ? categoryRepository.findById(catId).map(Category::getName).orElse(null) : null;
+        String sellerName = userRepository.findById(a.getSellerId()).map(User::getFullName).orElse(null);
+        String primaryImg = productImageRepository.findByProductIdAndIsPrimaryTrue(a.getProductId())
+                .map(ProductImage::getImageUrl).orElse(null);
+
+        return AuctionResponse.builder()
+                .id(a.getId()).productId(a.getProductId()).productTitle(title).categoryId(catId)
+                .categoryName(catName).sellerId(a.getSellerId()).sellerName(sellerName)
+                .primaryImageUrl(primaryImg).startPrice(a.getStartPrice()).bidIncrement(a.getBidIncrement())
+                .currentPrice(a.getCurrentPrice()).minNextBid(a.minNextBid()).reserveStatus(a.reserveStatus().name())
+                .bidCount(a.getBidCount()).startTime(a.getStartTime()).endTime(a.getEndTime()).status(a.getStatus())
+                .winnerId(a.getWinnerId()).finalPrice(a.getFinalPrice()).closedAt(a.getClosedAt())
+                .cancelReason(a.getCancelReason()).createdAt(a.getCreatedAt()).build();
+    }
+
+    private AuctionDetailResponse mapToDetailResponse(Auction a, Product p, Long currentUserId) {
+        String catName = categoryRepository.findById(p.getCategoryId()).map(Category::getName).orElse(null);
+        String sellerName = userRepository.findById(a.getSellerId()).map(User::getFullName).orElse(null);
+        String leaderName = a.getHighestBidderId() != null
+                ? userRepository.findById(a.getHighestBidderId()).map(u -> MaskingUtils.maskName(u.getFullName())).orElse(null)
+                : null;
+        String primaryImg = productImageRepository.findByProductIdAndIsPrimaryTrue(p.getId())
+                .map(ProductImage::getImageUrl).orElse(null);
+        List<ProductImageResponse> images = productImageRepository.findByProductIdOrderByIdAsc(p.getId()).stream()
+                .map(img -> new ProductImageResponse(img.getId(), img.getImageUrl(), img.getPublicId(), img.getIsPrimary(), img.getCreatedAt()))
+                .toList();
+
+        boolean canSeeReserve = currentUserId != null && currentUserId.equals(a.getSellerId());
+        BigDecimal reservePrice = canSeeReserve ? a.getReservePrice() : null;
+
+        return AuctionDetailResponse.builder()
+                .id(a.getId()).productId(p.getId()).title(p.getTitle()).description(p.getDescription())
+                .categoryId(p.getCategoryId()).categoryName(catName).condition(p.getCondition())
+                .sellerId(a.getSellerId()).sellerName(sellerName).startPrice(a.getStartPrice())
+                .bidIncrement(a.getBidIncrement()).currentPrice(a.getCurrentPrice()).minNextBid(a.minNextBid())
+                .reservePrice(reservePrice).reserveStatus(a.reserveStatus()).highestBidderName(leaderName)
+                .bidCount(a.getBidCount()).startTime(a.getStartTime()).endTime(a.getEndTime()).status(a.getStatus())
+                .winnerId(a.getWinnerId()).finalPrice(a.getFinalPrice()).closedAt(a.getClosedAt())
+                .cancelReason(a.getCancelReason()).primaryImageUrl(primaryImg).images(images).createdAt(a.getCreatedAt()).build();
+    }
+
+    private void publishAuctionEvent(Auction a, AuctionEventType type) {
+        AuctionEvent event = AuctionEvent.builder()
+                .type(type)
+                .auctionId(a.getId())
+                .status(a.getStatus())
+                .currentPrice(a.getCurrentPrice())
+                .minNextBid(a.minNextBid())
+                .bidCount(a.getBidCount())
+                .reserveStatus(a.reserveStatus())
+                .startTime(a.getStartTime())
+                .endTime(a.getEndTime())
+                .createdAt(Instant.now(clock))
+                .build();
+        webSocketPublisher.publishAuctionEvent(event);
     }
 }

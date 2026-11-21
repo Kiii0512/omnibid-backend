@@ -1,25 +1,20 @@
 package com.omnibid.dto.bid;
 
-import jakarta.validation.constraints.DecimalMin;
+import jakarta.validation.constraints.Digits;
 import jakarta.validation.constraints.NotNull;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
-import lombok.Data;
-import lombok.NoArgsConstructor;
+import jakarta.validation.constraints.Positive;
 
 import java.math.BigDecimal;
 
-@Data
-@Builder
-@NoArgsConstructor
-@AllArgsConstructor
-public class BidRequest {
+public record BidRequest(
+        Long auctionId,
 
-    @NotNull(message = "Auction ID cannot be null")
-    private Long auctionId;
-
-    @NotNull(message = "Bid amount cannot be null")
-    @DecimalMin(value = "1.00", message = "Bid amount must be at least 1.00")
-    private BigDecimal amount;
+        @NotNull(message = "Giá đặt là bắt buộc")
+        @Positive(message = "Giá đặt phải lớn hơn 0")
+        @Digits(integer = 15, fraction = 0, message = "Giá đặt phải là số nguyên")
+        BigDecimal amount
+) {
+    public BidRequest(BigDecimal amount) {
+        this(null, amount);
+    }
 }
-

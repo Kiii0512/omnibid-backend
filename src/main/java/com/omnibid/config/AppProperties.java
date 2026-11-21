@@ -70,6 +70,14 @@ public record AppProperties(
         public int getMaxDurationDays() {
             return (int) maxDurationDays.toDays();
         }
+
+        public Duration getMinDuration() {
+            return minDurationMinutes;
+        }
+
+        public Duration getMaxDuration() {
+            return maxDurationDays;
+        }
     }
 
     public record Scheduler(

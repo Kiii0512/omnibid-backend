@@ -6,9 +6,9 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 0. Chuẩn bị
 - [x] 1. Nền tảng (Flyway, cấu hình, UTC/JSON, ApiResponse/ErrorCode)
 - [x] 2. Mô hình miền (entity, enum, repository, gỡ tính năng thừa)
-- [ ] 3. Bảo mật, xác thực
-- [ ] 4. Ảnh, sản phẩm, danh mục
-- [ ] 5. Phiên, đặt giá, chốt phiên, WebSocket
+- [x] 3. Bảo mật, xác thực
+- [x] 4. Ảnh, sản phẩm, danh mục
+- [x] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [ ] 6. Đơn hàng, thanh toán, giao hàng
 - [ ] 7. Thông báo, báo cáo vi phạm
 - [ ] 8. Quản trị
@@ -18,6 +18,75 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - test-compile ban đầu: Đạt (0 lỗi biên dịch)
 - Docker: Chưa khả dụng trong môi trường terminal hiện tại (cần lưu ý cho integration test ở phase 9)
 - Số tệp test ban đầu: 46 tệp test (`src/test/java`)
+
+## Trạng thái sau Phase 5
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+
+## Mục GAP đã xử lý (Phase 5)
+- **E1 & E2 (Đặt giá)**:
+  - `POST /api/v1/auctions/{id}/bids` (USER): Transaction khóa auction, kiểm tra product không bị HIDDEN, gọi `auction.placeBid(...)` (kiểm tra `AUCTION_NOT_ACTIVE`, `SELF_BID_NOT_ALLOWED`(409), `ALREADY_LEADING`, `BID_TOO_LOW`). Lưu Bid, cập nhật auction (highestBidderId, currentPrice, bidCount), flush bắt `DataIntegrityViolationException` -> `CONFLICT`. Phát WebSocket `BID_PLACED` sau COMMIT. Trả 201 `PlaceBidResponse`.
+  - `GET /api/v1/auctions/{id}/bids`: Công khai, phân trang, sort whitelist (`createdAt`, `amount`), trả `BidHistoryItem` (ẩn danh bidderName theo chuẩn `N***n`).
+  - `GET /api/v1/bids/mine`: Phân trang, lọc `auctionId`, trả `MyBidResponse` kèm cờ `leading`.
+- **E3…E6 (Quản lý phiên đấu giá)**:
+  - `POST /api/v1/auctions`: Validate thời gian bắt đầu ở tương lai, thời gian kết thúc sau bắt đầu, độ dài phiên từ `minDuration` đến `maxDuration` theo `appProperties.auction`, `reservePrice >= startPrice`. Khóa product kiểm tra AVAILABLE, 1-5 ảnh, chưa có phiên mở -> `product.markInAuction()`. Tạo phiên trạng thái `SCHEDULED`.
+  - `PATCH /api/v1/auctions/{id}`: Chỉ chủ phiên, chỉ khi SCHEDULED (ngược lại `AUCTION_NOT_EDITABLE`). Khóa auction, kiểm tra hợp lệ, phát `AUCTION_UPDATED` sau COMMIT.
+  - `POST /api/v1/auctions/{id}/cancel`: Chỉ chủ phiên, khóa auction và product, SCHEDULED hoặc ACTIVE với 0 bid (ngược lại `CANNOT_CANCEL`). Trạng thái khác `INVALID_STATUS_TRANSITION`. Reason bắt buộc. Gọi `auction.cancel(reason)`, `product.release()`, phát `AUCTION_CANCELLED` sau COMMIT.
+  - `GET /api/v1/auctions`: Lọc theo từ khóa `q`, `categoryId`, `minPrice`, `maxPrice`, `status`, `endBefore`. Bỏ qua các sản phẩm HIDDEN. Sort whitelist (`endTime,asc` mặc định, `createdAt,desc`, `currentPrice,asc`, `currentPrice,desc`). Trả `AuctionResponse`.
+  - `GET /api/v1/auctions/{id}`: Trả `AuctionDetailResponse` đầy đủ thông tin, ẩn danh người dẫn đầu, ẩn `reservePrice` đối với người không phải chủ phiên. Sản phẩm HIDDEN trả 404 `NOT_FOUND`.
+  - `GET /api/v1/auctions/mine`: Phân trang lọc theo `status` và `keyword`.
+- **E7…E9 (Mở/chốt phiên tự động - BR-09)**:
+  - Khắc phục triệt để lỗi phiên quá hạn bị kẹt `ACTIVE`: `AuctionScheduler` quét mỗi 10s lấy danh sách ID phiên cần mở (`startTime <= now`) và chốt (`endTime <= now`), gọi `AuctionCloser.startOne(id)` và `AuctionCloser.closeOne(id)` trong transaction độc lập.
+  - `AuctionCloser.closeOne`: Khóa auction. Nếu có `highestBidderId` hợp lệ, người thắng ACTIVE và đạt `reservePrice` -> trạng thái `ENDED`, `product.reserve()`, tạo đơn hàng `Order` ở trạng thái `PENDING_PAYMENT` với hạn thanh toán `closedAt + paymentDeadlineHours`. Ngược lại -> trạng thái `UNSOLD`, `product.release()`. Phát `AUCTION_ENDED` sau COMMIT.
+- **E10 (WebSocket Event v4)**:
+  - Tạo `dto/websocket/AuctionEvent` chuẩn v4 thay thế message cũ: `{ type, auctionId, status, currentPrice, minNextBid, bidCount, highestBidderName, reserveStatus, startTime, endTime, bid, createdAt }`.
+  - Phát sự kiện tới `/topic/auctions/{id}` strictly sau COMMIT (`@TransactionalEventListener` / `AfterCommitExecutor`).
+
+## Trạng thái sau Phase 4
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
+- Unit test `ImageValidatorTest`: Đạt 100% (kiểm tra JPEG, PNG, WEBP, rỗng, sai magic bytes, quá 5MB).
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+
+## Mục GAP đã xử lý (Phase 4)
+- **D1 & D2**: Tạo `common/ImageValidator` kiểm tra định dạng theo magic bytes (JPEG FF D8 FF, PNG 89 50 4E 47, WEBP RIFF...WEBP), tối đa 5MB/tệp, không rỗng; lỗi trả 400 `INVALID_IMAGE`.
+- **D3**: Tạo `ImageStorageService` và `CloudinaryImageStorageService` với Cloudinary Java SDK dùng chung cho ảnh sản phẩm và ảnh đại diện (`omnibid/products`, `omnibid/avatars`). Lỗi Cloudinary trả 502 `IMAGE_UPLOAD_FAILED`. Tạo `AfterCommitExecutor` để xóa tài nguyên Cloudinary sau khi commit transaction thành công.
+- **D4**: Xóa bỏ hoàn toàn lưu trữ cục bộ: xóa `LocalStorageServiceImpl`, `StorageConfig`, `StorageService`, `StorageUploadResult`, `CloudinaryStorageServiceImpl`, handler `/uploads/**` trong `WebMvcConfig`.
+- **D5 (Tạo sản phẩm & ảnh)**:
+  - `POST /api/v1/products` multipart: `@RequestPart("product")` và `@RequestPart("files")` (1-5 ảnh). Quy trình 4 bước chuẩn v4: validate -> upload Cloudinary ngoài tx -> transaction lưu product + images (ảnh đầu `is_primary=true`, `public_id` NOT NULL) -> lỗi thì xóa asset Cloudinary (bù trừ).
+  - `POST /api/v1/products/{id}/images`: multipart `files`, validate, upload ngoài tx, transaction khóa product kiểm tra BR-23 + tổng <= 5 ảnh; lỗi thì bù trừ.
+  - `DELETE /api/v1/products/{id}/images/{imageId}`: khóa product, BR-23, không cho xóa ảnh cuối cùng (INVALID_IMAGE), tự động chuyển ảnh chính sang ảnh có id nhỏ nhất còn lại, xóa asset Cloudinary sau commit.
+  - `DELETE /api/v1/products/{id}`: chỉ xóa khi chưa từng lên phiên (`auctionRepository.existsByProductId`), xóa asset Cloudinary sau commit.
+  - `PATCH /api/v1/products/{id}`: khóa product, kiểm tra `isEditable()` (AVAILABLE) theo BR-23.
+  - `GET /api/v1/products/{id}`: kiểm tra quyền sở hữu (chỉ chủ sản phẩm xem được, người khác 403 FORBIDDEN).
+  - `GET /api/v1/products/mine`: phân trang, lọc theo keyword `q` và `status`.
+  - Gỡ bỏ các endpoint không thuộc v4: `GET /products`, `GET /products/mine/summary`, `PATCH .../primary`.
+- **D6 (Ảnh đại diện)**:
+  - `POST /api/v1/users/me/avatar`: validate magic bytes -> upload ngoài tx -> transaction lưu `avatarUrl` và `avatarPublicId` -> xóa ảnh cũ sau commit. Trả 200 `{ "avatarUrl": "..." }`.
+- **D7 (Danh mục)**:
+  - Chuẩn hóa trường `icon` (≤ 50 ký tự, regex `^[a-z0-9-]+$`).
+  - `GET /api/v1/categories`: công khai, nhận `q` (keyword) + phân trang `Pageable`, trả `PageResponse<CategoryResponse>`.
+  - Kiểm tra slug trùng (400 `VALIDATION_ERROR` kèm `details.fields.slug`), không cho xóa danh mục còn sản phẩm (409 `CATEGORY_IN_USE`).
+  - Gỡ bỏ `GET /api/v1/categories/{id}`.
+
+## Trạng thái sau Phase 3
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
+- Unit test Auth & Security: `JwtTokenProviderTest`, `AuthServiceTest`, `LoginAttemptLimiterTest` pass.
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+
+## Mục GAP đã xử lý (Phase 3)
+- **C1 & C2**: Viết lại `JwtTokenProvider` phát sinh JWT với claim `sub`=userId, `role`, `ver`=tokenVersion (HS256, 24 giờ). `parseClaims` nạp claim, trả `JwtClaims(userId, role, tokenVersion, expiresAt)`.
+- **C3**: `CustomUserDetails` và `UserDetailsServiceImpl` hỗ trợ nạp user theo ID `loadUserById(Long id)` cho filter; principal lưu `id, email, role, status, tokenVersion`.
+- **C4**: `JwtAuthenticationFilter` sử dụng `SecurityPaths.PUBLIC_REQUEST_MATCHER` (chuẩn PathPatternRequestMatcher của Spring Security 7):
+  - Request không token: đi tiếp (anonymous).
+  - Request có token nhưng sai/hết hạn/ver lệch: nếu endpoint Public thì bỏ qua (anonymous), ngược lại trả ngay 401 UNAUTHORIZED JSON.
+  - Request có token của tài khoản BANNED: trả ngay 403 ACCOUNT_BANNED JSON ở mọi endpoint (kể cả Public).
+- **C5**: Tạo `LoginAttemptLimiter` đếm số lần đăng nhập sai theo `(email, remoteAddr)` dùng `Clock`, tối đa 5 lần trong 15 phút, chặn 15 phút trả 429 `TOO_MANY_REQUESTS`. Đăng nhập thành công reset đếm.
+- **C6**: `AuthService.login` trả `LoginResponse` chuẩn v4 kèm `UserSummary`. Đăng nhập kiểm tra chặn trước khi tìm user.
+- **C7**: `AuthService.register` nhận `RegisterRequest(fullName, email, password, phoneNumber)` (mật khẩu regex tối thiểu 8 ký tự, 1 hoa, 1 thường, 1 số); email trùng trả 400 `VALIDATION_ERROR` kèm `details.fields.email`. Đăng ký trả `UserProfileResponse` 201, không cấp token.
+- **C8**: Thêm `POST /api/v1/auth/logout` (USER, ADMIN) gọi `user.increaseTokenVersion()`.
+- **C9**: `UserController`/`UserServiceImpl`: `GET/PATCH /users/me`, `PATCH /users/me/password` (đổi mật khẩu gọi `increaseTokenVersion()`); xóa `PATCH /users/me/avatar`.
+- **C10**: `SecurityConfig` cấu hình permit list chuẩn, khớp `/api/v1/auctions/mine` (authenticated) trước public auctions, bỏ permit `/uploads/**`, `/api/v1/products/**`, `/ws-auction/**`, `allowCredentials=false`.
+- **C11**: `WebSocketConfig` chuyển sang endpoint `/ws` (bỏ SockJS), broker `/topic`, topic `/topic/auctions/{id}` trong `WebSocketPublisherImpl`, ChannelInterceptor: CONNECT xác thực JWT tùy chọn (kiểm tra signature, ver, BANNED), SUBSCRIBE chỉ cho phép `/topic/auctions/**`, mọi khung SEND bị từ chối với AccessDeniedException.
 
 ## Trạng thái sau Phase 2
 - `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)

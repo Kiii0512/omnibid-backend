@@ -2,10 +2,11 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
+import com.omnibid.dto.auction.AuctionCancelRequest;
 import com.omnibid.dto.auction.AuctionCreateRequest;
+import com.omnibid.dto.auction.AuctionDetailResponse;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.dto.auction.AuctionUpdateRequest;
-import com.omnibid.dto.auction.CancelAuctionRequest;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.CustomUserDetails;
@@ -20,7 +21,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
-import java.util.List;
+import java.time.Instant;
 
 @RestController
 @RequestMapping("/api/v1/auctions")
@@ -38,24 +39,21 @@ public class AuctionController {
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         AuctionResponse response = auctionService.createAuction(currentUser.id(), request);
-        return ApiResponse.success("Auction created successfully", response);
+        return ApiResponse.success(response);
     }
 
     @GetMapping
-    public ApiResponse<PageResponse<AuctionResponse>> getAuctions(
-            @AuthenticationPrincipal CustomUserDetails userDetails,
+    public ApiResponse<PageResponse<AuctionResponse>> searchAuctions(
             @RequestParam(required = false) String q,
-            @RequestParam(required = false) List<Long> categoryIds,
+            @RequestParam(required = false) Long categoryId,
             @RequestParam(required = false) AuctionStatus status,
             @RequestParam(required = false) BigDecimal minPrice,
             @RequestParam(required = false) BigDecimal maxPrice,
-            @RequestParam(required = false) Long sellerId,
-            @RequestParam(required = false) String sort,
-            @PageableDefault(size = 20) Pageable pageable
+            @RequestParam(required = false) Instant endBefore,
+            @PageableDefault(size = 10) Pageable pageable
     ) {
-        Long currentUserId = userDetails != null ? userDetails.getId() : null;
         PageResponse<AuctionResponse> page = auctionService.searchAuctions(
-                currentUserId, q, categoryIds, status, minPrice, maxPrice, sellerId, sort, pageable
+                q, categoryId, status, minPrice, maxPrice, endBefore, pageable
         );
         return ApiResponse.success(page);
     }
@@ -64,21 +62,22 @@ public class AuctionController {
     @PreAuthorize("hasRole('USER')")
     public ApiResponse<PageResponse<AuctionResponse>> getMyAuctions(
             @AuthenticationPrincipal CustomUserDetails userDetails,
+            @RequestParam(required = false) String keyword,
             @RequestParam(required = false) AuctionStatus status,
-            @PageableDefault(size = 20) Pageable pageable
+            @PageableDefault(size = 10) Pageable pageable
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        PageResponse<AuctionResponse> page = auctionService.getMyAuctions(currentUser.id(), status, pageable);
+        PageResponse<AuctionResponse> page = auctionService.getMyAuctions(currentUser.id(), keyword, status, pageable);
         return ApiResponse.success(page);
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<AuctionResponse> getAuctionById(
+    public ApiResponse<AuctionDetailResponse> getAuctionById(
             @PathVariable Long id,
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
         Long currentUserId = userDetails != null ? userDetails.getId() : null;
-        AuctionResponse response = auctionService.getAuctionById(id, currentUserId);
+        AuctionDetailResponse response = auctionService.getAuctionById(id, currentUserId);
         return ApiResponse.success(response);
     }
 
@@ -91,18 +90,18 @@ public class AuctionController {
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         AuctionResponse response = auctionService.updateAuction(currentUser.id(), id, request);
-        return ApiResponse.success("Auction updated successfully", response);
+        return ApiResponse.success(response);
     }
 
     @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasRole('USER')")
     public ApiResponse<AuctionResponse> cancelAuction(
             @PathVariable Long id,
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @Valid @RequestBody(required = false) CancelAuctionRequest request
+            @Valid @RequestBody AuctionCancelRequest request
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        String reason = (request != null && request.getReason() != null) ? request.getReason() : "Cancelled by user";
-        AuctionResponse response = auctionService.cancelAuction(currentUser.id(), id, reason);
-        return ApiResponse.success("Auction cancelled successfully", response);
+        AuctionResponse response = auctionService.cancelAuction(currentUser.id(), id, request.reason());
+        return ApiResponse.success(response);
     }
 }
