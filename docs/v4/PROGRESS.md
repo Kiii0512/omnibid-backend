@@ -3,7 +3,7 @@
 Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent cập nhật tệp này sau mỗi phase.
 
 ## Phase
-- [ ] 0. Chuẩn bị
+- [x] 0. Chuẩn bị
 - [ ] 1. Nền tảng (Flyway, cấu hình, UTC/JSON, ApiResponse/ErrorCode)
 - [ ] 2. Mô hình miền (entity, enum, repository, gỡ tính năng thừa)
 - [ ] 3. Bảo mật, xác thực
@@ -15,9 +15,9 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [ ] 9. Kiểm thử, tài liệu, rà soát cuối
 
 ## Baseline (phase 0)
-- test-compile ban đầu:
-- Docker:
-- Số tệp test ban đầu: 39
+- test-compile ban đầu: Đạt (0 lỗi biên dịch)
+- Docker: Chưa khả dụng trong môi trường hiện tại (cần lưu ý cho integration test ở phase 9)
+- Số tệp test ban đầu: 46 tệp test (`src/test/java`)
 
 ## Mục GAP đã xử lý
 (ghi mã A1…I4 kèm commit)
