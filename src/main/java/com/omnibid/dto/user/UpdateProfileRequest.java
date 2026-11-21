@@ -4,16 +4,12 @@ import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
 
 public record UpdateProfileRequest(
-        @Size(max = 255, message = "Full name cannot exceed 255 characters")
+        @Size(max = 255, message = "Họ tên không được vượt quá 255 ký tự")
         String fullName,
 
-        @Pattern(regexp = "^$|^[0-9]{9,15}$", message = "Phone number is invalid")
+        @Pattern(regexp = "^$|^[0-9]{9,15}$", message = "Số điện thoại không hợp lệ")
         String phoneNumber,
 
-        @Size(max = 255, message = "Address cannot exceed 255 characters")
-        String address,
-
-        @Size(max = 500, message = "Avatar URL cannot exceed 500 characters")
-        String avatarUrl
+        @Size(max = 255, message = "Địa chỉ không được vượt quá 255 ký tự")
+        String address
 ) {}
-

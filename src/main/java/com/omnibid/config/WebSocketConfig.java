@@ -1,26 +1,32 @@
 package com.omnibid.config;
 
+import com.omnibid.security.CustomUserDetails;
+import com.omnibid.security.JwtClaims;
 import com.omnibid.security.JwtTokenProvider;
+import com.omnibid.security.UserDetailsServiceImpl;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.messaging.Message;
 import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.MessageDeliveryException;
 import org.springframework.messaging.simp.config.ChannelRegistration;
 import org.springframework.messaging.simp.config.MessageBrokerRegistry;
 import org.springframework.messaging.simp.stomp.StompCommand;
 import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
-import org.springframework.security.core.userdetails.UserDetails;
-import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.util.StringUtils;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
+
+import java.util.Arrays;
 
 @Slf4j
 @Configuration
@@ -30,22 +36,25 @@ import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerCo
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private final JwtTokenProvider jwtTokenProvider;
-    private final UserDetailsService userDetailsService;
+    private final UserDetailsServiceImpl userDetailsService;
+
+    @Value("${app.cors.allowed-origins:http://localhost:3000}")
+    private String allowedOrigins;
 
     @Override
     public void configureMessageBroker(MessageBrokerRegistry config) {
-        config.enableSimpleBroker("/topic", "/queue");
+        config.enableSimpleBroker("/topic");
         config.setApplicationDestinationPrefixes("/app");
-        config.setUserDestinationPrefix("/user");
     }
 
     @Override
     public void registerStompEndpoints(StompEndpointRegistry registry) {
-        registry.addEndpoint("/ws-auction")
-                .setAllowedOriginPatterns("*");
-        registry.addEndpoint("/ws-auction")
-                .setAllowedOriginPatterns("*")
-                .withSockJS();
+        String[] origins = Arrays.stream(allowedOrigins.split(","))
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .toArray(String[]::new);
+        registry.addEndpoint("/ws")
+                .setAllowedOrigins(origins);
     }
 
     @Override
@@ -54,34 +63,42 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
             @Override
             public Message<?> preSend(Message<?> message, MessageChannel channel) {
                 StompHeaderAccessor accessor = MessageHeaderAccessor.getAccessor(message, StompHeaderAccessor.class);
-                if (accessor != null) {
-                    log.debug("STOMP inbound frame: cmd={}, dest={}, user={}", accessor.getCommand(), accessor.getDestination(), accessor.getUser());
+                if (accessor == null) {
+                    return message;
                 }
-                if (accessor != null && StompCommand.CONNECT.equals(accessor.getCommand())) {
+
+                if (StompCommand.CONNECT.equals(accessor.getCommand())) {
                     String authHeader = accessor.getFirstNativeHeader("Authorization");
                     if (StringUtils.hasText(authHeader) && authHeader.startsWith("Bearer ")) {
-                        String token = authHeader.substring(7);
+                        String token = authHeader.substring(7).trim();
                         try {
-                            if (jwtTokenProvider.validateToken(token)) {
-                                String email = jwtTokenProvider.getUsernameFromJWT(token);
-                                UserDetails userDetails = userDetailsService.loadUserByUsername(email);
-                                if (userDetails.isEnabled() && userDetails.isAccountNonLocked()) {
-                                    UsernamePasswordAuthenticationToken auth =
-                                            new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
-                                    accessor.setUser(auth);
-                                    log.debug("STOMP CONNECT authenticated for user: {}", email);
-                                } else {
-                                    log.warn("STOMP CONNECT user not active or locked: {}", email);
-                                }
-                            } else {
-                                log.warn("STOMP JWT token validation failed");
+                            JwtClaims claims = jwtTokenProvider.parseClaims(token);
+                            CustomUserDetails userDetails = userDetailsService.loadUserById(claims.userId());
+                            if (userDetails.isBanned()) {
+                                throw new MessageDeliveryException("Account is banned");
                             }
+                            if (claims.tokenVersion() != userDetails.getTokenVersion()) {
+                                throw new MessageDeliveryException("Token version mismatch");
+                            }
+                            UsernamePasswordAuthenticationToken auth =
+                                    new UsernamePasswordAuthenticationToken(userDetails, null, userDetails.getAuthorities());
+                            accessor.setUser(auth);
+                        } catch (MessageDeliveryException ex) {
+                            throw ex;
                         } catch (Exception ex) {
-                            log.warn("STOMP JWT authentication failed: {}", ex.getMessage(), ex);
+                            log.warn("STOMP JWT validation failed: {}", ex.getMessage());
+                            throw new MessageDeliveryException("Invalid authentication token: " + ex.getMessage());
                         }
-                    } else {
-                        log.warn("STOMP CONNECT missing or invalid Authorization header");
                     }
+                } else if (StompCommand.SUBSCRIBE.equals(accessor.getCommand())) {
+                    String destination = accessor.getDestination();
+                    if (destination == null || !destination.startsWith("/topic/auctions/")) {
+                        log.warn("STOMP subscribe rejected for destination: {}", destination);
+                        throw new AccessDeniedException("Subscription to " + destination + " is not allowed");
+                    }
+                } else if (StompCommand.SEND.equals(accessor.getCommand())) {
+                    log.warn("STOMP client send rejected: {}", accessor.getDestination());
+                    throw new AccessDeniedException("Sending messages via WebSocket is not allowed");
                 }
                 return message;
             }

@@ -51,16 +51,6 @@ public class UserController {
         return ApiResponse.success("Avatar updated successfully", response);
     }
 
-    @PatchMapping("/me/avatar")
-    public ApiResponse<UserProfileResponse> uploadAvatarPatch(
-            @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestParam("file") MultipartFile file
-    ) {
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        UserProfileResponse response = userService.updateAvatar(currentUser.id(), file);
-        return ApiResponse.success("Avatar updated successfully", response);
-    }
-
     @PatchMapping("/me/password")
     public ApiResponse<Void> changePassword(
             @AuthenticationPrincipal CustomUserDetails userDetails,
@@ -71,4 +61,3 @@ public class UserController {
         return ApiResponse.success("Password changed successfully", null);
     }
 }
-

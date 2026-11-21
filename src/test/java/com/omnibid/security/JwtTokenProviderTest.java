@@ -1,5 +1,6 @@
 package com.omnibid.security;
 
+import com.omnibid.enums.UserRole;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
@@ -18,15 +19,20 @@ class JwtTokenProviderTest {
     }
 
     @Test
-    void testGenerateAndValidateToken() {
-        String email = "test@example.com";
-        String role = "ROLE_USER";
+    void testGenerateAndParseToken() {
+        Long userId = 10L;
+        UserRole role = UserRole.USER;
+        int tokenVersion = 2;
 
-        String token = jwtTokenProvider.generateToken(email, role);
+        String token = jwtTokenProvider.generateToken(userId, role, tokenVersion);
         assertNotNull(token);
         assertTrue(jwtTokenProvider.validateToken(token));
-        assertEquals(email, jwtTokenProvider.getEmailFromToken(token));
-        assertEquals(role, jwtTokenProvider.getRoleFromToken(token));
+
+        JwtClaims claims = jwtTokenProvider.parse(token);
+        assertEquals(userId, claims.userId());
+        assertEquals(role, claims.role());
+        assertEquals(tokenVersion, claims.tokenVersion());
+        assertNotNull(claims.expiresAt());
     }
 
     @Test
@@ -34,4 +40,3 @@ class JwtTokenProviderTest {
         assertFalse(jwtTokenProvider.validateToken("invalid.token.string"));
     }
 }
-

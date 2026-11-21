@@ -45,17 +45,11 @@ public class OrderServiceImpl implements OrderService {
     private NotificationService notificationService;
 
     @org.springframework.beans.factory.annotation.Autowired
-    public OrderServiceImpl(OrderRepository orderRepository,
-                            ProductRepository productRepository,
-                            ProductImageRepository productImageRepository,
-                            UserRepository userRepository,
-                            PaymentRepository paymentRepository,
-                            ReportRepository reportRepository,
-                            OrderAccessPolicy orderAccessPolicy,
-                            OrderLifecycleSupport orderLifecycleSupport,
-                            AppProperties appProperties,
-                            Clock clock,
-                            NotificationService notificationService) {
+    public OrderServiceImpl(OrderRepository orderRepository, ProductRepository productRepository,
+                            ProductImageRepository productImageRepository, UserRepository userRepository,
+                            PaymentRepository paymentRepository, ReportRepository reportRepository,
+                            OrderAccessPolicy orderAccessPolicy, OrderLifecycleSupport orderLifecycleSupport,
+                            AppProperties appProperties, Clock clock, NotificationService notificationService) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
         this.productImageRepository = productImageRepository;
@@ -69,16 +63,11 @@ public class OrderServiceImpl implements OrderService {
         this.notificationService = notificationService;
     }
 
-    public OrderServiceImpl(OrderRepository orderRepository,
-                            ProductRepository productRepository,
-                            ProductImageRepository productImageRepository,
-                            UserRepository userRepository,
-                            PaymentRepository paymentRepository,
-                            ReportRepository reportRepository,
-                            OrderAccessPolicy orderAccessPolicy,
-                            OrderLifecycleSupport orderLifecycleSupport,
-                            AppProperties appProperties,
-                            Clock clock) {
+    public OrderServiceImpl(OrderRepository orderRepository, ProductRepository productRepository,
+                            ProductImageRepository productImageRepository, UserRepository userRepository,
+                            PaymentRepository paymentRepository, ReportRepository reportRepository,
+                            OrderAccessPolicy orderAccessPolicy, OrderLifecycleSupport orderLifecycleSupport,
+                            AppProperties appProperties, Clock clock) {
         this(orderRepository, productRepository, productImageRepository, userRepository, paymentRepository, reportRepository, orderAccessPolicy, orderLifecycleSupport, appProperties, clock, null);
     }
 
@@ -260,25 +249,17 @@ public class OrderServiceImpl implements OrderService {
         }
     }
 
+    private String getProductTitle(Long productId) {
+        return productRepository != null ? productRepository.findById(productId).map(Product::getTitle).orElse(null) : null;
+    }
+
+    private String getProductImageUrl(Long productId) {
+        return productImageRepository != null ? productImageRepository.findByProductIdAndIsPrimaryTrue(productId).map(ProductImage::getImageUrl).orElse(null) : null;
+    }
+
     private OrderResponse mapToOrderResponse(Order order, CurrentUser currentUser) {
-        String productTitle = null;
-        String productImageUrl = null;
-
-        if (productRepository != null) {
-            Product product = productRepository.findById(order.getProductId()).orElse(null);
-            if (product != null) {
-                productTitle = product.getTitle();
-            }
-        }
-
-        if (productImageRepository != null) {
-            ProductImage primaryImg = productImageRepository.findByProductIdAndIsPrimaryTrue(order.getProductId())
-                    .orElse(null);
-            if (primaryImg != null) {
-                productImageUrl = primaryImg.getImageUrl();
-            }
-        }
-
+        String productTitle = getProductTitle(order.getProductId());
+        String productImageUrl = getProductImageUrl(order.getProductId());
         String viewerRole = determineViewerRole(order, currentUser);
 
         return OrderResponse.builder()
@@ -296,25 +277,10 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private OrderDetailResponse mapToOrderDetailResponse(Order order, CurrentUser currentUser) {
-        String productTitle = null;
-        String productImageUrl = null;
+        String productTitle = getProductTitle(order.getProductId());
+        String productImageUrl = getProductImageUrl(order.getProductId());
         String sellerName = null;
         String buyerName = null;
-
-        if (productRepository != null) {
-            Product product = productRepository.findById(order.getProductId()).orElse(null);
-            if (product != null) {
-                productTitle = product.getTitle();
-            }
-        }
-
-        if (productImageRepository != null) {
-            ProductImage primaryImg = productImageRepository.findByProductIdAndIsPrimaryTrue(order.getProductId())
-                    .orElse(null);
-            if (primaryImg != null) {
-                productImageUrl = primaryImg.getImageUrl();
-            }
-        }
 
         if (userRepository != null) {
             User seller = userRepository.findById(order.getSellerId()).orElse(null);
@@ -349,32 +315,16 @@ public class OrderServiceImpl implements OrderService {
         List<String> allowedActions = calculateAllowedActions(order, viewerRole, hasPendingComplaint);
 
         return OrderDetailResponse.builder()
-                .id(order.getId())
-                .auctionId(order.getAuctionId())
-                .productId(order.getProductId())
-                .productTitle(productTitle)
-                .productImageUrl(productImageUrl)
-                .sellerId(order.getSellerId())
-                .sellerName(sellerName)
-                .buyerId(order.getBuyerId())
-                .buyerName(buyerName)
-                .finalPrice(order.getFinalPrice())
-                .status(order.getStatus())
-                .shippingAddress(order.getShippingAddress())
-                .phoneNumber(order.getPhoneNumber())
-                .trackingCode(order.getTrackingCode())
-                .paymentDeadline(order.getPaymentDeadline())
-                .paidAt(order.getPaidAt())
-                .shippedAt(order.getShippedAt())
-                .confirmDeadline(order.getConfirmDeadline())
-                .completedAt(order.getCompletedAt())
-                .cancelledAt(order.getCancelledAt())
-                .cancelReason(order.getCancelReason())
-                .latestPayment(latestPaymentDto)
-                .hasPendingComplaint(hasPendingComplaint)
-                .viewerRole(viewerRole)
-                .allowedActions(allowedActions)
-                .build();
+                .id(order.getId()).auctionId(order.getAuctionId()).productId(order.getProductId())
+                .productTitle(productTitle).productImageUrl(productImageUrl)
+                .sellerId(order.getSellerId()).sellerName(sellerName).buyerId(order.getBuyerId()).buyerName(buyerName)
+                .finalPrice(order.getFinalPrice()).status(order.getStatus())
+                .shippingAddress(order.getShippingAddress()).phoneNumber(order.getPhoneNumber())
+                .trackingCode(order.getTrackingCode()).paymentDeadline(order.getPaymentDeadline())
+                .paidAt(order.getPaidAt()).shippedAt(order.getShippedAt()).confirmDeadline(order.getConfirmDeadline())
+                .completedAt(order.getCompletedAt()).cancelledAt(order.getCancelledAt()).cancelReason(order.getCancelReason())
+                .latestPayment(latestPaymentDto).hasPendingComplaint(hasPendingComplaint)
+                .viewerRole(viewerRole).allowedActions(allowedActions).build();
     }
 
     private String determineViewerRole(Order order, CurrentUser currentUser) {
@@ -396,19 +346,13 @@ public class OrderServiceImpl implements OrderService {
                 actions.add("UPDATE_SHIPPING_INFO");
             } else if (order.getStatus() == OrderStatus.PAID) {
                 actions.add("UPDATE_SHIPPING_INFO");
-                if (!hasPendingComplaint) {
-                    actions.add("COMPLAIN");
-                }
-            } else if (order.getStatus() == OrderStatus.SHIPPING) {
-                if (!hasPendingComplaint) {
-                    actions.add("CONFIRM_RECEIPT");
-                    actions.add("COMPLAIN");
-                }
+                if (!hasPendingComplaint) actions.add("COMPLAIN");
+            } else if (order.getStatus() == OrderStatus.SHIPPING && !hasPendingComplaint) {
+                actions.add("CONFIRM_RECEIPT");
+                actions.add("COMPLAIN");
             }
-        } else if ("SELLER".equals(viewerRole)) {
-            if (order.getStatus() == OrderStatus.PAID) {
-                actions.add("SHIP");
-            }
+        } else if ("SELLER".equals(viewerRole) && order.getStatus() == OrderStatus.PAID) {
+            actions.add("SHIP");
         }
         return actions;
     }
@@ -433,10 +377,9 @@ public class OrderServiceImpl implements OrderService {
 
         for (Object[] row : rows) {
             if (row != null && row.length >= 2 && row[0] != null) {
-                OrderStatus status = (OrderStatus) row[0];
                 long count = ((Number) row[1]).longValue();
                 total += count;
-                switch (status) {
+                switch ((OrderStatus) row[0]) {
                     case PENDING_PAYMENT -> pending = count;
                     case PAID -> paid = count;
                     case SHIPPING -> shipping = count;

@@ -12,7 +12,6 @@ import com.omnibid.service.StorageService;
 import com.omnibid.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,9 +47,6 @@ public class UserServiceImpl implements UserService {
         if (request.address() != null) {
             user.setAddress(request.address().isBlank() ? null : request.address().trim());
         }
-        if (request.avatarUrl() != null) {
-            user.setAvatarUrl(request.avatarUrl().isBlank() ? null : request.avatarUrl().trim());
-        }
 
         User updated = userRepository.save(user);
         return mapToProfile(updated);
@@ -76,11 +72,16 @@ public class UserServiceImpl implements UserService {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Mật khẩu hiện tại không chính xác");
         }
 
+        if (request.confirmPassword() == null || !request.newPassword().equals(request.confirmPassword())) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Mật khẩu xác nhận không khớp");
+        }
+
         if (request.currentPassword().equals(request.newPassword())) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Mật khẩu mới không được trùng với mật khẩu cũ");
         }
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        user.increaseTokenVersion();
         userRepository.save(user);
     }
 
@@ -103,4 +104,3 @@ public class UserServiceImpl implements UserService {
         );
     }
 }
-

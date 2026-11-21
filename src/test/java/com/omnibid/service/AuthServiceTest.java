@@ -1,25 +1,27 @@
 package com.omnibid.service;
 
-import com.omnibid.common.AppException;
-import com.omnibid.dto.auth.AuthResponse;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.dto.auth.LoginRequest;
+import com.omnibid.dto.auth.LoginResponse;
 import com.omnibid.dto.auth.RegisterRequest;
+import com.omnibid.dto.user.UserProfileResponse;
 import com.omnibid.entity.User;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.security.JwtTokenProvider;
+import com.omnibid.security.LoginAttemptLimiter;
 import com.omnibid.service.impl.AuthServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -38,6 +40,9 @@ class AuthServiceTest {
     @Mock
     private JwtTokenProvider jwtTokenProvider;
 
+    @Mock
+    private LoginAttemptLimiter loginAttemptLimiter;
+
     @InjectMocks
     private AuthServiceImpl authService;
 
@@ -51,9 +56,9 @@ class AuthServiceTest {
                 .email("john@example.com")
                 .passwordHash("encodedPassword")
                 .phoneNumber("0123456789")
-                .address("123 Street")
                 .role(UserRole.USER)
                 .status(UserStatus.ACTIVE)
+                .tokenVersion(0)
                 .build();
     }
 
@@ -62,85 +67,99 @@ class AuthServiceTest {
         RegisterRequest request = RegisterRequest.builder()
                 .fullName("John Doe")
                 .email("john@example.com")
-                .password("rawPassword")
+                .password("Password123")
                 .phoneNumber("0123456789")
-                .address("123 Street")
                 .build();
 
         when(userRepository.existsByEmail("john@example.com")).thenReturn(false);
-        when(passwordEncoder.encode("rawPassword")).thenReturn("encodedPassword");
+        when(passwordEncoder.encode("Password123")).thenReturn("encodedPassword");
         when(userRepository.save(any(User.class))).thenReturn(sampleUser);
-        when(jwtTokenProvider.generateToken("john@example.com", "USER")).thenReturn("mockJwtToken");
 
-        AuthResponse response = authService.register(request);
+        UserProfileResponse response = authService.register(request);
 
         assertNotNull(response);
-        assertEquals("mockJwtToken", response.getAccessToken());
-        assertEquals("john@example.com", response.getEmail());
-        assertEquals("USER", response.getRole());
+        assertEquals("john@example.com", response.email());
+        assertEquals("John Doe", response.fullName());
+        assertEquals(UserRole.USER, response.role());
         verify(userRepository).save(any(User.class));
     }
 
     @Test
-    @DisplayName("D-02 Đăng ký trùng email trả 409 EMAIL_ALREADY_EXISTS")
-    void register_DuplicateEmail_ThrowsAppException() {
+    void register_DuplicateEmail_ThrowsBusinessException() {
         RegisterRequest request = RegisterRequest.builder()
+                .fullName("John Doe")
                 .email("john@example.com")
+                .password("Password123")
                 .build();
 
         when(userRepository.existsByEmail("john@example.com")).thenReturn(true);
 
-        AppException ex = assertThrows(AppException.class, () -> authService.register(request));
-        assertEquals(HttpStatus.CONFLICT, ex.getStatus());
-        assertEquals("EMAIL_ALREADY_EXISTS", ex.getCode());
+        BusinessException ex = assertThrows(BusinessException.class, () -> authService.register(request));
+        assertEquals(ErrorCode.VALIDATION_ERROR, ex.getErrorCode());
     }
 
     @Test
     void login_Success() {
         LoginRequest request = LoginRequest.builder()
                 .email("john@example.com")
-                .password("rawPassword")
+                .password("Password123")
                 .build();
 
+        when(loginAttemptLimiter.isBlocked("john@example.com", "127.0.0.1")).thenReturn(false);
         when(userRepository.findByEmail("john@example.com")).thenReturn(Optional.of(sampleUser));
-        when(passwordEncoder.matches("rawPassword", "encodedPassword")).thenReturn(true);
-        when(jwtTokenProvider.generateToken("john@example.com", "USER")).thenReturn("mockJwtToken");
+        when(passwordEncoder.matches("Password123", "encodedPassword")).thenReturn(true);
+        when(jwtTokenProvider.generateTokenWithExpiry(1L, UserRole.USER, 0))
+                .thenReturn(new JwtTokenProvider.TokenResult("mockJwtToken", Instant.now().plusSeconds(86400)));
 
-        AuthResponse response = authService.login(request);
+        LoginResponse response = authService.login(request, "127.0.0.1");
 
         assertNotNull(response);
-        assertEquals("mockJwtToken", response.getAccessToken());
-        assertEquals(1L, response.getUserId());
+        assertEquals("mockJwtToken", response.accessToken());
+        assertEquals(UserRole.USER, response.role());
+        assertEquals(1L, response.user().id());
+        verify(loginAttemptLimiter).reset("john@example.com", "127.0.0.1");
     }
 
     @Test
-    void login_WrongPassword_ThrowsAppException() {
+    void login_WrongPassword_ThrowsBusinessException() {
         LoginRequest request = LoginRequest.builder()
                 .email("john@example.com")
                 .password("wrongPassword")
                 .build();
 
+        when(loginAttemptLimiter.isBlocked("john@example.com", "127.0.0.1")).thenReturn(false);
         when(userRepository.findByEmail("john@example.com")).thenReturn(Optional.of(sampleUser));
         when(passwordEncoder.matches("wrongPassword", "encodedPassword")).thenReturn(false);
 
-        AppException ex = assertThrows(AppException.class, () -> authService.login(request));
-        assertEquals(HttpStatus.UNAUTHORIZED, ex.getStatus());
+        BusinessException ex = assertThrows(BusinessException.class, () -> authService.login(request, "127.0.0.1"));
+        assertEquals(ErrorCode.UNAUTHORIZED, ex.getErrorCode());
+        verify(loginAttemptLimiter).recordFailedAttempt("john@example.com", "127.0.0.1");
     }
 
     @Test
-    void login_BannedUser_ThrowsAppException() {
+    void login_BannedUser_ThrowsBusinessException() {
         sampleUser.setStatus(UserStatus.BANNED);
 
         LoginRequest request = LoginRequest.builder()
                 .email("john@example.com")
-                .password("rawPassword")
+                .password("Password123")
                 .build();
 
+        when(loginAttemptLimiter.isBlocked("john@example.com", "127.0.0.1")).thenReturn(false);
         when(userRepository.findByEmail("john@example.com")).thenReturn(Optional.of(sampleUser));
-        when(passwordEncoder.matches("rawPassword", "encodedPassword")).thenReturn(true);
+        when(passwordEncoder.matches("Password123", "encodedPassword")).thenReturn(true);
 
-        AppException ex = assertThrows(AppException.class, () -> authService.login(request));
-        assertEquals(HttpStatus.FORBIDDEN, ex.getStatus());
-        assertEquals("ACCOUNT_BANNED", ex.getCode());
+        BusinessException ex = assertThrows(BusinessException.class, () -> authService.login(request, "127.0.0.1"));
+        assertEquals(ErrorCode.ACCOUNT_BANNED, ex.getErrorCode());
+    }
+
+    @Test
+    void logout_Success() {
+        when(userRepository.findById(1L)).thenReturn(Optional.of(sampleUser));
+
+        authService.logout(1L);
+
+        assertEquals(1, sampleUser.getTokenVersion());
+        verify(userRepository).save(sampleUser);
     }
 }

@@ -53,14 +53,12 @@ public class AdminServiceImpl implements AdminService {
         requireAdmin(admin);
 
         if (request.status() == UserStatus.BANNED) {
-            Map<String, Object> effects = banUser(userId, request.reason(), admin.id());
-            return new UserStatusUpdateResponse(userId, UserStatus.BANNED, effects);
+            return new UserStatusUpdateResponse(userId, UserStatus.BANNED, banUser(userId, request.reason(), admin.id()));
         } else if (request.status() == UserStatus.ACTIVE) {
             unbanUserInternal(userId, request.reason(), admin.id());
             return new UserStatusUpdateResponse(userId, UserStatus.ACTIVE, Map.of());
-        } else {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Trạng thái người dùng không hợp lệ");
         }
+        throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Trạng thái người dùng không hợp lệ");
     }
 
     @Override
@@ -69,16 +67,8 @@ public class AdminServiceImpl implements AdminService {
         requireAdmin(admin);
 
         Page<User> page = userRepository.findAdminUsers(status, q, pageable);
-        return PageResponse.from(page, u -> new AdminUserResponse(
-                u.getId(),
-                u.getFullName(),
-                u.getEmail(),
-                u.getPhoneNumber(),
-                u.getAvatarUrl(),
-                u.getRole(),
-                u.getStatus(),
-                u.getCreatedAt()
-        ));
+        return PageResponse.from(page, u -> new AdminUserResponse(u.getId(), u.getFullName(), u.getEmail(),
+                u.getPhoneNumber(), u.getAvatarUrl(), u.getRole(), u.getStatus(), u.getCreatedAt()));
     }
 
     private void unbanUserInternal(Long userId, String reason, Long adminId) {
@@ -119,28 +109,19 @@ public class AdminServiceImpl implements AdminService {
         Instant now = Instant.now(clock);
 
         // Hủy các phiên mở của seller
-        List<Auction> sellerAuctions = auctionRepository.findBySellerIdAndStatusIn(
-                userId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
-        );
-        for (Auction auc : sellerAuctions) {
+        for (Auction auc : auctionRepository.findBySellerIdAndStatusIn(userId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE))) {
             auc.cancel(reason != null ? reason : "ACCOUNT_BANNED");
             auc.setClosedAt(now);
             auctionRepository.save(auc);
             broadcastAuctionUpdate(auc);
         }
-
         // Hủy các đơn hàng chưa thanh toán của user (buyer hoặc seller)
-        List<Order> unpaidOrders = orderRepository.findUnpaidOrdersByUser(userId);
-        for (Order o : unpaidOrders) {
+        for (Order o : orderRepository.findUnpaidOrdersByUser(userId)) {
             o.cancel("ACCOUNT_BANNED", now);
             orderRepository.save(o);
         }
-
         // Ẩn các sản phẩm của seller chưa bán
-        List<Product> sellerProducts = productRepository.findBySellerIdAndStatusIn(
-                userId, List.of(ProductStatus.AVAILABLE, ProductStatus.IN_AUCTION, ProductStatus.RESERVED)
-        );
-        for (Product p : sellerProducts) {
+        for (Product p : productRepository.findBySellerIdAndStatusIn(userId, List.of(ProductStatus.AVAILABLE, ProductStatus.IN_AUCTION, ProductStatus.RESERVED))) {
             p.hide();
             productRepository.save(p);
         }
@@ -173,22 +154,13 @@ public class AdminServiceImpl implements AdminService {
 
         Instant now = Instant.now(clock);
 
-        // Khóa và hủy phiên mở của sản phẩm
-        List<Auction> openAuctions = auctionRepository.findByProductIdAndStatusIn(
-                productId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
-        );
-        for (Auction auc : openAuctions) {
+        for (Auction auc : auctionRepository.findByProductIdAndStatusIn(productId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE))) {
             auc.cancel("PRODUCT_HIDDEN");
             auc.setClosedAt(now);
             auctionRepository.save(auc);
             broadcastAuctionUpdate(auc);
         }
-
-        // Hủy các đơn hàng chờ thanh toán của sản phẩm
-        List<Order> openOrders = orderRepository.findByProductIdAndStatusIn(
-                productId, List.of(OrderStatus.PENDING_PAYMENT)
-        );
-        for (Order ord : openOrders) {
+        for (Order ord : orderRepository.findByProductIdAndStatusIn(productId, List.of(OrderStatus.PENDING_PAYMENT))) {
             ord.cancel("PRODUCT_HIDDEN", now);
             orderRepository.save(ord);
         }
@@ -209,18 +181,8 @@ public class AdminServiceImpl implements AdminService {
         return PageResponse.from(page, p -> {
             String sellerName = userRepository.findById(p.getSellerId()).map(User::getFullName).orElse(null);
             String categoryName = categoryRepository.findById(p.getCategoryId()).map(Category::getName).orElse(null);
-            return new AdminProductResponse(
-                    p.getId(),
-                    p.getSellerId(),
-                    sellerName,
-                    p.getCategoryId(),
-                    categoryName,
-                    p.getTitle(),
-                    p.getDescription(),
-                    p.getCondition(),
-                    p.getStatus(),
-                    p.getCreatedAt()
-            );
+            return new AdminProductResponse(p.getId(), p.getSellerId(), sellerName, p.getCategoryId(), categoryName,
+                    p.getTitle(), p.getDescription(), p.getCondition(), p.getStatus(), p.getCreatedAt());
         });
     }
 
@@ -344,12 +306,9 @@ public class AdminServiceImpl implements AdminService {
             String productTitle = productRepository.findById(o.getProductId()).map(Product::getTitle).orElse(null);
             String paymentStatus = paymentRepository.findByOrderIdOrderByAttemptNoDesc(o.getId())
                     .stream().findFirst().map(p -> p.getStatus().name()).orElse(null);
-
-            return new AdminOrderSummaryResponse(
-                    o.getId(), o.getAuctionId(), o.getProductId(), productTitle,
-                    o.getBuyerId(), buyerName, o.getSellerId(), sellerName,
-                    o.getFinalPrice(), o.getStatus(), paymentStatus, o.getStatus().name(), o.getCreatedAt()
-            );
+            return new AdminOrderSummaryResponse(o.getId(), o.getAuctionId(), o.getProductId(), productTitle,
+                    o.getBuyerId(), buyerName, o.getSellerId(), sellerName, o.getFinalPrice(), o.getStatus(),
+                    paymentStatus, o.getStatus().name(), o.getCreatedAt());
         });
     }
 
@@ -361,79 +320,50 @@ public class AdminServiceImpl implements AdminService {
     @Transactional(readOnly = true)
     public AdminStatisticsResponse getStatistics(CurrentUser admin, LocalDateTime from, LocalDateTime to) {
         requireAdmin(admin);
-
         LocalDateTime effectiveTo = to != null ? to : LocalDateTime.now(clock);
         LocalDateTime effectiveFrom = from != null ? from : effectiveTo.minusDays(30);
+        Instant toInstant = effectiveTo.toInstant(java.time.ZoneOffset.UTC);
+        Instant fromInstant = effectiveFrom.toInstant(java.time.ZoneOffset.UTC);
 
-        Instant effectiveToInstant = effectiveTo.toInstant(java.time.ZoneOffset.UTC);
-        Instant effectiveFromInstant = effectiveFrom.toInstant(java.time.ZoneOffset.UTC);
-
-        long totalUsers = userRepository.count();
-        long activeUsers = userRepository.countByStatus(UserStatus.ACTIVE);
+        long totalUsers = userRepository.count(), activeUsers = userRepository.countByStatus(UserStatus.ACTIVE);
         long bannedUsers = userRepository.countByStatus(UserStatus.BANNED);
-        long newUsersInRange = userRepository.countByCreatedAtBetween(effectiveFromInstant, effectiveToInstant);
-        AdminStatisticsResponse.UserStats userStats = new AdminStatisticsResponse.UserStats(totalUsers, activeUsers, bannedUsers, newUsersInRange);
+        long newUsers = userRepository.countByCreatedAtBetween(fromInstant, toInstant);
+        var userStats = new AdminStatisticsResponse.UserStats(totalUsers, activeUsers, bannedUsers, newUsers);
 
         Map<String, Long> productStats = new LinkedHashMap<>();
-        for (ProductStatus ps : ProductStatus.values()) {
-            productStats.put(ps.name(), productRepository.countByStatus(ps));
-        }
+        for (ProductStatus ps : ProductStatus.values()) productStats.put(ps.name(), productRepository.countByStatus(ps));
 
-        long scheduledAuctions = auctionRepository.countByStatus(AuctionStatus.SCHEDULED);
-        long activeAuctions = auctionRepository.countByStatus(AuctionStatus.ACTIVE);
-        long endedAuctions = auctionRepository.countByStatus(AuctionStatus.ENDED);
-        long unsoldAuctions = auctionRepository.countByStatus(AuctionStatus.UNSOLD);
-        long cancelledAuctions = auctionRepository.countByStatus(AuctionStatus.CANCELLED);
-        long closedAuctionsTotal = endedAuctions + unsoldAuctions;
-        double sellThroughRate = closedAuctionsTotal > 0
-                ? Math.round(((double) endedAuctions / closedAuctionsTotal) * 100.0) / 100.0
-                : 0.0;
-        AdminStatisticsResponse.AuctionStats auctionStats = new AdminStatisticsResponse.AuctionStats(
-                scheduledAuctions, activeAuctions, endedAuctions, unsoldAuctions, cancelledAuctions, sellThroughRate
-        );
+        long sched = auctionRepository.countByStatus(AuctionStatus.SCHEDULED);
+        long active = auctionRepository.countByStatus(AuctionStatus.ACTIVE);
+        long ended = auctionRepository.countByStatus(AuctionStatus.ENDED);
+        long unsold = auctionRepository.countByStatus(AuctionStatus.UNSOLD);
+        long cancelled = auctionRepository.countByStatus(AuctionStatus.CANCELLED);
+        long closed = ended + unsold;
+        double sellThrough = closed > 0 ? Math.round(((double) ended / closed) * 100.0) / 100.0 : 0.0;
+        var auctionStats = new AdminStatisticsResponse.AuctionStats(sched, active, ended, unsold, cancelled, sellThrough);
 
-        long totalBids = bidRepository.count();
-        long bidsInRange = bidRepository.countByCreatedAtBetween(effectiveFromInstant, effectiveToInstant);
-        long totalAuctions = scheduledAuctions + activeAuctions + endedAuctions + unsoldAuctions + cancelledAuctions;
-        double avgPerAuction = totalAuctions > 0
-                ? Math.round(((double) totalBids / totalAuctions) * 10.0) / 10.0
-                : 0.0;
-        AdminStatisticsResponse.BidStats bidStats = new AdminStatisticsResponse.BidStats(totalBids, bidsInRange, avgPerAuction);
+        long totalBids = bidRepository.count(), bidsInRange = bidRepository.countByCreatedAtBetween(fromInstant, toInstant);
+        long totalAuct = sched + active + ended + unsold + cancelled;
+        double avgPerAuct = totalAuct > 0 ? Math.round(((double) totalBids / totalAuct) * 10.0) / 10.0 : 0.0;
+        var bidStats = new AdminStatisticsResponse.BidStats(totalBids, bidsInRange, avgPerAuct);
 
         Map<String, Long> orderStats = new LinkedHashMap<>();
-        for (OrderStatus os : OrderStatus.values()) {
-            orderStats.put(os.name(), orderRepository.countByStatus(os));
-        }
+        for (OrderStatus os : OrderStatus.values()) orderStats.put(os.name(), orderRepository.countByStatus(os));
 
-        BigDecimal completedTotal = orderRepository.sumCompletedRevenue(effectiveFromInstant, effectiveToInstant);
-        AdminStatisticsResponse.RevenueStats revenueStats = new AdminStatisticsResponse.RevenueStats(true, completedTotal);
+        BigDecimal rev = orderRepository.sumCompletedRevenue(fromInstant, toInstant);
+        var revenueStats = new AdminStatisticsResponse.RevenueStats(true, rev);
 
-        long successPayments = paymentRepository.countByStatus(PaymentStatus.SUCCESS);
-        long failedPayments = paymentRepository.countByStatus(PaymentStatus.FAILED);
-        long resolvedPaymentsTotal = successPayments + failedPayments;
-        double successRate = resolvedPaymentsTotal > 0
-                ? Math.round(((double) successPayments / resolvedPaymentsTotal) * 100.0) / 100.0
-                : 0.0;
-        AdminStatisticsResponse.PaymentStats paymentStats = new AdminStatisticsResponse.PaymentStats(
-                successPayments, failedPayments, 0L, successRate
-        );
+        long succPay = paymentRepository.countByStatus(PaymentStatus.SUCCESS);
+        long failPay = paymentRepository.countByStatus(PaymentStatus.FAILED);
+        long totalPay = succPay + failPay;
+        double succRate = totalPay > 0 ? Math.round(((double) succPay / totalPay) * 100.0) / 100.0 : 0.0;
+        var paymentStats = new AdminStatisticsResponse.PaymentStats(succPay, failPay, 0L, succRate);
 
         Map<String, Long> reportStats = new LinkedHashMap<>();
-        for (ReportStatus rs : ReportStatus.values()) {
-            reportStats.put(rs.name(), reportRepository.countByStatus(rs));
-        }
+        for (ReportStatus rs : ReportStatus.values()) reportStats.put(rs.name(), reportRepository.countByStatus(rs));
 
-        return new AdminStatisticsResponse(
-                new AdminStatisticsResponse.RangeDto(effectiveFrom, effectiveTo),
-                userStats,
-                productStats,
-                auctionStats,
-                bidStats,
-                orderStats,
-                revenueStats,
-                paymentStats,
-                reportStats
-        );
+        return new AdminStatisticsResponse(new AdminStatisticsResponse.RangeDto(effectiveFrom, effectiveTo),
+                userStats, productStats, auctionStats, bidStats, orderStats, revenueStats, paymentStats, reportStats);
     }
 
     // =========================================================================

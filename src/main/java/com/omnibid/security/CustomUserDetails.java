@@ -1,6 +1,7 @@
 package com.omnibid.security;
 
 import com.omnibid.entity.User;
+import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import lombok.Getter;
 import org.springframework.security.core.GrantedAuthority;
@@ -29,6 +30,22 @@ public class CustomUserDetails implements UserDetails {
 
     public String getFullName() {
         return user.getFullName();
+    }
+
+    public UserRole getRole() {
+        return user.getRole();
+    }
+
+    public UserStatus getStatus() {
+        return user.getStatus();
+    }
+
+    public int getTokenVersion() {
+        return user.getTokenVersion() != null ? user.getTokenVersion() : 0;
+    }
+
+    public boolean isBanned() {
+        return user.isBanned();
     }
 
     @Override
@@ -69,4 +86,3 @@ public class CustomUserDetails implements UserDetails {
         return user.getStatus() == UserStatus.ACTIVE;
     }
 }
-
