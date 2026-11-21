@@ -47,6 +47,12 @@ public class PaymentServiceImpl implements PaymentService {
     private final TransactionOperations transactionOperations;
     private final AppProperties.Payment paymentProperties;
     private final Clock clock;
+    private com.omnibid.common.AfterCommitExecutor afterCommitExecutor;
+
+    @Autowired
+    public void setAfterCommitExecutor(com.omnibid.common.AfterCommitExecutor afterCommitExecutor) {
+        this.afterCommitExecutor = afterCommitExecutor;
+    }
 
     @Autowired
     public PaymentServiceImpl(OrderRepository orderRepository,
@@ -161,7 +167,29 @@ public class PaymentServiceImpl implements PaymentService {
             if (saved.getStatus() == PaymentStatus.SUCCESS) {
                 order.markPaid(now);
                 orderRepository.save(order);
-                // TODO v4-phase-7: Notify buyer and seller after commit
+                Long bId = order.getBuyerId();
+                Long sId = order.getSellerId();
+                Long oId = order.getId();
+                if (afterCommitExecutor != null && notificationService != null) {
+                    afterCommitExecutor.execute(() -> {
+                        notificationService.notify(
+                                bId,
+                                NotificationType.ORDER_UPDATE,
+                                com.omnibid.common.NotificationTemplates.orderPaidBuyerTitle(oId),
+                                com.omnibid.common.NotificationTemplates.orderPaidBuyerContent(oId),
+                                "ORDER",
+                                oId
+                        );
+                        notificationService.notify(
+                                sId,
+                                NotificationType.ORDER_UPDATE,
+                                com.omnibid.common.NotificationTemplates.orderPaidSellerTitle(oId),
+                                com.omnibid.common.NotificationTemplates.orderPaidSellerContent(oId),
+                                "ORDER",
+                                oId
+                        );
+                    });
+                }
             }
 
             return toPaymentResponse(saved, order.getStatus());

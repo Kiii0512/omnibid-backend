@@ -50,6 +50,7 @@ public class BidServiceImpl implements BidService {
     private final UserRepository userRepository;
     private final WebSocketPublisher webSocketPublisher;
     private final NotificationService notificationService;
+    private final com.omnibid.common.AfterCommitExecutor afterCommitExecutor;
     private final Clock clock;
 
     private static final Set<String> ALLOWED_BID_SORTS = Set.of("createdAt", "amount");
@@ -102,6 +103,20 @@ public class BidServiceImpl implements BidService {
                 .createdAt(now)
                 .build();
         webSocketPublisher.publishAuctionEvent(event);
+
+        if (previousLeaderId != null && !previousLeaderId.equals(bidderId)) {
+            Long outbidUserId = previousLeaderId;
+            BigDecimal highestBidAmount = request.amount();
+            Long aId = auction.getId();
+            afterCommitExecutor.execute(() -> notificationService.notify(
+                    outbidUserId,
+                    com.omnibid.enums.NotificationType.OUTBID,
+                    com.omnibid.common.NotificationTemplates.outbidTitle(),
+                    com.omnibid.common.NotificationTemplates.outbidContent(aId, highestBidAmount),
+                    "AUCTION",
+                    aId
+            ));
+        }
 
         log.info("Đặt giá thành công: auctionId={}, bidderId={}, amount={}", auctionId, bidderId, request.amount());
 

@@ -1,13 +1,16 @@
 package com.omnibid.service.impl;
 
+import com.omnibid.common.AfterCommitExecutor;
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
+import com.omnibid.common.NotificationTemplates;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.report.*;
 import com.omnibid.entity.*;
 import com.omnibid.enums.*;
 import com.omnibid.repository.*;
 import com.omnibid.security.CurrentUser;
+import com.omnibid.service.NotificationService;
 import com.omnibid.service.ReportService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -31,6 +34,8 @@ public class ReportServiceImpl implements ReportService {
     private final UserRepository userRepository;
     private final AuctionRepository auctionRepository;
     private final Clock clock;
+    private final NotificationService notificationService;
+    private final AfterCommitExecutor afterCommitExecutor;
 
     @Override
     @Transactional
@@ -145,10 +150,22 @@ public class ReportServiceImpl implements ReportService {
         }
 
         Report saved = reportRepository.save(report);
-
         log.info("Admin {} {} report {}: note={}", admin.id(), request.decision(), reportId, request.note());
 
-        // TODO v4-phase-7: Notify reporter via AFTER_COMMIT
+        if (afterCommitExecutor != null && notificationService != null) {
+            String decisionStr = request.decision() == ReportDecision.RESOLVED ? "Đã xử lý" : "Bác bỏ";
+            Long reporterId = saved.getReporterId();
+            Long rId = saved.getId();
+            String note = saved.getDecisionNote();
+            afterCommitExecutor.execute(() -> notificationService.notify(
+                    reporterId,
+                    NotificationType.REPORT_RESOLVED,
+                    NotificationTemplates.reportResolvedTitle(rId),
+                    NotificationTemplates.reportResolvedContent(rId, decisionStr, note),
+                    "REPORT",
+                    rId
+            ));
+        }
 
         return new ReportResolveResponse(
                 saved.getId(),

@@ -2,6 +2,7 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
+import com.omnibid.common.SortWhitelist;
 import com.omnibid.dto.report.*;
 import com.omnibid.enums.ReportStatus;
 import com.omnibid.enums.ReportTargetType;
@@ -10,13 +11,15 @@ import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.ReportService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Set;
 
 @RestController
 @RequiredArgsConstructor
@@ -40,11 +43,10 @@ public class ReportController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false) ReportStatus status,
             @RequestParam(required = false) ReportTargetType targetType,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
+            @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable) {
 
+        SortWhitelist.validate(pageable, Set.of("createdAt", "status"));
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt"));
         PageResponse<ReportDetailResponse> response = reportService.getAdminReports(currentUser, status, targetType, pageable);
 
         return ResponseEntity.ok(ApiResponse.success(response));

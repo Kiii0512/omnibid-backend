@@ -1,23 +1,29 @@
 package com.omnibid.service;
 
+import com.omnibid.common.AfterCommitExecutor;
 import com.omnibid.common.MaskingUtils;
+import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.entity.Auction;
+import com.omnibid.entity.Order;
 import com.omnibid.entity.Product;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionEventType;
 import com.omnibid.enums.AuctionStatus;
+import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Instant;
 
@@ -32,6 +38,8 @@ public class AuctionCloser {
     private final OrderService orderService;
     private final WebSocketPublisher webSocketPublisher;
     private final Clock clock;
+    private NotificationService notificationService;
+    private AfterCommitExecutor afterCommitExecutor;
 
     public AuctionCloser(PlatformTransactionManager transactionManager,
                          AuctionRepository auctionRepository,
@@ -49,6 +57,16 @@ public class AuctionCloser {
         this.orderService = orderService;
         this.webSocketPublisher = webSocketPublisher;
         this.clock = clock;
+    }
+
+    @Autowired
+    public void setNotificationService(NotificationService notificationService) {
+        this.notificationService = notificationService;
+    }
+
+    @Autowired
+    public void setAfterCommitExecutor(AfterCommitExecutor afterCommitExecutor) {
+        this.afterCommitExecutor = afterCommitExecutor;
     }
 
     public void startOne(Long auctionId) {
@@ -105,11 +123,37 @@ public class AuctionCloser {
                 productRepository.save(product);
             }
 
-            orderService.createFromAuction(auction);
+            Order order = orderService.createFromAuction(auction, now);
 
             log.info("Chốt phiên thành công: auctionId={}, winnerId={}, finalPrice={}",
                     auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
             publishAuctionEvent(auction, AuctionEventType.AUCTION_ENDED, getMaskedBidderName(auction.getWinnerId()));
+
+            Long winnerId = auction.getHighestBidderId();
+            Long sellerId = auction.getSellerId();
+            Long aId = auction.getId();
+            BigDecimal price = auction.getCurrentPrice();
+            Instant deadline = order != null ? order.getPaymentDeadline() : null;
+            if (afterCommitExecutor != null && notificationService != null) {
+                afterCommitExecutor.execute(() -> {
+                    notificationService.notify(
+                            winnerId,
+                            NotificationType.AUCTION_RESULT,
+                            NotificationTemplates.auctionWonTitle(),
+                            NotificationTemplates.auctionWonContent(aId, price, deadline),
+                            "AUCTION",
+                            aId
+                    );
+                    notificationService.notify(
+                            sellerId,
+                            NotificationType.AUCTION_RESULT,
+                            NotificationTemplates.auctionEndedSellerTitle(),
+                            NotificationTemplates.auctionEndedSellerContent(aId, price),
+                            "AUCTION",
+                            aId
+                    );
+                });
+            }
         } else {
             auction.closeAsUnsold(now);
             auctionRepository.save(auction);
@@ -125,6 +169,19 @@ public class AuctionCloser {
             log.info("Chốt phiên UNSOLD: auctionId={}, hasBid={}, leaderActive={}, reserveMet={}",
                     auction.getId(), hasBid, leaderActive, reserveMet);
             publishAuctionEvent(auction, AuctionEventType.AUCTION_ENDED, null);
+
+            Long sellerId = auction.getSellerId();
+            Long aId = auction.getId();
+            if (afterCommitExecutor != null && notificationService != null) {
+                afterCommitExecutor.execute(() -> notificationService.notify(
+                        sellerId,
+                        NotificationType.AUCTION_RESULT,
+                        NotificationTemplates.auctionUnsoldSellerTitle(),
+                        NotificationTemplates.auctionUnsoldSellerContent(aId),
+                        "AUCTION",
+                        aId
+                ));
+            }
         }
     }
 

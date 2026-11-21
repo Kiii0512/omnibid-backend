@@ -26,6 +26,12 @@ public class OrderLifecycleSupport {
     private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
     private ReportRepository reportRepository;
+    private com.omnibid.common.AfterCommitExecutor afterCommitExecutor;
+
+    @Autowired
+    public void setAfterCommitExecutor(com.omnibid.common.AfterCommitExecutor afterCommitExecutor) {
+        this.afterCommitExecutor = afterCommitExecutor;
+    }
 
     public OrderLifecycleSupport(OrderRepository orderRepository,
                                  ProductRepository productRepository,
@@ -89,6 +95,29 @@ public class OrderLifecycleSupport {
         }
 
         // TODO v4-phase-7: Notify buyer and seller after commit
+        Long buyerId = order.getBuyerId();
+        Long sellerId = order.getSellerId();
+        Long oId = order.getId();
+        if (afterCommitExecutor != null && notificationService != null) {
+            afterCommitExecutor.execute(() -> {
+                notificationService.notify(
+                        buyerId,
+                        com.omnibid.enums.NotificationType.ORDER_UPDATE,
+                        com.omnibid.common.NotificationTemplates.orderExpiredTitle(oId),
+                        com.omnibid.common.NotificationTemplates.orderExpiredContent(oId),
+                        "ORDER",
+                        oId
+                );
+                notificationService.notify(
+                        sellerId,
+                        com.omnibid.enums.NotificationType.ORDER_UPDATE,
+                        com.omnibid.common.NotificationTemplates.orderExpiredTitle(oId),
+                        com.omnibid.common.NotificationTemplates.orderExpiredContent(oId),
+                        "ORDER",
+                        oId
+                );
+            });
+        }
         log.info("Order {} EXPIRED at {}", order.getId(), now);
     }
 
@@ -125,6 +154,29 @@ public class OrderLifecycleSupport {
         }
 
         // TODO v4-phase-7: Notify buyer and seller after commit
+        Long buyerId = order.getBuyerId();
+        Long sellerId = order.getSellerId();
+        Long oId = order.getId();
+        if (afterCommitExecutor != null && notificationService != null) {
+            afterCommitExecutor.execute(() -> {
+                notificationService.notify(
+                        buyerId,
+                        com.omnibid.enums.NotificationType.ORDER_UPDATE,
+                        com.omnibid.common.NotificationTemplates.orderAutoCompleteTitle(oId),
+                        com.omnibid.common.NotificationTemplates.orderAutoCompleteContent(oId),
+                        "ORDER",
+                        oId
+                );
+                notificationService.notify(
+                        sellerId,
+                        com.omnibid.enums.NotificationType.ORDER_UPDATE,
+                        com.omnibid.common.NotificationTemplates.orderAutoCompleteTitle(oId),
+                        com.omnibid.common.NotificationTemplates.orderAutoCompleteContent(oId),
+                        "ORDER",
+                        oId
+                );
+            });
+        }
         log.info("Order {} auto-COMPLETED at {}", order.getId(), now);
     }
 }

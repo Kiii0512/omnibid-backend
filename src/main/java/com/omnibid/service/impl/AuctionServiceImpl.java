@@ -60,6 +60,8 @@ public class AuctionServiceImpl implements AuctionService {
     private final UserRepository userRepository;
     private final AuctionCloser auctionCloser;
     private final WebSocketPublisher webSocketPublisher;
+    private final NotificationService notificationService;
+    private final com.omnibid.common.AfterCommitExecutor afterCommitExecutor;
     private final AppProperties appProperties;
     private final Clock clock;
 
@@ -244,6 +246,33 @@ public class AuctionServiceImpl implements AuctionService {
         productRepository.save(product);
 
         publishAuctionEvent(auction, AuctionEventType.AUCTION_CANCELLED);
+
+        Long seller = auction.getSellerId();
+        Long leader = auction.getHighestBidderId();
+        Long aId = auction.getId();
+        String rsn = reason;
+        if (afterCommitExecutor != null && notificationService != null) {
+            afterCommitExecutor.execute(() -> {
+                notificationService.notify(
+                        seller,
+                        com.omnibid.enums.NotificationType.AUCTION_CANCELLED,
+                        com.omnibid.common.NotificationTemplates.auctionCancelledTitle(),
+                        com.omnibid.common.NotificationTemplates.auctionCancelledContent(aId, rsn),
+                        "AUCTION",
+                        aId
+                );
+                if (leader != null && !leader.equals(seller)) {
+                    notificationService.notify(
+                            leader,
+                            com.omnibid.enums.NotificationType.AUCTION_CANCELLED,
+                            com.omnibid.common.NotificationTemplates.auctionCancelledTitle(),
+                            com.omnibid.common.NotificationTemplates.auctionCancelledContent(aId, rsn),
+                            "AUCTION",
+                            aId
+                    );
+                }
+            });
+        }
         return mapToResponse(auction);
     }
 

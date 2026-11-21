@@ -7,15 +7,16 @@ import com.omnibid.dto.notification.NotificationItem;
 import com.omnibid.dto.notification.NotificationResponse;
 import com.omnibid.entity.Notification;
 import com.omnibid.enums.NotificationType;
+import com.omnibid.enums.Role;
 import com.omnibid.event.NotificationCreated;
 import com.omnibid.repository.NotificationRepository;
+import com.omnibid.repository.UserRepository;
 import com.omnibid.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -31,10 +32,25 @@ public class NotificationServiceImpl implements NotificationService {
 
     private final NotificationRepository notificationRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final UserRepository userRepository;
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notify(Long userId, NotificationType type, String title, String content, String refType, Long refId) {
+        if (userId == null) {
+            return;
+        }
+
+        if (userRepository != null) {
+            boolean isAdmin = userRepository.findById(userId)
+                    .map(u -> u.getRole() == Role.ADMIN)
+                    .orElse(false);
+            if (isAdmin) {
+                log.debug("Skipping notification for admin user {}", userId);
+                return;
+            }
+        }
+
         Notification notification = Notification.builder()
                 .userId(userId)
                 .type(type)
@@ -51,13 +67,12 @@ public class NotificationServiceImpl implements NotificationService {
     }
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void notifyBatch(List<NotificationItem> items) {
         if (items == null || items.isEmpty()) {
             return;
         }
 
-        // Khử trùng lặp theo (userId, type, refId) theo NTF-06 / UT-NTF-06
         Map<String, NotificationItem> uniqueMap = new LinkedHashMap<>();
         for (NotificationItem item : items) {
             if (item.getUserId() == null) continue;
@@ -87,10 +102,10 @@ public class NotificationServiceImpl implements NotificationService {
     @Transactional
     public NotificationResponse markAsRead(Long userId, Long notificationId) {
         Notification notification = notificationRepository.findById(notificationId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Notification not found with id: " + notificationId));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy thông báo với id: " + notificationId));
 
         if (!notification.getUserId().equals(userId)) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "Notification not found with id: " + notificationId);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền đánh dấu thông báo này");
         }
 
         if (Boolean.TRUE.equals(notification.getIsRead())) {
@@ -111,6 +126,6 @@ public class NotificationServiceImpl implements NotificationService {
     @Override
     @Transactional
     public void markAllAsRead(Long userId) {
-        notificationRepository.markAllAsReadByUserId(userId);
+        notificationRepository.markAllAsRead(userId);
     }
 }

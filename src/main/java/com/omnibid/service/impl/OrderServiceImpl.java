@@ -44,6 +44,12 @@ public class OrderServiceImpl implements OrderService {
     private final AppProperties appProperties;
     private final Clock clock;
     private NotificationService notificationService;
+    private com.omnibid.common.AfterCommitExecutor afterCommitExecutor;
+
+    @Autowired
+    public void setAfterCommitExecutor(com.omnibid.common.AfterCommitExecutor afterCommitExecutor) {
+        this.afterCommitExecutor = afterCommitExecutor;
+    }
 
     @Autowired
     public OrderServiceImpl(OrderRepository orderRepository, ProductRepository productRepository,
@@ -176,7 +182,20 @@ public class OrderServiceImpl implements OrderService {
         order.markShipped(request != null ? request.trackingCode() : null, now, Duration.ofDays(confirmWindowDays));
         Order saved = orderRepository.save(order);
 
-        // TODO v4-phase-7: Notify buyer after commit
+        Long bId = saved.getBuyerId();
+        Long oId = saved.getId();
+        String trk = saved.getTrackingCode();
+        if (afterCommitExecutor != null && notificationService != null) {
+            afterCommitExecutor.execute(() -> notificationService.notify(
+                    bId,
+                    com.omnibid.enums.NotificationType.ORDER_UPDATE,
+                    com.omnibid.common.NotificationTemplates.orderShippedBuyerTitle(oId),
+                    com.omnibid.common.NotificationTemplates.orderShippedBuyerContent(oId, trk),
+                    "ORDER",
+                    oId
+            ));
+        }
+
         log.info("Order {} marked as SHIPPING by seller {}", id, currentUser.id());
         return OrderShipResponse.builder()
                 .id(saved.getId())
@@ -220,6 +239,18 @@ public class OrderServiceImpl implements OrderService {
         }
 
         // TODO v4-phase-7: Notify seller after commit
+        Long sId = order.getSellerId();
+        Long oId = order.getId();
+        if (afterCommitExecutor != null && notificationService != null) {
+            afterCommitExecutor.execute(() -> notificationService.notify(
+                    sId,
+                    com.omnibid.enums.NotificationType.ORDER_UPDATE,
+                    com.omnibid.common.NotificationTemplates.orderConfirmedSellerTitle(oId),
+                    com.omnibid.common.NotificationTemplates.orderConfirmedSellerContent(oId),
+                    "ORDER",
+                    oId
+            ));
+        }
         return OrderConfirmReceiptResponse.builder()
                 .id(order.getId())
                 .orderStatus(order.getStatus())

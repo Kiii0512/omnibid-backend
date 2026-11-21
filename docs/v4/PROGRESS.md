@@ -10,7 +10,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 4. Ảnh, sản phẩm, danh mục
 - [x] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [x] 6. Đơn hàng, thanh toán, giao hàng
-- [ ] 7. Thông báo, báo cáo vi phạm
+- [x] 7. Thông báo, báo cáo vi phạm
 - [ ] 8. Quản trị
 - [ ] 9. Kiểm thử, tài liệu, rà soát cuối
 
@@ -18,6 +18,33 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - test-compile ban đầu: Đạt (0 lỗi biên dịch)
 - Docker: Chưa khả dụng trong môi trường terminal hiện tại (cần lưu ý cho integration test ở phase 9)
 - Số tệp test ban đầu: 46 tệp test (`src/test/java`)
+
+## Trạng thái sau Phase 7
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+
+## Mục GAP đã xử lý (Phase 7)
+- **G1 & G2 (Hệ thống thông báo chuẩn v4 & phát sau COMMIT)**:
+  - Chuẩn hóa `NotificationType` đúng 5 giá trị: `OUTBID`, `AUCTION_RESULT`, `AUCTION_CANCELLED`, `ORDER_UPDATE`, `REPORT_RESOLVED`.
+  - Mọi thông báo được kích hoạt strictly sau COMMIT (`AfterCommitExecutor.execute` / `@TransactionalEventListener(phase = AFTER_COMMIT)`). Phương thức `NotificationService.notify` chạy độc lập với `Propagation.REQUIRES_NEW`.
+  - Không bao giờ gửi thông báo cho tài khoản ADMIN (kiểm tra `user.getRole() == Role.ADMIN` trước khi lưu/phát).
+  - Viết lại `common/NotificationTemplates` chuẩn tiếng Việt cho 5 loại thông báo: tiền tệ định dạng `520.000 ₫`, thời gian hiển thị múi giờ `Asia/Ho_Chi_Minh` (`+07:00`).
+  - Gắn sự kiện thông báo tương ứng tại:
+    + Đặt giá vượt: gửi `OUTBID` cho người dẫn đầu trước (`BidServiceImpl`).
+    + Chốt phiên: gửi `AUCTION_RESULT` cho người thắng (kèm hạn thanh toán) + người bán khi ENDED; gửi cho người bán khi UNSOLD (`AuctionCloser`).
+    + Hủy phiên: gửi `AUCTION_CANCELLED` cho người bán và người đang dẫn đầu (`AuctionServiceImpl`).
+    + Đơn hàng: gửi `ORDER_UPDATE` khi thanh toán thành công, gửi hàng, xác nhận nhận hàng, tự hoàn tất, hết hạn thanh toán (`PaymentServiceImpl`, `OrderServiceImpl`, `OrderLifecycleSupport`).
+    + Báo cáo: gửi `REPORT_RESOLVED` cho người gửi khi Admin xử lý (`ReportServiceImpl`).
+- **G3 (NotificationController)**:
+  - `GET /api/v1/notifications`: Phân trang, lọc `isRead`, `type`, sort whitelist (`createdAt,desc` mặc định, `isRead`). Trả `PageResponse<NotificationResponse>`.
+  - `POST /api/v1/notifications/{id}/read`: Kiểm tra quyền sở hữu thông báo (người khác nhận 403 `FORBIDDEN`), đã đọc vẫn trả 200 (idempotent).
+  - Gỡ bỏ `GET /notifications/unread-count` và `PATCH /notifications/read-all`.
+- **G4 & G5 (Báo cáo vi phạm v4)**:
+  - `POST /api/v1/reports`: Ít nhất 1 đối tượng (`reportedProductId`, `reportedUserId`, `reportedOrderId`), `reason` 10-1000 ký tự. Không cho tự báo cáo bản thân hoặc sản phẩm của mình (400 `VALIDATION_ERROR`). Báo cáo đơn hàng chỉ dành cho các bên tham gia đơn (403 `FORBIDDEN`). Khởi tạo trạng thái `PENDING`. Trả 201 `ReportResponse`.
+  - `GET /api/v1/admin/reports`: Admin xem danh sách báo cáo, lọc theo `status`, `targetType` (PRODUCT/USER/ORDER), phân trang, sort whitelist (`createdAt,desc` mặc định, `status`).
+  - `GET /api/v1/admin/reports/{id}`: Admin xem chi tiết báo cáo kèm tóm tắt đối tượng bị báo cáo (user, product, order).
+  - `POST /api/v1/admin/reports/{id}/resolve`: Khóa report (`findByIdForUpdate`), kiểm tra PENDING (khác trả 409 `INVALID_STATUS_TRANSITION`), `decision` (RESOLVED / REJECTED), `note` bắt buộc. Gửi thông báo `REPORT_RESOLVED` cho người gửi sau COMMIT. Không can thiệp đổi trạng thái user/product/auction/order theo BR-19.
+  - Gỡ bỏ hoàn toàn `ReportAction`, `ReportType`, `INVALID_REPORT_ACTION`.
 
 ## Trạng thái sau Phase 6
 - `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
