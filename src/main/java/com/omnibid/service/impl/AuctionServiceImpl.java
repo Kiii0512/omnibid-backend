@@ -29,6 +29,7 @@ import com.omnibid.repository.UserRepository;
 import com.omnibid.repository.specification.AuctionSpecification;
 import com.omnibid.service.AuctionCloser;
 import com.omnibid.service.AuctionService;
+import com.omnibid.service.NotificationService;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

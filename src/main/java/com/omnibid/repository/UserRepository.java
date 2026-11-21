@@ -22,9 +22,10 @@ public interface UserRepository extends JpaRepository<User, Long> {
     @Query("""
         SELECT u FROM User u
         WHERE (:status IS NULL OR u.status = :status)
+          AND (:role IS NULL OR u.role = :role)
           AND (:q IS NULL OR LOWER(u.email) LIKE LOWER(CONCAT('%', :q, '%')) OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :q, '%')))
     """)
-    Page<User> findAdminUsers(@Param("status") UserStatus status, @Param("q") String q, Pageable pageable);
+    Page<User> findAdminUsers(@Param("status") UserStatus status, @Param("role") com.omnibid.enums.UserRole role, @Param("q") String q, Pageable pageable);
 
     long countByStatus(UserStatus status);
 

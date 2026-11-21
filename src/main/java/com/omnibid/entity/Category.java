@@ -32,11 +32,4 @@ public class Category {
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;
 
-    public String getIconUrl() {
-        return icon;
-    }
-
-    public void setIconUrl(String iconUrl) {
-        this.icon = iconUrl;
-    }
 }

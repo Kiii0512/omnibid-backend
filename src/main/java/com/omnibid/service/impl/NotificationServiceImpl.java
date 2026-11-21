@@ -7,7 +7,7 @@ import com.omnibid.dto.notification.NotificationItem;
 import com.omnibid.dto.notification.NotificationResponse;
 import com.omnibid.entity.Notification;
 import com.omnibid.enums.NotificationType;
-import com.omnibid.enums.Role;
+import com.omnibid.enums.UserRole;
 import com.omnibid.event.NotificationCreated;
 import com.omnibid.repository.NotificationRepository;
 import com.omnibid.repository.UserRepository;
@@ -43,7 +43,7 @@ public class NotificationServiceImpl implements NotificationService {
 
         if (userRepository != null) {
             boolean isAdmin = userRepository.findById(userId)
-                    .map(u -> u.getRole() == Role.ADMIN)
+                    .map(u -> u.getRole() == UserRole.ADMIN)
                     .orElse(false);
             if (isAdmin) {
                 log.debug("Skipping notification for admin user {}", userId);
@@ -126,6 +126,6 @@ public class NotificationServiceImpl implements NotificationService {
     @Override
     @Transactional
     public void markAllAsRead(Long userId) {
-        notificationRepository.markAllAsRead(userId);
+        notificationRepository.markAllAsReadByUserId(userId);
     }
 }

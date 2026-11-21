@@ -61,4 +61,15 @@ public interface AuctionRepository extends JpaRepository<Auction, Long>, JpaSpec
 
     @Query("SELECT p.categoryId, COUNT(a) FROM Auction a JOIN Product p ON a.productId = p.id WHERE a.status = com.omnibid.enums.AuctionStatus.ACTIVE GROUP BY p.categoryId")
     List<Object[]> countActiveAuctionsGroupedByCategory();
+
+    @Query("""
+        SELECT a FROM Auction a JOIN Product p ON a.productId = p.id
+        WHERE (:status IS NULL OR a.status = :status)
+          AND (:sellerId IS NULL OR a.sellerId = :sellerId)
+          AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+    """)
+    Page<Auction> findAdminAuctions(@Param("status") AuctionStatus status,
+                                    @Param("sellerId") Long sellerId,
+                                    @Param("keyword") String keyword,
+                                    Pageable pageable);
 }
