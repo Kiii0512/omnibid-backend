@@ -3,7 +3,7 @@ package com.omnibid.dto.admin;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record AdminUserResponse(
         Long id,
@@ -13,5 +13,5 @@ public record AdminUserResponse(
         String avatarUrl,
         UserRole role,
         UserStatus status,
-        LocalDateTime createdAt
+        Instant createdAt
 ) {}

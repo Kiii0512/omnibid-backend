@@ -1,13 +1,12 @@
 package com.omnibid.dto.bid;
 
-import com.omnibid.enums.BidStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Data
 @Builder
@@ -25,8 +24,5 @@ public class BidResponse {
 
     private BigDecimal amount;
 
-    private BidStatus status;
-
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }
-

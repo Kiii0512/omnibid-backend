@@ -36,7 +36,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.math.BigDecimal;
 import java.time.Clock;
 import java.time.Duration;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 @Slf4j
@@ -57,7 +57,7 @@ public class AuctionServiceImpl implements AuctionService {
     @Override
     @Transactional
     public AuctionResponse createAuction(Long userId, AuctionCreateRequest request) {
-        LocalDateTime now = LocalDateTime.now(clock);
+        Instant now = Instant.now(clock);
         if (request.getStartTime().isBefore(now)) {
             throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời gian bắt đầu không được ở quá khứ");
         }
@@ -204,7 +204,7 @@ public class AuctionServiceImpl implements AuctionService {
             auction.setReservePrice(request.reservePrice());
         }
 
-        LocalDateTime now = LocalDateTime.now(clock);
+        Instant now = Instant.now(clock);
         if (request.startTime() != null) {
             if (!isScheduled) {
                 throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Cannot change start time of an ACTIVE auction");
@@ -269,7 +269,7 @@ public class AuctionServiceImpl implements AuctionService {
 
     @Override
     public void startScheduledAuctions() {
-        LocalDateTime now = LocalDateTime.now(clock);
+        Instant now = Instant.now(clock);
         List<Long> scheduledIds = auctionRepository.findIdsByStatusAndStartTimeLessThanEqual(AuctionStatus.SCHEDULED, now);
 
         for (Long id : scheduledIds) {
@@ -283,7 +283,7 @@ public class AuctionServiceImpl implements AuctionService {
 
     @Override
     public void closeEndedAuctions() {
-        LocalDateTime now = LocalDateTime.now(clock);
+        Instant now = Instant.now(clock);
         List<Long> activeIds = auctionRepository.findIdsByStatusAndEndTimeLessThanEqual(AuctionStatus.ACTIVE, now);
 
         for (Long id : activeIds) {

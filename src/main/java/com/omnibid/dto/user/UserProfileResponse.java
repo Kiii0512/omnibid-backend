@@ -3,7 +3,7 @@ package com.omnibid.dto.user;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record UserProfileResponse(
         Long id,
@@ -14,6 +14,5 @@ public record UserProfileResponse(
         String address,
         UserRole role,
         UserStatus status,
-        LocalDateTime createdAt
+        Instant createdAt
 ) {}
-

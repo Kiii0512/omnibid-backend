@@ -208,23 +208,4 @@ public class AdminController {
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }
-
-    @GetMapping("/audit-logs")
-    public ResponseEntity<ApiResponse<PageResponse<AuditLogResponse>>> getAuditLogs(
-            @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestParam(required = false) Long adminId,
-            @RequestParam(required = false) String action,
-            @RequestParam(required = false) String targetType,
-            @RequestParam(required = false) Long targetId,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        PageResponse<AuditLogResponse> response = adminService.getAuditLogs(currentUser, adminId, action, targetType, targetId, from, to, pageable);
-
-        return ResponseEntity.ok(ApiResponse.success(response));
-    }
 }

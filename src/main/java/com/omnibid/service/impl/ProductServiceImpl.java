@@ -67,7 +67,7 @@ public class ProductServiceImpl implements ProductService {
     @Transactional(readOnly = true)
     public ProductResponse getProductById(Long id) {
         Product product = productRepository.findById(id)
-                .filter(p -> p.getStatus() != ProductStatus.REMOVED)
+                .filter(p -> p.getStatus() != ProductStatus.HIDDEN)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found with id: " + id));
         return mapToResponse(product);
     }
@@ -112,8 +112,7 @@ public class ProductServiceImpl implements ProductService {
         }
 
         if (auctionRepository.existsByProductId(id)) {
-            product.setStatus(ProductStatus.REMOVED);
-            productRepository.save(product);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Không thể xóa sản phẩm đã từng lên phiên");
         } else {
             List<ProductImage> images = productImageRepository.findByProductId(id);
             for (ProductImage img : images) {

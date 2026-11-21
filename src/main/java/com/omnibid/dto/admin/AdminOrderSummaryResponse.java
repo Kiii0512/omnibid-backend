@@ -3,7 +3,7 @@ package com.omnibid.dto.admin;
 import com.omnibid.enums.OrderStatus;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record AdminOrderSummaryResponse(
         Long id,
@@ -18,5 +18,5 @@ public record AdminOrderSummaryResponse(
         OrderStatus status,
         String paymentStatus,
         String shipmentStatus,
-        LocalDateTime createdAt
+        Instant createdAt
 ) {}

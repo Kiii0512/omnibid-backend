@@ -1,7 +1,7 @@
 package com.omnibid.gateway;
 
 import com.omnibid.enums.PaymentMethod;
-import com.omnibid.enums.SimulatedOutcome;
+import com.omnibid.enums.PaymentStatus;
 
 import java.math.BigDecimal;
 
@@ -9,7 +9,7 @@ public interface MockPaymentGateway {
 
     GatewayResult charge(GatewayRequest request);
 
-    record GatewayRequest(String transactionRef, BigDecimal amount, PaymentMethod method, SimulatedOutcome hint) {}
+    record GatewayRequest(Long orderId, BigDecimal amount, PaymentMethod method, PaymentStatus hint) {}
 
-    record GatewayResult(SimulatedOutcome outcome, String failureReason) {}
+    record GatewayResult(PaymentStatus outcome, String failureReason) {}
 }

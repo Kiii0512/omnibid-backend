@@ -1,12 +1,11 @@
 package com.omnibid.dto.product;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record ProductImageResponse(
         Long id,
         String imageUrl,
         String publicId,
         Boolean isPrimary,
-        LocalDateTime createdAt
+        Instant createdAt
 ) {}
-

@@ -1,8 +1,11 @@
 package com.omnibid.service;
 
 import com.omnibid.common.PageResponse;
+import com.omnibid.dto.order.OrderConfirmReceiptResponse;
 import com.omnibid.dto.order.OrderDetailResponse;
 import com.omnibid.dto.order.OrderResponse;
+import com.omnibid.dto.order.OrderUserSummaryResponse;
+import com.omnibid.dto.order.ShipOrderRequest;
 import com.omnibid.dto.order.ShippingInfoRequest;
 import com.omnibid.entity.Auction;
 import com.omnibid.entity.Order;
@@ -20,13 +23,15 @@ public interface OrderService {
 
     OrderDetailResponse updateShippingInfo(CurrentUser currentUser, Long id, ShippingInfoRequest request);
 
-    com.omnibid.dto.order.OrderUserSummaryResponse getOrderSummary(CurrentUser currentUser);
+    OrderUserSummaryResponse getOrderSummary(CurrentUser currentUser);
 
     void sendPaymentReminders();
 
     void expireOverdueOrders();
 
-    com.omnibid.dto.order.OrderConfirmReceiptResponse confirmReceipt(CurrentUser currentUser, Long id);
+    OrderDetailResponse shipOrder(CurrentUser currentUser, Long id, ShipOrderRequest request);
+
+    OrderConfirmReceiptResponse confirmReceipt(CurrentUser currentUser, Long id);
 
     void autoCompleteOrders();
 }

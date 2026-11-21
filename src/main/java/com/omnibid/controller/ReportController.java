@@ -2,13 +2,9 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
-import com.omnibid.dto.report.ReportDetailResponse;
-import com.omnibid.dto.report.ReportRequest;
-import com.omnibid.dto.report.ReportResolveRequest;
-import com.omnibid.dto.report.ReportResolveResponse;
-import com.omnibid.dto.report.ReportResponse;
+import com.omnibid.dto.report.*;
 import com.omnibid.enums.ReportStatus;
-import com.omnibid.enums.ReportType;
+import com.omnibid.enums.ReportTargetType;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.ReportService;
@@ -42,19 +38,30 @@ public class ReportController {
     @GetMapping("/api/v1/admin/reports")
     public ResponseEntity<ApiResponse<PageResponse<ReportDetailResponse>>> getAdminReports(
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestParam(required = false, defaultValue = "PENDING") ReportStatus status,
-            @RequestParam(required = false) ReportType reportType,
+            @RequestParam(required = false) ReportStatus status,
+            @RequestParam(required = false) ReportTargetType targetType,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
         CurrentUser currentUser = CurrentUser.of(userDetails);
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt"));
-        PageResponse<ReportDetailResponse> response = reportService.getAdminReports(currentUser, status, reportType, pageable);
+        PageResponse<ReportDetailResponse> response = reportService.getAdminReports(currentUser, status, targetType, pageable);
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    @PatchMapping("/api/v1/admin/reports/{id}/resolve")
+    @GetMapping("/api/v1/admin/reports/{id}")
+    public ResponseEntity<ApiResponse<ReportDetailResponse>> getAdminReportById(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long id) {
+
+        CurrentUser currentUser = CurrentUser.of(userDetails);
+        ReportDetailResponse response = reportService.getReportById(currentUser, id);
+
+        return ResponseEntity.ok(ApiResponse.success(response));
+    }
+
+    @PostMapping("/api/v1/admin/reports/{id}/resolve")
     public ResponseEntity<ApiResponse<ReportResolveResponse>> resolveReport(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long id,

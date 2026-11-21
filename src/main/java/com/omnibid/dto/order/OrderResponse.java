@@ -8,7 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Data
 @Builder
@@ -24,6 +24,6 @@ public class OrderResponse {
     private BigDecimal finalPrice;
     private OrderStatus status;
     private String viewerRole;
-    private LocalDateTime paymentDeadline;
-    private LocalDateTime createdAt;
+    private Instant paymentDeadline;
+    private Instant createdAt;
 }

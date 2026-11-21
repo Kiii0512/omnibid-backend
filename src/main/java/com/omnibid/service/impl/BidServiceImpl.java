@@ -3,15 +3,13 @@ package com.omnibid.service.impl;
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
 import com.omnibid.common.MaskingUtils;
-import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.bid.BidRequest;
 import com.omnibid.dto.bid.BidResponse;
+import com.omnibid.dto.bid.BidSummaryResponse;
 import com.omnibid.entity.Auction;
 import com.omnibid.entity.Bid;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
-import com.omnibid.enums.BidStatus;
-import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
@@ -22,17 +20,16 @@ import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -50,8 +47,6 @@ public class BidServiceImpl implements BidService {
     @Override
     @Transactional
     public BidResponse placeBid(Long bidderId, BidRequest request) {
-        // REPEATABLE READ snapshot isolation: Phải khóa Auction (SELECT ... FOR UPDATE)
-        // là lệnh đầu tiên trong transaction để tránh đọc snapshot cũ.
         Auction auction = auctionRepository.findByIdForUpdate(request.getAuctionId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + request.getAuctionId()));
 
@@ -62,7 +57,7 @@ public class BidServiceImpl implements BidService {
             throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
         }
 
-        LocalDateTime now = LocalDateTime.now(clock);
+        Instant now = Instant.now(clock);
         if (auction.getStatus() != AuctionStatus.ACTIVE || !now.isBefore(auction.getEndTime())) {
             throw new BusinessException(ErrorCode.AUCTION_NOT_ACTIVE, "Auction is not active or has ended");
         }
@@ -75,39 +70,12 @@ public class BidServiceImpl implements BidService {
             throw new BusinessException(ErrorCode.ALREADY_LEADING, "You are already the highest bidder");
         }
 
-        BigDecimal minRequiredAmount;
-        if (auction.getBidCount() == null || auction.getBidCount() == 0) {
-            minRequiredAmount = auction.getStartPrice();
-        } else {
-            minRequiredAmount = auction.getCurrentPrice().add(auction.getBidIncrement());
-        }
-
+        BigDecimal minRequiredAmount = auction.minNextBid();
         if (request.getAmount().compareTo(minRequiredAmount) < 0) {
             throw new BusinessException(ErrorCode.BID_TOO_LOW, "Bid amount must be at least " + minRequiredAmount, Map.of("minNextBid", minRequiredAmount));
         }
 
-        List<Bid> currentLeadingBids = bidRepository.findByAuctionIdAndStatusForUpdate(
-                auction.getId(), BidStatus.LEADING);
-        for (Bid leadingBid : currentLeadingBids) {
-            leadingBid.setStatus(BidStatus.OUTBID);
-            bidRepository.save(leadingBid);
-
-            notificationService.notify(
-                    leadingBid.getBidderId(),
-                    NotificationType.OUTBID,
-                    NotificationTemplates.outbidTitle(),
-                    NotificationTemplates.outbidContent(auction.getId(), request.getAmount()),
-                    "AUCTION",
-                    auction.getId()
-            );
-        }
-
-        Bid newBid = Bid.builder()
-                .auctionId(auction.getId())
-                .bidderId(bidderId)
-                .amount(request.getAmount())
-                .status(BidStatus.LEADING)
-                .build();
+        Bid newBid = auction.placeBid(bidderId, request.getAmount(), now);
         Bid savedBid;
         try {
             savedBid = bidRepository.save(newBid);
@@ -118,14 +86,9 @@ public class BidServiceImpl implements BidService {
             throw new BusinessException(ErrorCode.BID_TOO_LOW, "Mức giá đã có người đặt", Map.of("minNextBid", nextMin));
         }
 
-        if ("BANNED".equals(userRepository.checkCurrentStatus(bidderId))) {
-            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
-        }
-
-        auction.setCurrentPrice(request.getAmount());
-        auction.setHighestBidderId(bidderId);
-        auction.setBidCount((auction.getBidCount() == null ? 0 : auction.getBidCount()) + 1);
         auctionRepository.save(auction);
+
+        // TODO v4-phase-7: Notify OUTBID to previous highest bidder via AFTER_COMMIT
 
         String maskedBidderName = MaskingUtils.maskName(bidder.getFullName());
 
@@ -135,7 +98,6 @@ public class BidServiceImpl implements BidService {
                 .bidderId(savedBid.getBidderId())
                 .bidderName(maskedBidderName)
                 .amount(savedBid.getAmount())
-                .status(savedBid.getStatus())
                 .createdAt(savedBid.getCreatedAt() != null ? savedBid.getCreatedAt() : now)
                 .build();
 
@@ -156,21 +118,16 @@ public class BidServiceImpl implements BidService {
 
     @Override
     @Transactional(readOnly = true)
-    public com.omnibid.common.PageResponse<BidResponse> getMyBids(Long bidderId, org.springframework.data.domain.Pageable pageable) {
-        org.springframework.data.domain.Page<Bid> page = bidRepository.findByBidderIdOrderByCreatedAtDesc(bidderId, pageable);
+    public com.omnibid.common.PageResponse<BidResponse> getMyBids(Long bidderId, Pageable pageable) {
+        Page<Bid> page = bidRepository.findByBidderIdOrderByCreatedAtDesc(bidderId, pageable);
         return com.omnibid.common.PageResponse.from(page, this::mapToResponse);
     }
 
     @Override
     @Transactional(readOnly = true)
-    public com.omnibid.dto.bid.BidSummaryResponse getMyBidSummary(Long bidderId) {
+    public BidSummaryResponse getMyBidSummary(Long bidderId) {
         long totalBids = bidRepository.countByBidderId(bidderId);
-        long participatingAuctions = bidRepository.countDistinctAuctionsByBidderId(bidderId);
-        long leadingAuctions = bidRepository.countDistinctLeadingAuctionsByBidderId(bidderId);
-        long wonAuctions = bidRepository.countByBidderIdAndStatus(bidderId, BidStatus.WON);
-        long lostAuctions = bidRepository.countByBidderIdAndStatus(bidderId, BidStatus.NOT_WON);
-
-        return new com.omnibid.dto.bid.BidSummaryResponse(totalBids, participatingAuctions, leadingAuctions, wonAuctions, lostAuctions);
+        return new BidSummaryResponse(totalBids, 0L, 0L, 0L, 0L);
     }
 
     private BidResponse mapToResponse(Bid bid) {
@@ -185,7 +142,6 @@ public class BidServiceImpl implements BidService {
                 .bidderId(bid.getBidderId())
                 .bidderName(maskedName)
                 .amount(bid.getAmount())
-                .status(bid.getStatus())
                 .createdAt(bid.getCreatedAt())
                 .build();
     }

@@ -8,5 +8,8 @@ public record CategoryRequest(
         @Size(max = 100, message = "name must be at most 100 characters")
         String name,
 
-        String iconUrl
+        String slug,
+
+        @Size(max = 50, message = "icon must be at most 50 characters")
+        String icon
 ) {}

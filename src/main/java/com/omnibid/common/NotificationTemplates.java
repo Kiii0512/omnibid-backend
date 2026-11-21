@@ -37,7 +37,7 @@ public final class NotificationTemplates {
         return "Bạn vừa bị vượt giá tại phiên #" + auctionId + ". Mức giá cao nhất hiện tại là " + formatCurrency(currentPrice) + ".";
     }
 
-    // N-02: AUCTION_WON
+    // AUCTION_RESULT
     public static String auctionWonTitle() {
         return "Bạn đã thắng phiên đấu giá";
     }
@@ -46,7 +46,7 @@ public final class NotificationTemplates {
         return "Chúc mừng bạn đã thắng phiên đấu giá #" + auctionId + " với mức giá " + formatCurrency(finalPrice) + ".";
     }
 
-    // N-03: ORDER_CREATED
+    // ORDER_UPDATE (created)
     public static String orderCreatedTitle(Long orderId, LocalDateTime deadline) {
         return "Đơn hàng #" + orderId + ": thanh toán trước " + formatDateTime(deadline);
     }
@@ -90,7 +90,7 @@ public final class NotificationTemplates {
         return "Bạn đang dẫn đầu phiên #" + auctionId + " với mức giá " + formatCurrency(currentPrice) + ".";
     }
 
-    // N-07: PAYMENT_REMINDER
+    // ORDER_UPDATE (reminder)
     public static String paymentReminderTitle(String timeLeft, Long orderId) {
         return "Còn " + timeLeft + " để thanh toán đơn #" + orderId;
     }
@@ -99,7 +99,7 @@ public final class NotificationTemplates {
         return "Vui lòng hoàn tất thanh toán cho đơn hàng #" + orderId + " trước " + formatDateTime(deadline) + " để tránh bị hủy đơn.";
     }
 
-    // N-08 & N-09: PAYMENT_RESULT
+    // ORDER_UPDATE (payment)
     public static String paymentSuccessBuyerTitle() {
         return "Thanh toán thành công";
     }
@@ -124,7 +124,7 @@ public final class NotificationTemplates {
         return "Thanh toán cho đơn hàng #" + orderId + " thất bại. Lý do: " + (reason != null ? reason : "Giao dịch không thành công") + ".";
     }
 
-    // N-10: SHIPMENT_UPDATE
+    // ORDER_UPDATE (shipment)
     public static String shipmentUpdateTitle(String trackingCode, String status) {
         return "Vận đơn " + trackingCode + ": " + status;
     }
@@ -196,13 +196,9 @@ public final class NotificationTemplates {
         }
         return switch (type) {
             case OUTBID -> new TemplateResult(outbidTitle(), outbidContent(1L, BigDecimal.valueOf(100000)));
-            case AUCTION_WON -> new TemplateResult(auctionWonTitle(), auctionWonContent(1L, BigDecimal.valueOf(100000)));
-            case AUCTION_ENDED -> new TemplateResult(auctionEndedSellerTitle(), auctionEndedSellerContent(1L, BigDecimal.valueOf(100000)));
-            case ORDER_CREATED -> new TemplateResult(orderCreatedTitle(1L, LocalDateTime.now()), orderCreatedContent(1L, 1L, LocalDateTime.now()));
-            case PAYMENT_RESULT -> new TemplateResult(paymentSuccessBuyerTitle(), paymentSuccessBuyerContent(1L, "SIM-000001"));
-            case SHIPMENT_UPDATE -> new TemplateResult(shipmentUpdateTitle("SIM-000001", "DELIVERED"), shipmentUpdateContent("SIM-000001", 1L, "DELIVERED", LocalDateTime.now()));
+            case AUCTION_RESULT -> new TemplateResult("Kết quả đấu giá", "Phiên đấu giá #1 đã kết thúc");
+            case AUCTION_CANCELLED -> new TemplateResult(auctionCancelledTitle("Hủy phiên"), auctionCancelledContent(1L, "Hủy phiên"));
             case ORDER_UPDATE -> new TemplateResult(orderCompletedTitle(1L), orderCompletedContent(1L));
-            case PAYMENT_REMINDER -> new TemplateResult(paymentReminderTitle("2 giờ", 1L), paymentReminderContent(1L, LocalDateTime.now()));
             case REPORT_RESOLVED -> new TemplateResult(reportResolvedTitle(1L, "Chấp nhận"), reportResolvedContent(1L, "Đã xử lý vi phạm"));
         };
     }

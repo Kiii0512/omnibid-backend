@@ -4,13 +4,11 @@ import com.omnibid.common.ApiResponse;
 import com.omnibid.dto.payment.PaymentHistoryResponse;
 import com.omnibid.dto.payment.PaymentRequest;
 import com.omnibid.dto.payment.PaymentResponse;
-import com.omnibid.enums.PaymentStatus;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.PaymentService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -33,10 +31,6 @@ public class PaymentController {
 
         CurrentUser currentUser = CurrentUser.of(userDetails);
         PaymentResponse response = paymentService.pay(currentUser, orderId, idempotencyKey, request);
-
-        if (response.getStatus() == PaymentStatus.PENDING) {
-            return ResponseEntity.status(HttpStatus.ACCEPTED).body(ApiResponse.success(response));
-        }
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }

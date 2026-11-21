@@ -5,15 +5,11 @@ import com.omnibid.common.ErrorCode;
 import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.PageResponse;
 import com.omnibid.config.AppProperties;
-import com.omnibid.dto.order.OrderDetailResponse;
-import com.omnibid.dto.order.OrderResponse;
-import com.omnibid.dto.order.ShippingInfoRequest;
+import com.omnibid.dto.order.*;
 import com.omnibid.entity.*;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.enums.ReportStatus;
-import com.omnibid.enums.ReportType;
-import com.omnibid.enums.ShipmentStatus;
 import com.omnibid.repository.*;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.OrderAccessPolicy;
@@ -23,12 +19,12 @@ import com.omnibid.service.OrderService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,7 +37,6 @@ public class OrderServiceImpl implements OrderService {
     private final ProductImageRepository productImageRepository;
     private final UserRepository userRepository;
     private final PaymentRepository paymentRepository;
-    private final ShipmentRepository shipmentRepository;
     private final ReportRepository reportRepository;
     private final OrderAccessPolicy orderAccessPolicy;
     private final OrderLifecycleSupport orderLifecycleSupport;
@@ -55,7 +50,6 @@ public class OrderServiceImpl implements OrderService {
                             ProductImageRepository productImageRepository,
                             UserRepository userRepository,
                             PaymentRepository paymentRepository,
-                            ShipmentRepository shipmentRepository,
                             ReportRepository reportRepository,
                             OrderAccessPolicy orderAccessPolicy,
                             OrderLifecycleSupport orderLifecycleSupport,
@@ -67,7 +61,6 @@ public class OrderServiceImpl implements OrderService {
         this.productImageRepository = productImageRepository;
         this.userRepository = userRepository;
         this.paymentRepository = paymentRepository;
-        this.shipmentRepository = shipmentRepository;
         this.reportRepository = reportRepository;
         this.orderAccessPolicy = orderAccessPolicy;
         this.orderLifecycleSupport = orderLifecycleSupport;
@@ -81,18 +74,16 @@ public class OrderServiceImpl implements OrderService {
                             ProductImageRepository productImageRepository,
                             UserRepository userRepository,
                             PaymentRepository paymentRepository,
-                            ShipmentRepository shipmentRepository,
                             ReportRepository reportRepository,
                             OrderAccessPolicy orderAccessPolicy,
                             OrderLifecycleSupport orderLifecycleSupport,
                             AppProperties appProperties,
                             Clock clock) {
-        this(orderRepository, productRepository, productImageRepository, userRepository, paymentRepository, shipmentRepository, reportRepository, orderAccessPolicy, orderLifecycleSupport, appProperties, clock, null);
+        this(orderRepository, productRepository, productImageRepository, userRepository, paymentRepository, reportRepository, orderAccessPolicy, orderLifecycleSupport, appProperties, clock, null);
     }
 
-    // Overloaded constructor for tests only testing createFromAuction
     public OrderServiceImpl(OrderRepository orderRepository, AppProperties appProperties) {
-        this(orderRepository, null, null, null, null, null, null, null, null, appProperties, Clock.systemDefaultZone());
+        this(orderRepository, null, null, null, null, null, null, null, appProperties, Clock.systemUTC());
     }
 
     @Override
@@ -101,7 +92,7 @@ public class OrderServiceImpl implements OrderService {
         return orderRepository.findByAuctionId(auction.getId())
                 .orElseGet(() -> {
                     int deadlineHours = appProperties.getOrder().getPaymentDeadlineHours();
-                    LocalDateTime closedAt = auction.getClosedAt() != null ? auction.getClosedAt() : LocalDateTime.now(clock);
+                    Instant closedAt = auction.getClosedAt() != null ? auction.getClosedAt() : Instant.now(clock);
                     Order order = Order.builder()
                             .auctionId(auction.getId())
                             .productId(auction.getProductId())
@@ -109,7 +100,7 @@ public class OrderServiceImpl implements OrderService {
                             .buyerId(auction.getWinnerId())
                             .finalPrice(auction.getFinalPrice())
                             .status(OrderStatus.PENDING_PAYMENT)
-                            .paymentDeadline(closedAt.plusHours(deadlineHours))
+                            .paymentDeadline(closedAt.plus(Duration.ofHours(deadlineHours)))
                             .build();
                     log.info("Creating order for auction {}: buyer={}, amount={}",
                             auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
@@ -137,7 +128,6 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(readOnly = true)
     public OrderDetailResponse getOrderById(CurrentUser currentUser, Long id) {
-        // Thứ tự kiểm tra: tồn tại -> quyền -> trạng thái
         Order order = orderRepository.findById(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
 
@@ -149,27 +139,16 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public OrderDetailResponse updateShippingInfo(CurrentUser currentUser, Long id, ShippingInfoRequest request) {
-        // Bước 1: Khóa Order bằng findByIdForUpdate là lệnh đầu tiên trong transaction
         Order order = orderRepository.findByIdForUpdate(id)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
 
-        // Bước 2: Kiểm tra quyền (chỉ buyer)
         orderAccessPolicy.requireBuyer(order, currentUser);
 
-        // Bước 3: Kiểm tra trạng thái
         if (order.getStatus() == OrderStatus.CANCELLED) {
             throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Order has been cancelled");
         }
 
-        if (order.getStatus() == OrderStatus.PENDING_PAYMENT) {
-            // Hợp lệ
-        } else if (order.getStatus() == OrderStatus.PAID) {
-            // Chỉ cho phép khi Shipment chưa PICKED_UP (D-04)
-            Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElse(null);
-            if (shipment != null && shipment.getStatus() != ShipmentStatus.CREATED) {
-                throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot update shipping info after shipment is picked up");
-            }
-        } else {
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT && order.getStatus() != OrderStatus.PAID) {
             throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot update shipping info when order is " + order.getStatus());
         }
 
@@ -181,31 +160,80 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
+    @Transactional
+    public OrderDetailResponse shipOrder(CurrentUser currentUser, Long id, ShipOrderRequest request) {
+        Order order = orderRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
+
+        orderAccessPolicy.requireSeller(order, currentUser);
+
+        if (order.getStatus() != OrderStatus.PAID) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng phải ở trạng thái PAID để giao hàng");
+        }
+
+        int confirmWindowDays = appProperties.getOrder().getConfirmDeadlineDays();
+        Instant now = Instant.now(clock);
+        order.markShipped(request != null ? request.trackingCode() : null, now, Duration.ofDays(confirmWindowDays));
+        Order saved = orderRepository.save(order);
+
+        // TODO v4-phase-7: Notify buyer after commit
+        log.info("Order {} marked as SHIPPING by seller {}", id, currentUser.id());
+        return mapToOrderDetailResponse(saved, currentUser);
+    }
+
+    @Override
+    @Transactional
+    public OrderConfirmReceiptResponse confirmReceipt(CurrentUser currentUser, Long id) {
+        Order order = orderRepository.findByIdForUpdate(id).orElseThrow(
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
+        );
+
+        orderAccessPolicy.requireBuyer(order, currentUser);
+
+        if (order.getStatus() == OrderStatus.CANCELLED) {
+            throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Đơn hàng đã bị hủy");
+        }
+
+        if (order.getStatus() == OrderStatus.COMPLETED) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng đã hoàn tất");
+        }
+
+        if (order.getStatus() != OrderStatus.SHIPPING) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng chưa ở trạng thái đang giao hàng");
+        }
+
+        if (reportRepository != null && reportRepository.existsByReportedOrderIdAndStatus(order.getId(), ReportStatus.PENDING)) {
+            throw new BusinessException(ErrorCode.CONFLICT, "Đơn hàng đang có khiếu nại chờ xử lý");
+        }
+
+        Instant now = Instant.now(clock);
+        order.confirmReceived(now);
+        orderRepository.save(order);
+
+        Product product = productRepository != null
+                ? productRepository.findByIdForUpdate(order.getProductId()).orElse(null)
+                : null;
+        if (product != null) {
+            product.markSold();
+            productRepository.save(product);
+        }
+
+        // TODO v4-phase-7: Notify seller after commit
+        return OrderConfirmReceiptResponse.builder()
+                .id(order.getId())
+                .orderStatus(order.getStatus())
+                .productStatus(product != null ? product.getStatus() : ProductStatus.SOLD)
+                .build();
+    }
+
+    @Override
     public void sendPaymentReminders() {
-        LocalDateTime now = LocalDateTime.now(clock);
-
-        List<Order> orders24h = orderRepository.findOrdersFor24hReminder(now.plusHours(24), now);
-        for (Order o : orders24h) {
-            try {
-                orderLifecycleSupport.sendReminder24h(o.getId(), now);
-            } catch (Exception ex) {
-                log.error("Failed to send 24h reminder for order {}", o.getId(), ex);
-            }
-        }
-
-        List<Order> orders2h = orderRepository.findOrdersFor2hReminder(now.plusHours(2), now);
-        for (Order o : orders2h) {
-            try {
-                orderLifecycleSupport.sendReminder2h(o.getId(), now);
-            } catch (Exception ex) {
-                log.error("Failed to send 2h reminder for order {}", o.getId(), ex);
-            }
-        }
+        // v4: Nhắc hạn thanh toán đã được gỡ bỏ khỏi đặc tả
     }
 
     @Override
     public void expireOverdueOrders() {
-        LocalDateTime now = LocalDateTime.now(clock);
+        Instant now = Instant.now(clock);
         List<Order> overdueOrders = orderRepository.findByStatusAndPaymentDeadlineLessThanEqual(
                 OrderStatus.PENDING_PAYMENT, now
         );
@@ -215,6 +243,19 @@ public class OrderServiceImpl implements OrderService {
                 orderLifecycleSupport.expireOne(o.getId(), now);
             } catch (Exception ex) {
                 log.error("Failed to expire order {}", o.getId(), ex);
+            }
+        }
+    }
+
+    @Override
+    public void autoCompleteOrders() {
+        Instant now = Instant.now(clock);
+        List<Order> overdueOrders = orderRepository.findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, now);
+        for (Order o : overdueOrders) {
+            try {
+                orderLifecycleSupport.autoCompleteOne(o.getId(), now);
+            } catch (Exception ex) {
+                log.error("Failed to auto-complete order id={}", o.getId(), ex);
             }
         }
     }
@@ -276,8 +317,6 @@ public class OrderServiceImpl implements OrderService {
         }
 
         if (userRepository != null) {
-            userRepository.findById(order.getSellerId()).ifPresent(s -> {
-            });
             User seller = userRepository.findById(order.getSellerId()).orElse(null);
             if (seller != null) {
                 sellerName = MaskingUtils.maskName(seller.getFullName());
@@ -301,28 +340,13 @@ public class OrderServiceImpl implements OrderService {
             }
         }
 
-        OrderDetailResponse.ShipmentSummaryDto shipmentDto = null;
-        Shipment shipment = null;
-        if (shipmentRepository != null) {
-            shipment = shipmentRepository.findByOrderId(order.getId()).orElse(null);
-            if (shipment != null) {
-                shipmentDto = OrderDetailResponse.ShipmentSummaryDto.builder()
-                        .id(shipment.getId())
-                        .trackingCode(shipment.getTrackingCode())
-                        .status(shipment.getStatus())
-                        .build();
-            }
-        }
-
         boolean hasPendingComplaint = false;
         if (reportRepository != null) {
-            hasPendingComplaint = reportRepository.existsByOrderIdAndReportTypeAndStatus(
-                    order.getId(), ReportType.COMPLAINT, ReportStatus.PENDING
-            );
+            hasPendingComplaint = reportRepository.existsByReportedOrderIdAndStatus(order.getId(), ReportStatus.PENDING);
         }
 
         String viewerRole = determineViewerRole(order, currentUser);
-        List<String> allowedActions = calculateAllowedActions(order, viewerRole, shipment, hasPendingComplaint);
+        List<String> allowedActions = calculateAllowedActions(order, viewerRole, hasPendingComplaint);
 
         return OrderDetailResponse.builder()
                 .id(order.getId())
@@ -338,15 +362,15 @@ public class OrderServiceImpl implements OrderService {
                 .status(order.getStatus())
                 .shippingAddress(order.getShippingAddress())
                 .phoneNumber(order.getPhoneNumber())
+                .trackingCode(order.getTrackingCode())
                 .paymentDeadline(order.getPaymentDeadline())
                 .paidAt(order.getPaidAt())
-                .deliveredAt(order.getDeliveredAt())
+                .shippedAt(order.getShippedAt())
                 .confirmDeadline(order.getConfirmDeadline())
                 .completedAt(order.getCompletedAt())
                 .cancelledAt(order.getCancelledAt())
                 .cancelReason(order.getCancelReason())
                 .latestPayment(latestPaymentDto)
-                .shipment(shipmentDto)
                 .hasPendingComplaint(hasPendingComplaint)
                 .viewerRole(viewerRole)
                 .allowedActions(allowedActions)
@@ -364,109 +388,26 @@ public class OrderServiceImpl implements OrderService {
         return "ADMIN";
     }
 
-    @Override
-    @Transactional
-    public com.omnibid.dto.order.OrderConfirmReceiptResponse confirmReceipt(CurrentUser currentUser, Long id) {
-        // REPEATABLE READ snapshot isolation: Phải khóa Order (SELECT ... FOR UPDATE)
-        // là lệnh đầu tiên trong transaction để không tạo snapshot cũ trước khi khóa.
-        Order order = orderRepository.findByIdForUpdate(id).orElseThrow(
-                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
-        );
-
-        if (!order.getBuyerId().equals(currentUser.id())) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "Chỉ người mua mới được phép xác nhận nhận hàng");
-        }
-
-        if (order.getStatus() == OrderStatus.CANCELLED) {
-            throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Đơn hàng đã bị hủy");
-        }
-
-        if (order.getStatus() == OrderStatus.COMPLETED) {
-            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng đã hoàn tất");
-        }
-
-        if (order.getStatus() != OrderStatus.SHIPPING) {
-            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng chưa ở trạng thái đang giao hàng");
-        }
-
-        Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElse(null);
-        if (shipment == null || shipment.getStatus() != ShipmentStatus.DELIVERED) {
-            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Vận đơn chưa ở trạng thái DELIVERED");
-        }
-
-        if (reportRepository.existsByOrderIdAndReportTypeAndStatus(order.getId(), ReportType.COMPLAINT, ReportStatus.PENDING)) {
-            throw new BusinessException(ErrorCode.CONFLICT, "Đơn hàng đang có khiếu nại chờ xử lý");
-        }
-
-        LocalDateTime now = LocalDateTime.now(clock);
-        order.confirmReceived(now);
-        orderRepository.save(order);
-
-        Product product = productRepository.findByIdForUpdate(order.getProductId())
-                .or(() -> productRepository.findById(order.getProductId()))
-                .orElse(null);
-        if (product != null) {
-            product.setStatus(ProductStatus.SOLD);
-            productRepository.save(product);
-        }
-
-        if (notificationService != null) {
-            notificationService.notify(
-                    order.getSellerId(),
-                    com.omnibid.enums.NotificationType.ORDER_UPDATE,
-                    com.omnibid.common.NotificationTemplates.orderReceiptConfirmedTitle(),
-                    com.omnibid.common.NotificationTemplates.orderReceiptConfirmedContent(order.getId()),
-                    "ORDER",
-                    order.getId()
-            );
-        }
-
-        return com.omnibid.dto.order.OrderConfirmReceiptResponse.builder()
-                .id(order.getId())
-                .orderStatus(order.getStatus())
-                .productStatus(product != null ? product.getStatus() : ProductStatus.SOLD)
-                .build();
-    }
-
-    @Override
-    public void autoCompleteOrders() {
-        LocalDateTime now = LocalDateTime.now(clock);
-        List<Order> overdueOrders = orderRepository.findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, now);
-        for (Order o : overdueOrders) {
-            try {
-                orderLifecycleSupport.autoCompleteOne(o.getId(), now);
-            } catch (Exception ex) {
-                log.error("Failed to auto-complete order id={}", o.getId(), ex);
-            }
-        }
-    }
-
-    private List<String> calculateAllowedActions(Order order, String viewerRole, Shipment shipment, boolean hasPendingComplaint) {
+    private List<String> calculateAllowedActions(Order order, String viewerRole, boolean hasPendingComplaint) {
         List<String> actions = new ArrayList<>();
         if ("BUYER".equals(viewerRole)) {
             if (order.getStatus() == OrderStatus.PENDING_PAYMENT) {
                 actions.add("PAY");
                 actions.add("UPDATE_SHIPPING_INFO");
             } else if (order.getStatus() == OrderStatus.PAID) {
-                if (shipment == null || shipment.getStatus() == ShipmentStatus.CREATED) {
-                    actions.add("UPDATE_SHIPPING_INFO");
-                }
+                actions.add("UPDATE_SHIPPING_INFO");
                 if (!hasPendingComplaint) {
                     actions.add("COMPLAIN");
                 }
             } else if (order.getStatus() == OrderStatus.SHIPPING) {
-                if (shipment != null && shipment.getStatus() == ShipmentStatus.DELIVERED) {
-                    if (!hasPendingComplaint) {
-                        actions.add("CONFIRM_RECEIPT");
-                        actions.add("COMPLAIN");
-                    }
-                } else if (!hasPendingComplaint) {
+                if (!hasPendingComplaint) {
+                    actions.add("CONFIRM_RECEIPT");
                     actions.add("COMPLAIN");
                 }
             }
         } else if ("SELLER".equals(viewerRole)) {
-            if (order.getStatus() == OrderStatus.PAID || order.getStatus() == OrderStatus.SHIPPING) {
-                actions.add("UPDATE_SHIPMENT");
+            if (order.getStatus() == OrderStatus.PAID) {
+                actions.add("SHIP");
             }
         }
         return actions;
@@ -474,16 +415,14 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional(readOnly = true)
-    public com.omnibid.dto.order.OrderUserSummaryResponse getOrderSummary(CurrentUser currentUser) {
+    public OrderUserSummaryResponse getOrderSummary(CurrentUser currentUser) {
         Long userId = currentUser.id();
-
         var buyerSummary = buildRoleSummary(orderRepository.countByBuyerIdGroupByStatus(userId));
         var sellerSummary = buildRoleSummary(orderRepository.countBySellerIdGroupByStatus(userId));
-
-        return new com.omnibid.dto.order.OrderUserSummaryResponse(buyerSummary, sellerSummary);
+        return new OrderUserSummaryResponse(buyerSummary, sellerSummary);
     }
 
-    private com.omnibid.dto.order.OrderUserSummaryResponse.RoleSummary buildRoleSummary(List<Object[]> rows) {
+    private OrderUserSummaryResponse.RoleSummary buildRoleSummary(List<Object[]> rows) {
         long total = 0;
         long pending = 0;
         long paid = 0;
@@ -508,7 +447,7 @@ public class OrderServiceImpl implements OrderService {
             }
         }
 
-        return new com.omnibid.dto.order.OrderUserSummaryResponse.RoleSummary(
+        return new OrderUserSummaryResponse.RoleSummary(
                 total, pending, paid, shipping, completed, cancelled, expired
         );
     }

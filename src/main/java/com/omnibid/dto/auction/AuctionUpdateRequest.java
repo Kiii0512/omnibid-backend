@@ -3,7 +3,7 @@ package com.omnibid.dto.auction;
 import jakarta.validation.constraints.DecimalMin;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record AuctionUpdateRequest(
         @DecimalMin(value = "0.01", message = "Start price must be greater than 0")
@@ -14,8 +14,7 @@ public record AuctionUpdateRequest(
 
         BigDecimal reservePrice,
 
-        LocalDateTime startTime,
+        Instant startTime,
 
-        LocalDateTime endTime
+        Instant endTime
 ) {}
-

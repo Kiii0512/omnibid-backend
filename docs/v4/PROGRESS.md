@@ -5,7 +5,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 ## Phase
 - [x] 0. Chuẩn bị
 - [x] 1. Nền tảng (Flyway, cấu hình, UTC/JSON, ApiResponse/ErrorCode)
-- [ ] 2. Mô hình miền (entity, enum, repository, gỡ tính năng thừa)
+- [x] 2. Mô hình miền (entity, enum, repository, gỡ tính năng thừa)
 - [ ] 3. Bảo mật, xác thực
 - [ ] 4. Ảnh, sản phẩm, danh mục
 - [ ] 5. Phiên, đặt giá, chốt phiên, WebSocket
@@ -18,6 +18,22 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - test-compile ban đầu: Đạt (0 lỗi biên dịch)
 - Docker: Chưa khả dụng trong môi trường terminal hiện tại (cần lưu ý cho integration test ở phase 9)
 - Số tệp test ban đầu: 46 tệp test (`src/test/java`)
+
+## Trạng thái sau Phase 2
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
+- `verify-v4.ps1`: Mục `10 entity tables match` đạt [OK].
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+- Số test còn lỗi biên dịch: Các test tham chiếu Watchlist, Shipment, AuditLog (sẽ được viết lại/chuẩn hóa hoàn toàn ở Phase 9).
+
+## Mục GAP đã xử lý (Phase 2)
+- **A2 & E1**: Chuẩn hóa toàn bộ 10 Entity khớp 10 bảng V1 Flyway (`Instant` cho thời gian, `BigDecimal` scale 0 cho `DECIMAL(15,0)`).
+- **A3**: Bổ sung `tokenVersion` (int) và `avatarPublicId` vào `User`; các domain helper methods `ban()`, `unban()`, `increaseTokenVersion()`, `isBanned()`.
+- **E6 & G1**: Gỡ bỏ hoàn toàn 3 tính năng không có trong v4: Watchlist, Shipment/ShipmentEvent, AuditLog/AuditService (thay bằng SLF4J `log.info(...)`).
+- **D5**: Gỡ bỏ trạng thái `Bid` (`BidStatus`), `Bid` trở thành bất biến và phi trạng thái.
+- **F7**: Gỡ bỏ `ReportAction` và `ReportType`, đổi sang `ReportTargetType` (PRODUCT/USER/ORDER), `ReportDecision` (RESOLVED/REJECTED), `reportedOrderId`.
+- **Enums v4**: Chuẩn hóa toàn bộ enums theo đặc tả: `ProductCondition`, `ProductStatus`, `PaymentMethod`, `PaymentStatus`, `NotificationType`, `ReportStatus`, `ReportTargetType`, `ReportDecision`, `ReserveStatus`, `AuctionEventType`.
+- **Repositories**: Xóa các query khoá `users` (`findByIdForUpdate` trên User); thêm `PESSIMISTIC_WRITE` (timeout 5000ms) trên `AuctionRepository`, `OrderRepository`, `ProductRepository`.
+- **Entity Domain Methods**: Thêm các phương thức chuyển trạng thái nghiệp vụ chuẩn trên Entity (`Auction.activate/placeBid/closeAsEnded/closeAsUnsold/cancel`, `Order.markPaid/markShipped/confirmReceived/autoComplete/expire/cancel`, `Product.markInAuction/reserve/release/markSold/hide`).
 
 ## Trạng thái sau Phase 1
 - `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch)

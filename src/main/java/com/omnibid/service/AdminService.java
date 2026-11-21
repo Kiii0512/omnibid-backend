@@ -44,8 +44,6 @@ public interface AdminService {
 
     Map<String, Object> cancelOrder(Long orderId, String reason, Long adminId);
 
-    // Statistics & Audit logs (ADM-14, 15)
+    // Statistics (ADM-14)
     AdminStatisticsResponse getStatistics(CurrentUser admin, LocalDateTime from, LocalDateTime to);
-
-    PageResponse<AuditLogResponse> getAuditLogs(CurrentUser admin, Long adminId, String action, String targetType, Long targetId, LocalDateTime from, LocalDateTime to, Pageable pageable);
 }

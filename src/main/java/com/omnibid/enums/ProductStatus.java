@@ -5,6 +5,5 @@ public enum ProductStatus {
     IN_AUCTION,
     RESERVED,
     SOLD,
-    HIDDEN,
-    REMOVED
+    HIDDEN
 }

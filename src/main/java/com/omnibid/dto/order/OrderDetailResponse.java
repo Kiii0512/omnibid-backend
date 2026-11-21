@@ -3,14 +3,13 @@ package com.omnibid.dto.order;
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.PaymentStatus;
-import com.omnibid.enums.ShipmentStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 @Data
@@ -32,15 +31,15 @@ public class OrderDetailResponse {
     private OrderStatus status;
     private String shippingAddress;
     private String phoneNumber;
-    private LocalDateTime paymentDeadline;
-    private LocalDateTime paidAt;
-    private LocalDateTime deliveredAt;
-    private LocalDateTime confirmDeadline;
-    private LocalDateTime completedAt;
-    private LocalDateTime cancelledAt;
+    private String trackingCode;
+    private Instant paymentDeadline;
+    private Instant paidAt;
+    private Instant shippedAt;
+    private Instant confirmDeadline;
+    private Instant completedAt;
+    private Instant cancelledAt;
     private String cancelReason;
     private PaymentSummaryDto latestPayment;
-    private ShipmentSummaryDto shipment;
     private Boolean hasPendingComplaint;
     private String viewerRole;
     private List<String> allowedActions;
@@ -55,16 +54,5 @@ public class OrderDetailResponse {
         private Integer attemptNo;
         private PaymentStatus status;
         private String failureReason;
-    }
-
-    @Data
-    @Builder
-    @NoArgsConstructor
-    @AllArgsConstructor
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ShipmentSummaryDto {
-        private Long id;
-        private String trackingCode;
-        private ShipmentStatus status;
     }
 }

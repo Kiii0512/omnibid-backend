@@ -2,9 +2,7 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
-import com.omnibid.dto.order.OrderDetailResponse;
-import com.omnibid.dto.order.OrderResponse;
-import com.omnibid.dto.order.ShippingInfoRequest;
+import com.omnibid.dto.order.*;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.CustomUserDetails;
@@ -42,11 +40,11 @@ public class OrderController {
     }
 
     @GetMapping("/summary")
-    public ApiResponse<com.omnibid.dto.order.OrderUserSummaryResponse> getOrderSummary(
+    public ApiResponse<OrderUserSummaryResponse> getOrderSummary(
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        com.omnibid.dto.order.OrderUserSummaryResponse summary = orderService.getOrderSummary(currentUser);
+        OrderUserSummaryResponse summary = orderService.getOrderSummary(currentUser);
         return ApiResponse.success(summary);
     }
 
@@ -71,13 +69,24 @@ public class OrderController {
         return ApiResponse.success(result);
     }
 
-    @PatchMapping("/{id}/confirm-receipt")
-    public ApiResponse<com.omnibid.dto.order.OrderConfirmReceiptResponse> confirmReceipt(
+    @PostMapping("/{id}/ship")
+    public ApiResponse<OrderDetailResponse> shipOrder(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long id,
+            @Valid @RequestBody(required = false) ShipOrderRequest request
+    ) {
+        CurrentUser currentUser = CurrentUser.of(userDetails);
+        OrderDetailResponse result = orderService.shipOrder(currentUser, id, request);
+        return ApiResponse.success(result);
+    }
+
+    @PostMapping("/{id}/confirm-receipt")
+    public ApiResponse<OrderConfirmReceiptResponse> confirmReceipt(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long id
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        com.omnibid.dto.order.OrderConfirmReceiptResponse result = orderService.confirmReceipt(currentUser, id);
+        OrderConfirmReceiptResponse result = orderService.confirmReceipt(currentUser, id);
         return ApiResponse.success("Order completed", result);
     }
 }

@@ -4,7 +4,7 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Entity
 @Table(name = "categories")
@@ -14,6 +14,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 public class Category {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -24,10 +25,18 @@ public class Category {
     @Column(nullable = false, unique = true, length = 100)
     private String slug;
 
-    @Column(name = "icon_url", length = 500)
-    private String iconUrl;
+    @Column(length = 50)
+    private String icon;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
+
+    public String getIconUrl() {
+        return icon;
+    }
+
+    public void setIconUrl(String iconUrl) {
+        this.icon = iconUrl;
+    }
 }

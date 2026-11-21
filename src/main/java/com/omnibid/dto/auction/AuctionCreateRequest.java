@@ -9,7 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Data
 @Builder
@@ -32,17 +32,16 @@ public class AuctionCreateRequest {
     private BigDecimal reservePrice;
 
     @NotNull(message = "Start time cannot be null")
-    private LocalDateTime startTime;
+    private Instant startTime;
 
     @NotNull(message = "End time cannot be null")
-    private LocalDateTime endTime;
+    private Instant endTime;
 
     @AssertTrue(message = "Start time must be before end time")
-    public boolean isStartTimeBeforeEndTime() {
+    public boolean isStartBeforeEnd() {
         if (startTime == null || endTime == null) {
             return true;
         }
         return startTime.isBefore(endTime);
     }
 }
-

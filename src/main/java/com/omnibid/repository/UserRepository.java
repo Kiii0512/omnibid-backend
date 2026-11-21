@@ -2,16 +2,14 @@ package com.omnibid.repository;
 
 import com.omnibid.entity.User;
 import com.omnibid.enums.UserStatus;
-import jakarta.persistence.LockModeType;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Optional;
 
 @Repository
@@ -20,13 +18,6 @@ public interface UserRepository extends JpaRepository<User, Long> {
     Optional<User> findByEmail(String email);
 
     boolean existsByEmail(String email);
-
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @Query("SELECT u FROM User u WHERE u.id = :id")
-    Optional<User> findByIdForUpdate(@Param("id") Long id);
-
-    @Query(value = "SELECT status FROM users WHERE id = :id LOCK IN SHARE MODE", nativeQuery = true)
-    String checkCurrentStatus(@Param("id") Long id);
 
     @Query("""
         SELECT u FROM User u
@@ -37,5 +28,5 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     long countByStatus(UserStatus status);
 
-    long countByCreatedAtBetween(LocalDateTime from, LocalDateTime to);
+    long countByCreatedAtBetween(Instant from, Instant to);
 }

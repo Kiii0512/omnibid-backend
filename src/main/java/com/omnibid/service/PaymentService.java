@@ -3,8 +3,9 @@ package com.omnibid.service;
 import com.omnibid.dto.payment.PaymentHistoryResponse;
 import com.omnibid.dto.payment.PaymentRequest;
 import com.omnibid.dto.payment.PaymentResponse;
-import com.omnibid.enums.SimulatedOutcome;
 import com.omnibid.security.CurrentUser;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
@@ -14,7 +15,5 @@ public interface PaymentService {
 
     List<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId);
 
-    void timeoutStalePayments();
-
-    PaymentResponse finalizePayment(String transactionRef, SimulatedOutcome outcome, String failureReason);
+    Page<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId, Pageable pageable);
 }

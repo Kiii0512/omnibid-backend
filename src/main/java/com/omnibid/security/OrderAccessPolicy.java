@@ -21,6 +21,12 @@ public class OrderAccessPolicy {
         }
     }
 
+    public void requireSeller(Order o, CurrentUser u) {
+        if (!u.id().equals(o.getSellerId())) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Only the seller can do this");
+        }
+    }
+
     public void requireSellerOrAdmin(Order o, CurrentUser u) {
         if (!(u.isAdmin() || u.id().equals(o.getSellerId()))) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "Only the seller or an admin can do this");

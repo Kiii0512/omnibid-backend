@@ -7,7 +7,7 @@ import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Entity
 @Table(name = "payments")
@@ -17,6 +17,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 public class Payment {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -28,30 +29,28 @@ public class Payment {
     @Builder.Default
     private Integer attemptNo = 1;
 
-    @Column(nullable = false, precision = 12, scale = 2)
+    @Column(nullable = false, precision = 15, scale = 0)
     private BigDecimal amount;
 
     @Enumerated(EnumType.STRING)
     @Column(name = "method", nullable = false)
-    private PaymentMethod method;
+    @Builder.Default
+    private PaymentMethod method = PaymentMethod.MOCK_CARD;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    @Builder.Default
-    private PaymentStatus status = PaymentStatus.PENDING;
+    private PaymentStatus status;
 
     @Column(name = "idempotency_key", nullable = false, length = 64)
     private String idempotencyKey;
-
-    @Column(name = "transaction_ref", nullable = false, length = 64)
-    private String transactionRef;
 
     @Column(name = "failure_reason")
     private String failureReason;
 
     @Column(name = "paid_at")
-    private LocalDateTime paidAt;
+    private Instant paidAt;
 
+    @CreationTimestamp
     @Column(name = "created_at", updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 }

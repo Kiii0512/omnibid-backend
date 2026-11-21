@@ -7,10 +7,10 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
-import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Duration;
+import java.time.Instant;
 
 @Entity
 @Table(name = "orders")
@@ -20,6 +20,7 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 @Builder
 public class Order {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
@@ -36,7 +37,7 @@ public class Order {
     @Column(name = "buyer_id", nullable = false)
     private Long buyerId;
 
-    @Column(name = "final_price", nullable = false, precision = 12, scale = 2)
+    @Column(name = "final_price", nullable = false, precision = 15, scale = 0)
     private BigDecimal finalPrice;
 
     @Column(name = "shipping_address")
@@ -51,90 +52,89 @@ public class Order {
     private OrderStatus status = OrderStatus.PENDING_PAYMENT;
 
     @Column(name = "payment_deadline", nullable = false)
-    private LocalDateTime paymentDeadline;
+    private Instant paymentDeadline;
 
     @Column(name = "paid_at")
-    private LocalDateTime paidAt;
+    private Instant paidAt;
 
-    @Column(name = "delivered_at")
-    private LocalDateTime deliveredAt;
+    @Column(name = "tracking_code", length = 50)
+    private String trackingCode;
+
+    @Column(name = "shipped_at")
+    private Instant shippedAt;
 
     @Column(name = "confirm_deadline")
-    private LocalDateTime confirmDeadline;
-
-    @Column(name = "reminder_24h_sent_at")
-    private LocalDateTime reminder24hSentAt;
-
-    @Column(name = "reminder_2h_sent_at")
-    private LocalDateTime reminder2hSentAt;
+    private Instant confirmDeadline;
 
     @Column(name = "completed_at")
-    private LocalDateTime completedAt;
+    private Instant completedAt;
 
     @Column(name = "cancelled_at")
-    private LocalDateTime cancelledAt;
+    private Instant cancelledAt;
 
     @Column(name = "cancel_reason")
     private String cancelReason;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     @UpdateTimestamp
     @Column(name = "updated_at")
-    private LocalDateTime updatedAt;
+    private Instant updatedAt;
 
-    public void markPaid(LocalDateTime now) {
+    public void markPaid(Instant now) {
         require(status == OrderStatus.PENDING_PAYMENT, "markPaid");
         this.status = OrderStatus.PAID;
         this.paidAt = now;
     }
 
-    public void markShipping() {
-        require(status == OrderStatus.PAID, "markShipping");
+    public void markShipped(String trackingCode, Instant now, Duration confirmWindow) {
+        require(status == OrderStatus.PAID, "markShipped");
         this.status = OrderStatus.SHIPPING;
+        this.trackingCode = trackingCode;
+        this.shippedAt = now;
+        this.confirmDeadline = (confirmWindow != null && now != null) ? now.plus(confirmWindow) : (now != null ? now.plus(Duration.ofDays(7)) : null);
     }
 
-    public void markDelivered(LocalDateTime now, LocalDateTime confirmDeadline) {
-        require(status == OrderStatus.SHIPPING, "markDelivered");
-        this.deliveredAt = now;
-        this.confirmDeadline = confirmDeadline;
-    }
-
-    public void confirmReceived(LocalDateTime now) {
+    public void confirmReceived(Instant now) {
         require(status == OrderStatus.SHIPPING, "confirmReceived");
         this.status = OrderStatus.COMPLETED;
         this.completedAt = now;
     }
 
-    public void autoComplete(LocalDateTime now) {
+    public void autoComplete(Instant now) {
         require(status == OrderStatus.SHIPPING, "autoComplete");
         this.status = OrderStatus.COMPLETED;
         this.completedAt = now;
     }
 
-    public void complete(LocalDateTime now) {
-        require(status == OrderStatus.PAID || status == OrderStatus.SHIPPING, "complete");
-        this.status = OrderStatus.COMPLETED;
-        this.completedAt = now;
-    }
-
-    public void expire() {
+    public void expire(Instant now) {
         require(status == OrderStatus.PENDING_PAYMENT, "expire");
         this.status = OrderStatus.EXPIRED;
     }
 
-    public void cancel(String reason, LocalDateTime now) {
-        require(status == OrderStatus.PENDING_PAYMENT || status == OrderStatus.PAID || status == OrderStatus.SHIPPING, "cancel");
+    public void expire() {
+        expire(Instant.now());
+    }
+
+    public void cancel(String reason, Instant now) {
+        require(status == OrderStatus.PENDING_PAYMENT, "cancel");
         this.status = OrderStatus.CANCELLED;
         this.cancelReason = reason;
         this.cancelledAt = now;
     }
 
+    public boolean isPaymentOverdue(Instant now) {
+        return status == OrderStatus.PENDING_PAYMENT && paymentDeadline != null && now.isAfter(paymentDeadline);
+    }
+
     private void require(boolean condition, String operation) {
         if (!condition) {
-            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot " + operation + " when order is " + status);
+            throw new BusinessException(
+                    ErrorCode.INVALID_STATUS_TRANSITION,
+                    "Cannot " + operation + " when order is " + status
+            );
         }
     }
 }
