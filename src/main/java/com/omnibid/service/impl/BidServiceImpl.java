@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.bid.BidRequest;
@@ -52,26 +53,26 @@ public class BidServiceImpl implements BidService {
         // REPEATABLE READ snapshot isolation: Phải khóa Auction (SELECT ... FOR UPDATE)
         // là lệnh đầu tiên trong transaction để tránh đọc snapshot cũ.
         Auction auction = auctionRepository.findByIdForUpdate(request.getAuctionId())
-                .orElseThrow(() -> new AppException("AUCTION_NOT_FOUND", "Auction not found with id: " + request.getAuctionId(), HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + request.getAuctionId()));
 
         User bidder = userRepository.findById(bidderId)
-                .orElseThrow(() -> new AppException("USER_NOT_FOUND", "User not found with id: " + bidderId, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found with id: " + bidderId));
 
         if (bidder.getStatus() == UserStatus.BANNED) {
-            throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
         }
 
         LocalDateTime now = LocalDateTime.now(clock);
         if (auction.getStatus() != AuctionStatus.ACTIVE || !now.isBefore(auction.getEndTime())) {
-            throw new AppException("AUCTION_NOT_ACTIVE", "Auction is not active or has ended", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.AUCTION_NOT_ACTIVE, "Auction is not active or has ended");
         }
 
         if (auction.getSellerId().equals(bidderId)) {
-            throw new AppException("SELF_BID_NOT_ALLOWED", "Seller cannot bid on their own auction", HttpStatus.UNPROCESSABLE_ENTITY);
+            throw new BusinessException(ErrorCode.SELF_BID_NOT_ALLOWED, "Seller cannot bid on their own auction");
         }
 
         if (bidderId.equals(auction.getHighestBidderId())) {
-            throw new AppException("ALREADY_LEADING", "You are already the highest bidder", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.ALREADY_LEADING, "You are already the highest bidder");
         }
 
         BigDecimal minRequiredAmount;
@@ -82,7 +83,7 @@ public class BidServiceImpl implements BidService {
         }
 
         if (request.getAmount().compareTo(minRequiredAmount) < 0) {
-            throw new AppException("BID_TOO_LOW", "Bid amount must be at least " + minRequiredAmount, HttpStatus.CONFLICT, Map.of("minNextBid", minRequiredAmount));
+            throw new BusinessException(ErrorCode.BID_TOO_LOW, "Bid amount must be at least " + minRequiredAmount, Map.of("minNextBid", minRequiredAmount));
         }
 
         List<Bid> currentLeadingBids = bidRepository.findByAuctionIdAndStatusForUpdate(
@@ -114,11 +115,11 @@ public class BidServiceImpl implements BidService {
         } catch (DataIntegrityViolationException dive) {
             log.warn("Duplicate bid amount detected at DB level: auctionId={}, amount={}", auction.getId(), request.getAmount());
             BigDecimal nextMin = request.getAmount().add(auction.getBidIncrement());
-            throw new AppException("BID_TOO_LOW", "Mức giá đã có người đặt", HttpStatus.CONFLICT, Map.of("minNextBid", nextMin));
+            throw new BusinessException(ErrorCode.BID_TOO_LOW, "Mức giá đã có người đặt", Map.of("minNextBid", nextMin));
         }
 
         if ("BANNED".equals(userRepository.checkCurrentStatus(bidderId))) {
-            throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
         }
 
         auction.setCurrentPrice(request.getAmount());

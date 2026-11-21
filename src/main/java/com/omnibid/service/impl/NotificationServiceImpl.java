@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.notification.NotificationItem;
 import com.omnibid.dto.notification.NotificationResponse;
@@ -86,10 +87,10 @@ public class NotificationServiceImpl implements NotificationService {
     @Transactional
     public NotificationResponse markAsRead(Long userId, Long notificationId) {
         Notification notification = notificationRepository.findById(notificationId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Notification not found with id: " + notificationId, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Notification not found with id: " + notificationId));
 
         if (!notification.getUserId().equals(userId)) {
-            throw new AppException("NOT_FOUND", "Notification not found with id: " + notificationId, HttpStatus.NOT_FOUND);
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Notification not found with id: " + notificationId);
         }
 
         if (Boolean.TRUE.equals(notification.getIsRead())) {

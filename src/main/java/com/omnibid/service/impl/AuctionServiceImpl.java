@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.auction.AuctionCreateRequest;
 import com.omnibid.dto.auction.AuctionResponse;
@@ -58,33 +59,33 @@ public class AuctionServiceImpl implements AuctionService {
     public AuctionResponse createAuction(Long userId, AuctionCreateRequest request) {
         LocalDateTime now = LocalDateTime.now(clock);
         if (request.getStartTime().isBefore(now)) {
-            throw new AppException("VALIDATION_ERROR", "Thời gian bắt đầu không được ở quá khứ", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời gian bắt đầu không được ở quá khứ");
         }
         if (!request.getStartTime().isBefore(request.getEndTime())) {
-            throw new AppException("VALIDATION_ERROR", "Start time must be before end time", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Start time must be before end time");
         }
         Duration duration = Duration.between(request.getStartTime(), request.getEndTime());
         if (duration.toMinutes() < 60 || duration.toDays() > 30) {
-            throw new AppException("VALIDATION_ERROR", "Thời lượng phiên phải từ 1 giờ đến 30 ngày", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Thời lượng phiên phải từ 1 giờ đến 30 ngày");
         }
         if (request.getReservePrice() != null && request.getReservePrice().compareTo(request.getStartPrice()) < 0) {
-            throw new AppException("VALIDATION_ERROR", "Giá sàn phải lớn hơn hoặc bằng giá khởi điểm", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Giá sàn phải lớn hơn hoặc bằng giá khởi điểm");
         }
 
         Product product = productRepository.findByIdForUpdate(request.getProductId())
                 .or(() -> productRepository.findById(request.getProductId()))
-                .orElseThrow(() -> new AppException("Product not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
 
         if (!product.getSellerId().equals(userId)) {
-            throw new AppException("You do not own this product", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "You do not own this product");
         }
 
         if (product.getStatus() != ProductStatus.AVAILABLE) {
-            throw new AppException("PRODUCT_NOT_AVAILABLE", "Product is not available for auction", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.PRODUCT_NOT_AVAILABLE, "Product is not available for auction");
         }
 
         if (productImageRepository.countByProductId(product.getId()) < 1) {
-            throw new AppException("BAD_REQUEST", "Product must have at least one image before creating an auction", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Product must have at least one image before creating an auction");
         }
 
         product.setStatus(ProductStatus.IN_AUCTION);
@@ -128,7 +129,7 @@ public class AuctionServiceImpl implements AuctionService {
     @Transactional(readOnly = true)
     public AuctionResponse getAuctionById(Long id, Long currentUserId) {
         Auction auction = auctionRepository.findById(id)
-                .orElseThrow(() -> new AppException("Auction not found with id: " + id, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + id));
         return auctionMapper.toAuctionResponse(auction, currentUserId);
     }
 
@@ -167,21 +168,21 @@ public class AuctionServiceImpl implements AuctionService {
     @Transactional
     public AuctionResponse updateAuction(Long sellerId, Long auctionId, AuctionUpdateRequest request) {
         Auction auction = auctionRepository.findById(auctionId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Auction not found with id: " + auctionId, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + auctionId));
 
         if (!auction.getSellerId().equals(sellerId)) {
-            throw new AppException("FORBIDDEN", "You do not own this auction", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "You do not own this auction");
         }
 
         boolean isScheduled = auction.getStatus() == AuctionStatus.SCHEDULED;
         boolean isActiveNoBids = auction.getStatus() == AuctionStatus.ACTIVE && (auction.getBidCount() == null || auction.getBidCount() == 0);
         if (!isScheduled && !isActiveNoBids) {
-            throw new AppException("CANNOT_UPDATE", "Auction can only be updated when SCHEDULED or ACTIVE with no bids", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.PRODUCT_NOT_EDITABLE, "Auction can only be updated when SCHEDULED or ACTIVE with no bids");
         }
 
         if (request.startPrice() != null) {
             if (request.startPrice().compareTo(BigDecimal.ZERO) <= 0) {
-                throw new AppException("VALIDATION_ERROR", "Start price must be greater than 0", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Start price must be greater than 0");
             }
             auction.setStartPrice(request.startPrice());
             if (auction.getBidCount() == null || auction.getBidCount() == 0) {
@@ -191,14 +192,14 @@ public class AuctionServiceImpl implements AuctionService {
 
         if (request.bidIncrement() != null) {
             if (request.bidIncrement().compareTo(BigDecimal.ZERO) <= 0) {
-                throw new AppException("VALIDATION_ERROR", "Bid increment must be greater than 0", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Bid increment must be greater than 0");
             }
             auction.setBidIncrement(request.bidIncrement());
         }
 
         if (request.reservePrice() != null) {
             if (request.reservePrice().compareTo(auction.getStartPrice()) < 0) {
-                throw new AppException("VALIDATION_ERROR", "Reserve price must be greater than or equal to start price", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Reserve price must be greater than or equal to start price");
             }
             auction.setReservePrice(request.reservePrice());
         }
@@ -206,21 +207,21 @@ public class AuctionServiceImpl implements AuctionService {
         LocalDateTime now = LocalDateTime.now(clock);
         if (request.startTime() != null) {
             if (!isScheduled) {
-                throw new AppException("VALIDATION_ERROR", "Cannot change start time of an ACTIVE auction", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Cannot change start time of an ACTIVE auction");
             }
             if (request.startTime().isBefore(now)) {
-                throw new AppException("VALIDATION_ERROR", "Start time cannot be in the past", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Start time cannot be in the past");
             }
             auction.setStartTime(request.startTime());
         }
 
         if (request.endTime() != null) {
             if (!request.endTime().isAfter(auction.getStartTime())) {
-                throw new AppException("VALIDATION_ERROR", "End time must be after start time", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "End time must be after start time");
             }
             Duration d = Duration.between(auction.getStartTime(), request.endTime());
             if (d.toMinutes() < 60 || d.toDays() > 30) {
-                throw new AppException("VALIDATION_ERROR", "Auction duration must be between 1 hour and 30 days", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Auction duration must be between 1 hour and 30 days");
             }
             auction.setEndTime(request.endTime());
         }
@@ -242,24 +243,24 @@ public class AuctionServiceImpl implements AuctionService {
     @Transactional
     public AuctionResponse cancelAuction(Long userId, Long auctionId, String reason) {
         Auction auction = auctionRepository.findByIdForUpdate(auctionId)
-                .orElseThrow(() -> new AppException("Auction not found with id: " + auctionId, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + auctionId));
 
         User user = userRepository.findById(userId)
-                .orElseThrow(() -> new AppException("User not found with id: " + userId, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found with id: " + userId));
 
         boolean isSeller = auction.getSellerId().equals(userId);
         boolean isAdmin = user.getRole() == UserRole.ADMIN;
 
         if (!isSeller && !isAdmin) {
-            throw new AppException("FORBIDDEN", "You are not authorized to cancel this auction", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "You are not authorized to cancel this auction");
         }
 
         if (isSeller && auction.getStatus() == AuctionStatus.ACTIVE && auction.getBidCount() != null && auction.getBidCount() > 0) {
-            throw new AppException("CANNOT_CANCEL", "Cannot cancel auction with existing bids", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CANNOT_CANCEL, "Cannot cancel auction with existing bids");
         }
 
         if (auction.getStatus() != AuctionStatus.SCHEDULED && auction.getStatus() != AuctionStatus.ACTIVE) {
-            throw new AppException("CANNOT_CANCEL", "Auction cannot be cancelled in status: " + auction.getStatus(), HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CANNOT_CANCEL, "Auction cannot be cancelled in status: " + auction.getStatus());
         }
 
         Auction cancelled = auctionLifecycleSupport.cancelLocked(auction, reason);

@@ -6,6 +6,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.TimeUnit;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -13,7 +15,7 @@ public class AuctionScheduler {
 
     private final AuctionService auctionService;
 
-    @Scheduled(fixedRate = 10000)
+    @Scheduled(fixedDelayString = "${app.scheduler.interval-seconds:10}", timeUnit = TimeUnit.SECONDS)
     public void scheduleAuctionStatusTransitions() {
         try {
             auctionService.startScheduledAuctions();
@@ -28,4 +30,3 @@ public class AuctionScheduler {
         }
     }
 }
-

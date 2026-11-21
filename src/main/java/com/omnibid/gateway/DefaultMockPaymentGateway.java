@@ -48,7 +48,7 @@ public class DefaultMockPaymentGateway implements MockPaymentGateway {
     public GatewayResult charge(GatewayRequest request) {
         SimulatedOutcome outcome = request.hint();
         if (outcome == null) {
-            outcome = appProperties.getPayment().getMock().getDefaultOutcome();
+            outcome = SimulatedOutcome.SUCCESS;
         }
 
         switch (outcome) {
@@ -65,7 +65,7 @@ public class DefaultMockPaymentGateway implements MockPaymentGateway {
     }
 
     protected void scheduleDelayedFinalization(String transactionRef) {
-        int delaySeconds = appProperties.getPayment().getMock().getProcessingDelaySeconds();
+        int delaySeconds = 1;
         Instant triggerTime = Instant.now().plusSeconds(delaySeconds);
         log.info("Scheduling delayed finalization for txRef={} in {}s", transactionRef, delaySeconds);
         if (taskScheduler != null) {

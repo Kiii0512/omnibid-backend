@@ -6,8 +6,6 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
-
 @Data
 @Builder
 @NoArgsConstructor
@@ -18,56 +16,56 @@ public class ApiResponse<T> {
     @Builder.Default
     private boolean success = true;
 
-    private String errorCode;
-
-    private String message;
-
     private T data;
 
-    @Builder.Default
-    private LocalDateTime timestamp = LocalDateTime.now();
+    private ErrorDetail error;
 
-    public static <T> ApiResponse<T> success(T data) {
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public static class ErrorDetail {
+        private String code;
+        private String message;
+        private Object details;
+    }
+
+    public static <T> ApiResponse<T> ok(T data) {
         return ApiResponse.<T>builder()
                 .success(true)
                 .data(data)
-                .timestamp(LocalDateTime.now())
                 .build();
+    }
+
+    public static <T> ApiResponse<T> success(T data) {
+        return ok(data);
     }
 
     public static <T> ApiResponse<T> success(String message, T data) {
-        return ApiResponse.<T>builder()
-                .success(true)
-                .message(message)
-                .data(data)
-                .timestamp(LocalDateTime.now())
-                .build();
+        return ok(data);
     }
 
-    public static <T> ApiResponse<T> error(String message) {
-        return ApiResponse.<T>builder()
-                .success(false)
-                .message(message)
-                .timestamp(LocalDateTime.now())
-                .build();
+    public static <T> ApiResponse<T> error(ErrorCode errorCode) {
+        return error(errorCode.name(), errorCode.getDefaultMessage(), null);
     }
 
-    public static <T> ApiResponse<T> error(String errorCode, String message) {
-        return ApiResponse.<T>builder()
-                .success(false)
-                .errorCode(errorCode)
-                .message(message)
-                .timestamp(LocalDateTime.now())
-                .build();
+    public static <T> ApiResponse<T> error(ErrorCode errorCode, String message) {
+        return error(errorCode.name(), message, null);
     }
 
-    public static <T> ApiResponse<T> error(String errorCode, String message, T data) {
+    public static <T> ApiResponse<T> error(ErrorCode errorCode, String message, Object details) {
+        return error(errorCode.name(), message, details);
+    }
+
+    public static <T> ApiResponse<T> error(String code, String message) {
+        return error(code, message, null);
+    }
+
+    public static <T> ApiResponse<T> error(String code, String message, Object details) {
         return ApiResponse.<T>builder()
                 .success(false)
-                .errorCode(errorCode)
-                .message(message)
-                .data(data)
-                .timestamp(LocalDateTime.now())
+                .error(new ErrorDetail(code, message, details))
                 .build();
     }
 }

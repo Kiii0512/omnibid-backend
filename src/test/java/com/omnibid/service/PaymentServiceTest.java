@@ -89,14 +89,14 @@ class PaymentServiceTest {
     @Mock
     private UserRepository userRepository;
 
-    private AppProperties.PaymentProperties paymentProperties;
+    private AppProperties.Payment paymentProperties;
     private PaymentServiceImpl service;
 
     private Order sampleOrder;
 
     @BeforeEach
     void setUp() {
-        paymentProperties = AppProperties.PaymentProperties.defaults();
+        paymentProperties = new AppProperties.Payment(true);
         service = new PaymentServiceImpl(
                 orderRepository,
                 paymentRepository,

@@ -9,7 +9,6 @@ import org.springframework.security.web.access.AccessDeniedHandler;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
 
 @Component
 public class CustomAccessDeniedHandler implements AccessDeniedHandler {
@@ -21,10 +20,7 @@ public class CustomAccessDeniedHandler implements AccessDeniedHandler {
         response.setCharacterEncoding("UTF-8");
         response.setStatus(HttpStatus.FORBIDDEN.value());
 
-        String json = String.format(
-                "{\"success\":false,\"errorCode\":\"FORBIDDEN\",\"message\":\"Bạn không có quyền thực hiện hành động này\",\"timestamp\":\"%s\"}",
-                LocalDateTime.now()
-        );
+        String json = "{\"success\":false,\"error\":{\"code\":\"FORBIDDEN\",\"message\":\"Bạn không có quyền thực hiện hành động này\"}}";
         response.getWriter().write(json);
     }
 }

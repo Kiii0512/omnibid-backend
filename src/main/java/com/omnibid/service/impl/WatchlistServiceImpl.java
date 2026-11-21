@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.dto.watchlist.WatchlistSummaryResponse;
@@ -37,7 +38,7 @@ public class WatchlistServiceImpl implements WatchlistService {
     @Transactional
     public void addToWatchlist(Long userId, Long auctionId) {
         if (!auctionRepository.existsById(auctionId)) {
-            throw new AppException("NOT_FOUND", "Auction not found with id: " + auctionId, HttpStatus.NOT_FOUND);
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Auction not found with id: " + auctionId);
         }
         if (!watchlistRepository.existsByUserIdAndAuctionId(userId, auctionId)) {
             Watchlist watchlist = Watchlist.builder()

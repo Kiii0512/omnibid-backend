@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.dto.auth.AuthResponse;
 import com.omnibid.dto.auth.LoginRequest;
 import com.omnibid.dto.auth.RegisterRequest;
@@ -28,7 +29,7 @@ public class AuthServiceImpl implements AuthService {
     @Transactional
     public AuthResponse register(RegisterRequest request) {
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new AppException("EMAIL_ALREADY_EXISTS", "Email is already registered", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Email is already registered");
         }
 
         User user = User.builder()
@@ -59,14 +60,14 @@ public class AuthServiceImpl implements AuthService {
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest request) {
         User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new AppException("INVALID_CREDENTIALS", "Invalid email or password", HttpStatus.UNAUTHORIZED));
+                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password"));
 
         if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            throw new AppException("INVALID_CREDENTIALS", "Invalid email or password", HttpStatus.UNAUTHORIZED);
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password");
         }
 
         if (user.getStatus() == UserStatus.BANNED) {
-            throw new AppException("ACCOUNT_BANNED", "User account is banned", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "User account is banned");
         }
 
         String token = jwtTokenProvider.generateToken(user.getEmail(), user.getRole().name());

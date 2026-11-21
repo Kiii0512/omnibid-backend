@@ -7,6 +7,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.concurrent.TimeUnit;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -15,7 +17,7 @@ public class OrderScheduler {
     private final OrderService orderService;
     private final PaymentService paymentService;
 
-    @Scheduled(fixedDelayString = "${app.scheduler.order-delay:10000}", initialDelay = 10000)
+    @Scheduled(fixedDelayString = "${app.scheduler.interval-seconds:10}", timeUnit = TimeUnit.SECONDS)
     public void tick() {
         // 1. PaymentService.timeoutStalePayments() (PAY-12)
         try {

@@ -9,7 +9,6 @@ import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
 
 @Component
 public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
@@ -20,22 +19,22 @@ public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
 
-        String errorCode;
+        String code;
         String message;
 
         if (Boolean.TRUE.equals(request.getAttribute("ACCOUNT_BANNED"))) {
             response.setStatus(HttpStatus.FORBIDDEN.value());
-            errorCode = "ACCOUNT_BANNED";
+            code = "ACCOUNT_BANNED";
             message = "Tài khoản của bạn đã bị khóa";
         } else {
             response.setStatus(HttpStatus.UNAUTHORIZED.value());
-            errorCode = "UNAUTHORIZED";
-            message = "Yêu cầu chưa xác thực hoặc token không hợp lệ";
+            code = "UNAUTHORIZED";
+            message = "Yêu cầu chưa được xác thực hoặc thông tin xác thực không hợp lệ";
         }
 
         String json = String.format(
-                "{\"success\":false,\"errorCode\":\"%s\",\"message\":\"%s\",\"timestamp\":\"%s\"}",
-                errorCode, message, LocalDateTime.now()
+                "{\"success\":false,\"error\":{\"code\":\"%s\",\"message\":\"%s\"}}",
+                code, message
         );
         response.getWriter().write(json);
     }
