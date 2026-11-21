@@ -60,11 +60,11 @@ public interface OrderRepository extends JpaRepository<Order, Long>, JpaSpecific
 
     List<Order> findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus status, Instant now);
 
-    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.paymentDeadline < :now")
-    List<Long> findIdsByStatusAndPaymentDeadlineLessThan(@Param("status") OrderStatus status, @Param("now") Instant now);
+    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.paymentDeadline <= :now")
+    List<Long> findIdsByStatusAndPaymentDeadlineLessThanEqual(@Param("status") OrderStatus status, @Param("now") Instant now);
 
-    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.confirmDeadline < :now")
-    List<Long> findIdsByStatusAndConfirmDeadlineLessThan(@Param("status") OrderStatus status, @Param("now") Instant now);
+    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.confirmDeadline <= :now")
+    List<Long> findIdsByStatusAndConfirmDeadlineLessThanEqual(@Param("status") OrderStatus status, @Param("now") Instant now);
 
     long countByStatus(OrderStatus status);
 

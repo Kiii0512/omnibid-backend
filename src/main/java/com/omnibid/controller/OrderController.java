@@ -2,6 +2,7 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
+import com.omnibid.common.SortWhitelist;
 import com.omnibid.dto.order.*;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.security.CurrentUser;
@@ -9,10 +10,13 @@ import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
+
+import java.util.Set;
 
 @RestController
 @RequestMapping("/api/v1/orders")
@@ -26,26 +30,12 @@ public class OrderController {
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false) String role,
             @RequestParam(required = false) OrderStatus status,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @PageableDefault(sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
+        SortWhitelist.validate(pageable, Set.of("createdAt", "finalPrice", "status"));
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        PageResponse<OrderResponse> result = orderService.getOrders(
-                currentUser,
-                role,
-                status,
-                PageRequest.of(page, Math.min(size, 100), Sort.by(Sort.Direction.DESC, "createdAt"))
-        );
+        PageResponse<OrderResponse> result = orderService.getOrders(currentUser, role, status, pageable);
         return ApiResponse.success(result);
-    }
-
-    @GetMapping("/summary")
-    public ApiResponse<OrderUserSummaryResponse> getOrderSummary(
-            @AuthenticationPrincipal CustomUserDetails userDetails
-    ) {
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        OrderUserSummaryResponse summary = orderService.getOrderSummary(currentUser);
-        return ApiResponse.success(summary);
     }
 
     @GetMapping("/{id}")
@@ -70,13 +60,13 @@ public class OrderController {
     }
 
     @PostMapping("/{id}/ship")
-    public ApiResponse<OrderDetailResponse> shipOrder(
+    public ApiResponse<OrderShipResponse> shipOrder(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long id,
             @Valid @RequestBody(required = false) ShipOrderRequest request
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        OrderDetailResponse result = orderService.shipOrder(currentUser, id, request);
+        OrderShipResponse result = orderService.shipOrder(currentUser, id, request);
         return ApiResponse.success(result);
     }
 
@@ -87,6 +77,6 @@ public class OrderController {
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         OrderConfirmReceiptResponse result = orderService.confirmReceipt(currentUser, id);
-        return ApiResponse.success("Order completed", result);
+        return ApiResponse.success(result);
     }
 }

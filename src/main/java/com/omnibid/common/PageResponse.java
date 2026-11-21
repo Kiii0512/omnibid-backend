@@ -31,6 +31,10 @@ public class PageResponse<T> {
                 .build();
     }
 
+    public static <T> PageResponse<T> of(Page<T> page) {
+        return from(page);
+    }
+
     public static <E, T> PageResponse<T> from(Page<E> page, Function<E, T> mapper) {
         return PageResponse.<T>builder()
                 .content(page.getContent().stream().map(mapper).toList())

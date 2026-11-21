@@ -28,7 +28,7 @@ public class DefaultMockPaymentGateway implements MockPaymentGateway {
         }
 
         if (outcome == PaymentStatus.FAILED) {
-            return new GatewayResult(PaymentStatus.FAILED, "Thanh toán bị từ chối bởi cổng thanh toán mô phỏng");
+            return new GatewayResult(PaymentStatus.FAILED, "MOCK_DECLINED");
         }
         return new GatewayResult(PaymentStatus.SUCCESS, null);
     }

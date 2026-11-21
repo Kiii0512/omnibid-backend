@@ -17,6 +17,7 @@ import com.omnibid.service.NotificationService;
 import com.omnibid.service.OrderLifecycleSupport;
 import com.omnibid.service.OrderService;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
@@ -44,7 +45,7 @@ public class OrderServiceImpl implements OrderService {
     private final Clock clock;
     private NotificationService notificationService;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public OrderServiceImpl(OrderRepository orderRepository, ProductRepository productRepository,
                             ProductImageRepository productImageRepository, UserRepository userRepository,
                             PaymentRepository paymentRepository, ReportRepository reportRepository,
@@ -78,10 +79,16 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional
     public Order createFromAuction(Auction auction) {
+        return createFromAuction(auction, Instant.now(clock));
+    }
+
+    @Override
+    @Transactional
+    public Order createFromAuction(Auction auction, Instant closedAt) {
         return orderRepository.findByAuctionId(auction.getId())
                 .orElseGet(() -> {
                     int deadlineHours = appProperties.getOrder().getPaymentDeadlineHours();
-                    Instant closedAt = auction.getClosedAt() != null ? auction.getClosedAt() : Instant.now(clock);
+                    Instant effectiveClosedAt = closedAt != null ? closedAt : Instant.now(clock);
                     Order order = Order.builder()
                             .auctionId(auction.getId())
                             .productId(auction.getProductId())
@@ -89,7 +96,7 @@ public class OrderServiceImpl implements OrderService {
                             .buyerId(auction.getWinnerId())
                             .finalPrice(auction.getFinalPrice())
                             .status(OrderStatus.PENDING_PAYMENT)
-                            .paymentDeadline(closedAt.plus(Duration.ofHours(deadlineHours)))
+                            .paymentDeadline(effectiveClosedAt.plus(Duration.ofHours(deadlineHours)))
                             .build();
                     log.info("Creating order for auction {}: buyer={}, amount={}",
                             auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
@@ -100,10 +107,11 @@ public class OrderServiceImpl implements OrderService {
     @Override
     @Transactional(readOnly = true)
     public PageResponse<OrderResponse> getOrders(CurrentUser currentUser, String role, OrderStatus status, Pageable pageable) {
-        Page<Order> page;
         if (currentUser.isAdmin()) {
-            page = orderRepository.findAllByStatus(status, pageable);
-        } else if ("buyer".equalsIgnoreCase(role)) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin phải sử dụng API quản trị để xem danh sách đơn hàng");
+        }
+        Page<Order> page;
+        if ("buyer".equalsIgnoreCase(role)) {
             page = orderRepository.findByBuyerId(currentUser.id(), status, pageable);
         } else if ("seller".equalsIgnoreCase(role)) {
             page = orderRepository.findBySellerId(currentUser.id(), status, pageable);
@@ -118,7 +126,7 @@ public class OrderServiceImpl implements OrderService {
     @Transactional(readOnly = true)
     public OrderDetailResponse getOrderById(CurrentUser currentUser, Long id) {
         Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng với id: " + id));
 
         orderAccessPolicy.requireViewer(order, currentUser);
 
@@ -129,16 +137,19 @@ public class OrderServiceImpl implements OrderService {
     @Transactional
     public OrderDetailResponse updateShippingInfo(CurrentUser currentUser, Long id, ShippingInfoRequest request) {
         Order order = orderRepository.findByIdForUpdate(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng với id: " + id));
 
         orderAccessPolicy.requireBuyer(order, currentUser);
 
         if (order.getStatus() == OrderStatus.CANCELLED) {
-            throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Order has been cancelled");
+            throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Đơn hàng đã bị hủy");
         }
-
-        if (order.getStatus() != OrderStatus.PENDING_PAYMENT && order.getStatus() != OrderStatus.PAID) {
-            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot update shipping info when order is " + order.getStatus());
+        if (order.getStatus() == OrderStatus.EXPIRED) {
+            throw new BusinessException(ErrorCode.ORDER_EXPIRED, "Đơn hàng đã hết hạn");
+        }
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION,
+                    "Chỉ được cập nhật thông tin giao hàng khi đơn ở trạng thái PENDING_PAYMENT");
         }
 
         order.setShippingAddress(request.getShippingAddress());
@@ -150,9 +161,9 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public OrderDetailResponse shipOrder(CurrentUser currentUser, Long id, ShipOrderRequest request) {
+    public OrderShipResponse shipOrder(CurrentUser currentUser, Long id, ShipOrderRequest request) {
         Order order = orderRepository.findByIdForUpdate(id)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng với id: " + id));
 
         orderAccessPolicy.requireSeller(order, currentUser);
 
@@ -167,7 +178,12 @@ public class OrderServiceImpl implements OrderService {
 
         // TODO v4-phase-7: Notify buyer after commit
         log.info("Order {} marked as SHIPPING by seller {}", id, currentUser.id());
-        return mapToOrderDetailResponse(saved, currentUser);
+        return OrderShipResponse.builder()
+                .id(saved.getId())
+                .orderStatus(saved.getStatus())
+                .shippedAt(saved.getShippedAt())
+                .confirmDeadline(saved.getConfirmDeadline())
+                .build();
     }
 
     @Override
@@ -191,10 +207,6 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng chưa ở trạng thái đang giao hàng");
         }
 
-        if (reportRepository != null && reportRepository.existsByReportedOrderIdAndStatus(order.getId(), ReportStatus.PENDING)) {
-            throw new BusinessException(ErrorCode.CONFLICT, "Đơn hàng đang có khiếu nại chờ xử lý");
-        }
-
         Instant now = Instant.now(clock);
         order.confirmReceived(now);
         orderRepository.save(order);
@@ -216,22 +228,14 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public void sendPaymentReminders() {
-        // v4: Nhắc hạn thanh toán đã được gỡ bỏ khỏi đặc tả
-    }
-
-    @Override
     public void expireOverdueOrders() {
         Instant now = Instant.now(clock);
-        List<Order> overdueOrders = orderRepository.findByStatusAndPaymentDeadlineLessThanEqual(
-                OrderStatus.PENDING_PAYMENT, now
-        );
-
-        for (Order o : overdueOrders) {
+        List<Long> ids = orderRepository.findIdsByStatusAndPaymentDeadlineLessThanEqual(OrderStatus.PENDING_PAYMENT, now);
+        for (Long id : ids) {
             try {
-                orderLifecycleSupport.expireOne(o.getId(), now);
+                orderLifecycleSupport.expireOne(id, now);
             } catch (Exception ex) {
-                log.error("Failed to expire order {}", o.getId(), ex);
+                log.error("Failed to expire order {}", id, ex);
             }
         }
     }
@@ -239,12 +243,12 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public void autoCompleteOrders() {
         Instant now = Instant.now(clock);
-        List<Order> overdueOrders = orderRepository.findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, now);
-        for (Order o : overdueOrders) {
+        List<Long> ids = orderRepository.findIdsByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, now);
+        for (Long id : ids) {
             try {
-                orderLifecycleSupport.autoCompleteOne(o.getId(), now);
+                orderLifecycleSupport.autoCompleteOne(id, now);
             } catch (Exception ex) {
-                log.error("Failed to auto-complete order id={}", o.getId(), ex);
+                log.error("Failed to auto-complete order id={}", id, ex);
             }
         }
     }
@@ -258,65 +262,49 @@ public class OrderServiceImpl implements OrderService {
     }
 
     private OrderResponse mapToOrderResponse(Order order, CurrentUser currentUser) {
-        String productTitle = getProductTitle(order.getProductId());
-        String productImageUrl = getProductImageUrl(order.getProductId());
-        String viewerRole = determineViewerRole(order, currentUser);
-
         return OrderResponse.builder()
                 .id(order.getId())
                 .auctionId(order.getAuctionId())
                 .productId(order.getProductId())
-                .productTitle(productTitle)
-                .productImageUrl(productImageUrl)
+                .productTitle(getProductTitle(order.getProductId()))
+                .productImageUrl(getProductImageUrl(order.getProductId()))
                 .finalPrice(order.getFinalPrice())
                 .status(order.getStatus())
-                .viewerRole(viewerRole)
+                .viewerRole(determineViewerRole(order, currentUser))
                 .paymentDeadline(order.getPaymentDeadline())
                 .createdAt(order.getCreatedAt())
                 .build();
     }
 
     private OrderDetailResponse mapToOrderDetailResponse(Order order, CurrentUser currentUser) {
-        String productTitle = getProductTitle(order.getProductId());
-        String productImageUrl = getProductImageUrl(order.getProductId());
         String sellerName = null;
         String buyerName = null;
 
         if (userRepository != null) {
-            User seller = userRepository.findById(order.getSellerId()).orElse(null);
-            if (seller != null) {
-                sellerName = MaskingUtils.maskName(seller.getFullName());
-            }
-            User buyer = userRepository.findById(order.getBuyerId()).orElse(null);
-            if (buyer != null) {
-                buyerName = MaskingUtils.maskName(buyer.getFullName());
-            }
+            sellerName = userRepository.findById(order.getSellerId()).map(u -> MaskingUtils.maskName(u.getFullName())).orElse(null);
+            buyerName = userRepository.findById(order.getBuyerId()).map(u -> MaskingUtils.maskName(u.getFullName())).orElse(null);
         }
 
         OrderDetailResponse.PaymentSummaryDto latestPaymentDto = null;
         if (paymentRepository != null) {
-            Payment latestPayment = paymentRepository.findTopByOrderIdOrderByAttemptNoDesc(order.getId()).orElse(null);
-            if (latestPayment != null) {
+            Payment latest = paymentRepository.findTopByOrderIdOrderByAttemptNoDesc(order.getId()).orElse(null);
+            if (latest != null) {
                 latestPaymentDto = OrderDetailResponse.PaymentSummaryDto.builder()
-                        .paymentId(latestPayment.getId())
-                        .attemptNo(latestPayment.getAttemptNo())
-                        .status(latestPayment.getStatus())
-                        .failureReason(latestPayment.getFailureReason())
+                        .paymentId(latest.getId())
+                        .attemptNo(latest.getAttemptNo())
+                        .status(latest.getStatus())
+                        .failureReason(latest.getFailureReason())
                         .build();
             }
         }
 
-        boolean hasPendingComplaint = false;
-        if (reportRepository != null) {
-            hasPendingComplaint = reportRepository.existsByReportedOrderIdAndStatus(order.getId(), ReportStatus.PENDING);
-        }
-
+        boolean hasPendingComplaint = reportRepository != null && reportRepository.existsByReportedOrderIdAndStatus(order.getId(), ReportStatus.PENDING);
         String viewerRole = determineViewerRole(order, currentUser);
         List<String> allowedActions = calculateAllowedActions(order, viewerRole, hasPendingComplaint);
 
         return OrderDetailResponse.builder()
                 .id(order.getId()).auctionId(order.getAuctionId()).productId(order.getProductId())
-                .productTitle(productTitle).productImageUrl(productImageUrl)
+                .productTitle(getProductTitle(order.getProductId())).productImageUrl(getProductImageUrl(order.getProductId()))
                 .sellerId(order.getSellerId()).sellerName(sellerName).buyerId(order.getBuyerId()).buyerName(buyerName)
                 .finalPrice(order.getFinalPrice()).status(order.getStatus())
                 .shippingAddress(order.getShippingAddress()).phoneNumber(order.getPhoneNumber())
@@ -329,12 +317,8 @@ public class OrderServiceImpl implements OrderService {
 
     private String determineViewerRole(Order order, CurrentUser currentUser) {
         if (currentUser == null) return "BUYER";
-        if (currentUser.id().equals(order.getBuyerId())) {
-            return "BUYER";
-        }
-        if (currentUser.id().equals(order.getSellerId())) {
-            return "SELLER";
-        }
+        if (currentUser.id().equals(order.getBuyerId())) return "BUYER";
+        if (currentUser.id().equals(order.getSellerId())) return "SELLER";
         return "ADMIN";
     }
 
@@ -344,54 +328,12 @@ public class OrderServiceImpl implements OrderService {
             if (order.getStatus() == OrderStatus.PENDING_PAYMENT) {
                 actions.add("PAY");
                 actions.add("UPDATE_SHIPPING_INFO");
-            } else if (order.getStatus() == OrderStatus.PAID) {
-                actions.add("UPDATE_SHIPPING_INFO");
-                if (!hasPendingComplaint) actions.add("COMPLAIN");
-            } else if (order.getStatus() == OrderStatus.SHIPPING && !hasPendingComplaint) {
+            } else if (order.getStatus() == OrderStatus.SHIPPING) {
                 actions.add("CONFIRM_RECEIPT");
-                actions.add("COMPLAIN");
             }
         } else if ("SELLER".equals(viewerRole) && order.getStatus() == OrderStatus.PAID) {
             actions.add("SHIP");
         }
         return actions;
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public OrderUserSummaryResponse getOrderSummary(CurrentUser currentUser) {
-        Long userId = currentUser.id();
-        var buyerSummary = buildRoleSummary(orderRepository.countByBuyerIdGroupByStatus(userId));
-        var sellerSummary = buildRoleSummary(orderRepository.countBySellerIdGroupByStatus(userId));
-        return new OrderUserSummaryResponse(buyerSummary, sellerSummary);
-    }
-
-    private OrderUserSummaryResponse.RoleSummary buildRoleSummary(List<Object[]> rows) {
-        long total = 0;
-        long pending = 0;
-        long paid = 0;
-        long shipping = 0;
-        long completed = 0;
-        long cancelled = 0;
-        long expired = 0;
-
-        for (Object[] row : rows) {
-            if (row != null && row.length >= 2 && row[0] != null) {
-                long count = ((Number) row[1]).longValue();
-                total += count;
-                switch ((OrderStatus) row[0]) {
-                    case PENDING_PAYMENT -> pending = count;
-                    case PAID -> paid = count;
-                    case SHIPPING -> shipping = count;
-                    case COMPLETED -> completed = count;
-                    case CANCELLED -> cancelled = count;
-                    case EXPIRED -> expired = count;
-                }
-            }
-        }
-
-        return new OrderUserSummaryResponse.RoleSummary(
-                total, pending, paid, shipping, completed, cancelled, expired
-        );
     }
 }

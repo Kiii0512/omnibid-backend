@@ -80,7 +80,7 @@ public class OrderLifecycleSupport {
             return;
         }
 
-        order.expire();
+        order.expire(now);
         orderRepository.save(order);
 
         if (product != null) {
@@ -113,11 +113,6 @@ public class OrderLifecycleSupport {
                 : null;
 
         if (order.getConfirmDeadline() == null || now.isBefore(order.getConfirmDeadline())) {
-            return;
-        }
-
-        if (reportRepository != null && reportRepository.existsByReportedOrderIdAndStatus(order.getId(), ReportStatus.PENDING)) {
-            log.info("Order {} has PENDING report, skipping auto-completion", order.getId());
             return;
         }
 

@@ -9,7 +9,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 3. Bảo mật, xác thực
 - [x] 4. Ảnh, sản phẩm, danh mục
 - [x] 5. Phiên, đặt giá, chốt phiên, WebSocket
-- [ ] 6. Đơn hàng, thanh toán, giao hàng
+- [x] 6. Đơn hàng, thanh toán, giao hàng
 - [ ] 7. Thông báo, báo cáo vi phạm
 - [ ] 8. Quản trị
 - [ ] 9. Kiểm thử, tài liệu, rà soát cuối
@@ -18,6 +18,35 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - test-compile ban đầu: Đạt (0 lỗi biên dịch)
 - Docker: Chưa khả dụng trong môi trường terminal hiện tại (cần lưu ý cho integration test ở phase 9)
 - Số tệp test ban đầu: 46 tệp test (`src/test/java`)
+
+## Trạng thái sau Phase 6
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+
+## Mục GAP đã xử lý (Phase 6)
+- **F1 (Thanh toán đồng bộ 1 transaction & Idempotency-Key)**:
+  - `POST /api/v1/orders/{id}/payments`: Bắt buộc header `Idempotency-Key` chuẩn UUID (sai/thiếu -> 400 `VALIDATION_ERROR`).
+  - Thực thi trong 1 transaction đã khóa order: kiểm tra quyền người mua (Admin và người khác trả 403 `FORBIDDEN`). Kiểm tra `(orderId, idempotencyKey)` đã tồn tại -> trả lại đúng kết quả cũ (200 OK).
+  - Kiểm tra trạng thái đơn: CANCELLED -> `ORDER_CANCELLED`, EXPIRED / quá hạn thanh toán -> `ORDER_EXPIRED`, khác PENDING_PAYMENT -> `INVALID_STATUS_TRANSITION`, thiếu shippingAddress hoặc phoneNumber -> 400 `VALIDATION_ERROR`.
+  - Gọi `MockPaymentGateway.charge(amount, simulateResult)` đồng bộ: `simulateResult` chỉ có hiệu lực khi `app.payment.simulate-enabled=true`, khi tắt luôn trả SUCCESS; thất bại trả `failureReason = "MOCK_DECLINED"`.
+  - Lưu Payment với `attemptNo = max + 1`, `PaymentMethod.MOCK_CARD`. Khi SUCCESS gọi `order.markPaid(now)`. Trả 200 `PaymentResponse(paymentId, attemptNo, status, orderStatus, failureReason)`.
+- **F2 (Giao hàng v4)**:
+  - `POST /api/v1/orders/{id}/ship`: Chỉ người bán, khóa order, đơn phải ở trạng thái `PAID` (ngược lại `INVALID_STATUS_TRANSITION`). `trackingCode` tùy chọn (≤ 50 ký tự). Chuyển sang `SHIPPING`, gán `shippedAt = now`, `confirmDeadline = now + confirmDeadlineDays`. Trả 200 `OrderShipResponse(id, orderStatus, shippedAt, confirmDeadline)`.
+- **F3 (Xác nhận nhận hàng v4)**:
+  - Chuyển `POST /api/v1/orders/{id}/confirm-receipt`: Chỉ người mua, khóa order và product, đơn phải ở `SHIPPING` (ngược lại `INVALID_STATUS_TRANSITION`). Chuyển đơn sang `COMPLETED`, `completedAt = now`. Cập nhật sản phẩm `markSold()` (giữ `HIDDEN` nếu sản phẩm đã bị ẩn). Trả 200 `OrderConfirmReceiptResponse(id, orderStatus, productStatus)`.
+- **F4 (Chính sách truy cập đơn & phân quyền v4)**:
+  - `OrderAccessPolicy`: `GET /orders/{id}` và `GET /orders` chỉ cho phép người mua hoặc người bán tham gia đơn (Admin nhận 403 `FORBIDDEN` và phải dùng `/admin/orders`).
+  - `GET /orders/{id}/payments`: Chỉ người mua (Admin nhận 403 `FORBIDDEN`), hỗ trợ phân trang với `PageResponse` và sort whitelist (`attemptNo,desc` mặc định).
+  - `GET /orders`: Lọc theo `role` (BUYER/SELLER), `status`, phân trang, sort whitelist (`createdAt`, `finalPrice`, `status`).
+- **F5 & F6 & F7**:
+  - Gỡ bỏ `GET /orders/summary` và `sendPaymentReminders`.
+  - Gỡ bỏ `OrderUserSummaryResponse`.
+  - Chuẩn hóa `PaymentMethod` chỉ dùng `MOCK_CARD`.
+- **F8 & F9 (OrderScheduler & vòng đời đơn theo BR-16, BR-19)**:
+  - `OrderScheduler` quét mỗi 10s:
+    + Đơn PENDING_PAYMENT quá hạn `paymentDeadline` -> `expireOne`: khóa order -> `order.expire(now)` -> khóa product -> `product.release()` (trừ HIDDEN).
+    + Đơn SHIPPING quá hạn `confirmDeadline` -> `autoCompleteOne`: khóa order -> `order.autoComplete(now)` -> khóa product -> `product.markSold()` (trừ HIDDEN).
+    + Báo cáo vi phạm không làm thay đổi trạng thái đơn và không tạm dừng tự hoàn tất (BR-19).
 
 ## Trạng thái sau Phase 5
 - `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)

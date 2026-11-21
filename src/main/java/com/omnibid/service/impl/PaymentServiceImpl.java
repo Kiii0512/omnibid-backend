@@ -14,7 +14,6 @@ import com.omnibid.gateway.MockPaymentGateway.GatewayRequest;
 import com.omnibid.gateway.MockPaymentGateway.GatewayResult;
 import com.omnibid.repository.OrderRepository;
 import com.omnibid.repository.PaymentRepository;
-import com.omnibid.repository.UserRepository;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.service.NotificationService;
 import com.omnibid.service.PaymentService;
@@ -22,7 +21,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
-import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -31,16 +29,16 @@ import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 public class PaymentServiceImpl implements PaymentService {
+
+    private static final String UUID_REGEX = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
 
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
@@ -49,7 +47,6 @@ public class PaymentServiceImpl implements PaymentService {
     private final TransactionOperations transactionOperations;
     private final AppProperties.Payment paymentProperties;
     private final Clock clock;
-    private final UserRepository userRepository;
 
     @Autowired
     public PaymentServiceImpl(OrderRepository orderRepository,
@@ -58,8 +55,7 @@ public class PaymentServiceImpl implements PaymentService {
                               NotificationService notificationService,
                               PlatformTransactionManager transactionManager,
                               AppProperties appProperties,
-                              Clock clock,
-                              UserRepository userRepository) {
+                              Clock clock) {
         this.orderRepository = orderRepository;
         this.paymentRepository = paymentRepository;
         this.gateway = gateway;
@@ -67,7 +63,6 @@ public class PaymentServiceImpl implements PaymentService {
         this.transactionOperations = new TransactionTemplate(transactionManager);
         this.paymentProperties = appProperties.getPayment();
         this.clock = clock;
-        this.userRepository = userRepository;
     }
 
     public PaymentServiceImpl(OrderRepository orderRepository,
@@ -84,11 +79,18 @@ public class PaymentServiceImpl implements PaymentService {
         this.transactionOperations = transactionOperations;
         this.paymentProperties = paymentProperties;
         this.clock = clock;
-        this.userRepository = null;
     }
 
     @Override
     public PaymentResponse pay(CurrentUser currentUser, Long orderId, String idempotencyKey, PaymentRequest request) {
+        if (currentUser.isAdmin()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Chỉ người mua mới được phép thanh toán");
+        }
+        if (idempotencyKey == null || !idempotencyKey.trim().matches(UUID_REGEX)) {
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Idempotency-Key không hợp lệ (yêu cầu định dạng UUID)");
+        }
+        String cleanKey = idempotencyKey.trim();
+
         return transactionOperations.execute(status -> {
             Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(
                     () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng"));
@@ -97,47 +99,24 @@ public class PaymentServiceImpl implements PaymentService {
                 throw new BusinessException(ErrorCode.FORBIDDEN, "Chỉ người mua mới được phép thanh toán");
             }
 
-            if (idempotencyKey == null || !idempotencyKey.matches("^[A-Za-z0-9_-]{8,64}$")) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Idempotency-Key không hợp lệ");
-            }
-
-            // Key already exists for this order -> return old result
-            Optional<Payment> existingOpt = paymentRepository.findByOrderIdAndIdempotencyKey(orderId, idempotencyKey);
+            Optional<Payment> existingOpt = paymentRepository.findByOrderIdAndIdempotencyKey(orderId, cleanKey);
             if (existingOpt.isPresent()) {
                 Payment existing = existingOpt.get();
-                return PaymentResponse.builder()
-                        .paymentId(existing.getId())
-                        .attemptNo(existing.getAttemptNo())
-                        .status(existing.getStatus())
-                        .orderStatus(order.getStatus())
-                        .failureReason(existing.getFailureReason())
-                        .build();
-            }
-
-            if (userRepository != null) {
-                userRepository.findById(currentUser.id()).ifPresent(user -> {
-                    if (user.getStatus() == UserStatus.BANNED) {
-                        throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
-                    }
-                });
+                return toPaymentResponse(existing, order.getStatus());
             }
 
             if (order.getStatus() == OrderStatus.CANCELLED) {
                 throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Đơn hàng đã bị hủy");
             }
 
-            if (order.getStatus() == OrderStatus.EXPIRED) {
-                throw new BusinessException(ErrorCode.ORDER_EXPIRED, "Đơn hàng đã hết hạn");
+            Instant now = Instant.now(clock);
+            if (order.getStatus() == OrderStatus.EXPIRED || (order.getPaymentDeadline() != null && !now.isBefore(order.getPaymentDeadline()))) {
+                throw new BusinessException(ErrorCode.ORDER_EXPIRED, "Đơn hàng đã quá hạn thanh toán");
             }
 
             if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
                 throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION,
                         "Đơn hàng không ở trạng thái chờ thanh toán");
-            }
-
-            Instant now = Instant.now(clock);
-            if (order.getPaymentDeadline() != null && !now.isBefore(order.getPaymentDeadline())) {
-                throw new BusinessException(ErrorCode.ORDER_EXPIRED, "Đơn hàng đã quá hạn thanh toán");
             }
 
             if (order.getShippingAddress() == null || order.getShippingAddress().isBlank()
@@ -154,20 +133,30 @@ public class PaymentServiceImpl implements PaymentService {
                 hint = request.getSimulateResult();
             }
 
-            GatewayRequest gwRequest = new GatewayRequest(order.getId(), amount, request.getMethod(), hint);
+            GatewayRequest gwRequest = new GatewayRequest(order.getId(), amount, PaymentMethod.MOCK_CARD, hint);
             GatewayResult gwResult = gateway.charge(gwRequest);
 
             Payment payment = Payment.builder()
                     .orderId(order.getId())
                     .attemptNo(attemptNo)
                     .amount(amount)
-                    .method(request.getMethod())
+                    .method(PaymentMethod.MOCK_CARD)
                     .status(gwResult.outcome())
-                    .idempotencyKey(idempotencyKey)
+                    .idempotencyKey(cleanKey)
                     .failureReason(gwResult.failureReason())
+                    .paidAt(gwResult.outcome() == PaymentStatus.SUCCESS ? now : null)
                     .build();
 
-            Payment saved = paymentRepository.save(payment);
+            Payment saved;
+            try {
+                saved = paymentRepository.saveAndFlush(payment);
+            } catch (DataIntegrityViolationException ex) {
+                Optional<Payment> conflictExisting = paymentRepository.findByOrderIdAndIdempotencyKey(orderId, cleanKey);
+                if (conflictExisting.isPresent()) {
+                    return toPaymentResponse(conflictExisting.get(), order.getStatus());
+                }
+                throw new BusinessException(ErrorCode.CONFLICT, "Xung đột dữ liệu thanh toán");
+            }
 
             if (saved.getStatus() == PaymentStatus.SUCCESS) {
                 order.markPaid(now);
@@ -175,45 +164,50 @@ public class PaymentServiceImpl implements PaymentService {
                 // TODO v4-phase-7: Notify buyer and seller after commit
             }
 
-            return PaymentResponse.builder()
-                    .paymentId(saved.getId())
-                    .attemptNo(saved.getAttemptNo())
-                    .status(saved.getStatus())
-                    .orderStatus(order.getStatus())
-                    .failureReason(saved.getFailureReason())
-                    .build();
+            return toPaymentResponse(saved, order.getStatus());
         });
     }
 
     @Override
     public List<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId) {
+        if (currentUser.isAdmin()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin không có quyền truy cập lịch sử thanh toán qua API này");
+        }
         Order order = orderRepository.findById(orderId).orElseThrow(
                 () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng"));
 
-        boolean isBuyer = order.getBuyerId().equals(currentUser.id());
-        if (!isBuyer) {
+        if (!order.getBuyerId().equals(currentUser.id())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền xem lịch sử thanh toán của đơn này");
         }
 
         List<Payment> payments = paymentRepository.findByOrderIdOrderByAttemptNoDesc(orderId);
-        return payments.stream()
-                .map(this::toPaymentHistoryResponse)
-                .collect(Collectors.toList());
+        return payments.stream().map(this::toPaymentHistoryResponse).collect(Collectors.toList());
     }
 
     @Override
     public Page<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId, Pageable pageable) {
+        if (currentUser.isAdmin()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin không có quyền truy cập lịch sử thanh toán qua API này");
+        }
         Order order = orderRepository.findById(orderId).orElseThrow(
-                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
-        );
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng"));
 
-        boolean isBuyer = order.getBuyerId().equals(currentUser.id());
-        if (!isBuyer) {
+        if (!order.getBuyerId().equals(currentUser.id())) {
             throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền xem lịch sử thanh toán của đơn này");
         }
 
         Page<Payment> page = paymentRepository.findByOrderId(orderId, pageable);
         return page.map(this::toPaymentHistoryResponse);
+    }
+
+    private PaymentResponse toPaymentResponse(Payment p, OrderStatus orderStatus) {
+        return PaymentResponse.builder()
+                .paymentId(p.getId())
+                .attemptNo(p.getAttemptNo())
+                .status(p.getStatus())
+                .orderStatus(orderStatus)
+                .failureReason(p.getFailureReason())
+                .build();
     }
 
     private PaymentHistoryResponse toPaymentHistoryResponse(Payment p) {
