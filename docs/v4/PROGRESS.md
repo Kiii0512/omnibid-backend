@@ -11,13 +11,73 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [x] 6. Đơn hàng, thanh toán, giao hàng
 - [x] 7. Thông báo, báo cáo vi phạm
-- [ ] 8. Quản trị
-- [ ] 9. Kiểm thử, tài liệu, rà soát cuối
+- [x] 8. Quản trị
+- [x] 9. Kiểm thử, tài liệu, rà soát cuối
+
+## Trạng thái sau Phase 9 (Hoàn tất toàn bộ kit đồng bộ v4)
+- `.\mvnw.cmd test`: **124/124 tests PASS (0 failures, 0 errors, 0 skipped)**
+- `verify-v4.ps1`: **ALL 7/7 v4 CHECKS PASSED**
+  + [ OK ] no forbidden legacy terms in src/main
+  + [ OK ] no YAML config
+  + [ OK ] V1__init_schema.sql matches reference
+  + [ OK ] V2__seed_data.sql matches reference
+  + [ OK ] 10 entity tables match
+  + [ OK ] REST endpoints = 54 (v4)
+  + [ OK ] ErrorCode has all 24 codes
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ `src/main/java`)
+- `.\mvnw.cmd -q test-compile`: Đạt (0 lỗi biên dịch trên toàn bộ `src/test/java`)
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+- Tài liệu: Đã cập nhật `README.md` chuẩn hóa theo toàn bộ kiến trúc và hợp đồng v4.
+
+## Mục GAP đã xử lý (Phase 9)
+- **Chuẩn hóa toàn bộ 25+ tệp test sang hợp đồng v4**:
+  - `BaseIT`, `CountingMockPaymentGateway`, `TestSupportConfig`, `Api`, `InvariantCheck`: Cập nhật cấu trúc Seed và DTO theo 10 bảng v4.
+  - Sửa và chuẩn hóa các Test Case:
+    + `CategoryServiceImpl`: Hỗ trợ ký tự tiếng Việt Đ/đ trong sinh slug tự động (`Đồng hồ Cổ` -> `dong-ho-co`).
+    + `AdminServiceImpl` & `AdminControllersTest`: Đồng bộ constructor 5 tham số của `ProductImageResponse` và cập nhật JSON path assertions (`id`, `cancelledAuctions`, `cancelledOrders`, `completedOrderValue`).
+    + `OrderControllerTest`: Đăng ký `PageableHandlerMethodArgumentResolver` cho Standalone MockMvc, chuẩn hóa `POST /orders/{id}/confirm-receipt`, sửa `error.code`.
+    + `ProductControllerTest`: Loại bỏ trường `message` cũ trên `ApiResponse`, chuẩn hóa MockMultipartFile `product.json` với UTF-8.
+    + `DefaultMockPaymentGatewayTest`: Khởi tạo cấu hình với `simulateEnabled = true` để kiểm thử gợi ý thanh toán thất bại `FAILED` với lý do `MOCK_DECLINED`.
+    + `AuctionServiceTest` & `BidServiceTest`: Stubbing đúng phương thức `saveAndFlush` trên `AuctionRepository` và `BidRepository`, bổ sung kiểm tra tài khoản `BANNED` ném `ACCOUNT_BANNED` trong `BidServiceImpl`, chuẩn hóa xử lý tranh chấp Unique ở DB ném 409 `CONFLICT`.
+    + `NotificationServiceTest`: Chuẩn hóa ngoại lệ `FORBIDDEN` khi người dùng khác đánh dấu đọc thông báo của người khác.
+    + `OrderServiceTest`: Chuẩn hóa `ShipOrderRequest("TRK-12345")`.
+    + `PaymentServiceTest`: Stubbing `paymentRepository.saveAndFlush(...)`.
+    + `ProductServiceTest`: Cung cấp đúng magic bytes JPEG (≥ 12 bytes) cho `ImageValidator` và sửa stubbing `findById(9L)`.
+    + `WebSocketPublisherTest`: Chuẩn hóa kênh broadcast `/topic/auctions/{id}` và định dạng payload v4.
 
 ## Baseline (phase 0)
 - test-compile ban đầu: Đạt (0 lỗi biên dịch)
 - Docker: Chưa khả dụng trong môi trường terminal hiện tại (cần lưu ý cho integration test ở phase 9)
 - Số tệp test ban đầu: 46 tệp test (`src/test/java`)
+
+## Trạng thái sau Phase 8
+- `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)
+- `verify-v4.ps1`: ALL v4 CHECKS PASSED (7/7 checks OK, REST endpoints = 54 v4, 10 bảng entity, 24 ErrorCode)
+- Giới hạn file: 100% tệp trong `src/main/java` <= 400 dòng (0 tệp vi phạm).
+
+## Mục GAP đã xử lý (Phase 8)
+- **H1 & H2 (Tách nhỏ AdminController & chuẩn hóa Admin Service)**:
+  - Tách monolithic `AdminController` thành 6 Controller mô-đun hóa trong gói `controller/admin/`:
+    + `AdminUserController`: `GET /api/v1/admin/users`, `POST /api/v1/admin/users/{id}/ban`, `POST /api/v1/admin/users/{id}/unban`.
+    + `AdminProductController`: `GET /api/v1/admin/products`, `GET /api/v1/admin/products/{id}`, `POST /api/v1/admin/products/{id}/hide`.
+    + `AdminAuctionController`: `GET /api/v1/admin/auctions`, `GET /api/v1/admin/auctions/{id}`, `POST /api/v1/admin/auctions/{id}/cancel`.
+    + `AdminOrderController`: `GET /api/v1/admin/orders`, `GET /api/v1/admin/orders/{id}`, `POST /api/v1/admin/orders/{id}/cancel`.
+    + `AdminCategoryController`: `POST /api/v1/admin/categories`, `PUT /api/v1/admin/categories/{id}`, `DELETE /api/v1/admin/categories/{id}`.
+    + `AdminStatisticsController`: `GET /api/v1/admin/statistics`.
+  - Toàn bộ 54 endpoint REST của dự án khớp 100% với đặc tả v4.
+- **H3 (Hệ quả BR-17 & BR-18, thứ tự khóa chuẩn)**:
+  - `POST /api/v1/admin/users/{id}/ban`: Chuyển status `BANNED`. Hủy toàn bộ phiên SCHEDULED/ACTIVE của seller, hủy đơn PENDING_PAYMENT liên quan, giải phóng sản phẩm (`product.release()`). Thông báo `AUCTION_CANCELLED` cho seller + leader và `ORDER_UPDATE` cho đối tác sau COMMIT. Không cho khóa tài khoản ADMIN (`CANNOT_BAN_ADMIN`). Trả `AdminBanUserResponse`.
+  - `POST /api/v1/admin/users/{id}/unban`: Chuyển status `ACTIVE`.
+  - `POST /api/v1/admin/products/{id}/hide`: Khóa product (`PESSIMISTIC_WRITE`), hủy toàn bộ phiên SCHEDULED/ACTIVE của product, hủy đơn PENDING_PAYMENT liên quan (các đơn PAID/SHIPPING tiếp tục theo BR-16), chuyển status `HIDDEN`. Trả `ProductHideResponse`.
+  - `POST /api/v1/admin/auctions/{id}/cancel`: Khóa auction, chuyển CANCELLED kèm cancelReason, giải phóng sản phẩm (`product.release()`), phát thông báo và WebSocket `AUCTION_CANCELLED` sau COMMIT.
+  - `POST /api/v1/admin/orders/{id}/cancel`: Chỉ hủy đơn `PENDING_PAYMENT` (khác trả 409 `INVALID_STATUS_TRANSITION`), giải phóng sản phẩm (`product.release()`), thông báo `ORDER_UPDATE` cho buyer và seller sau COMMIT.
+  - Tách riêng `AdminNotificationHelper` để xử lý thông báo sau commit cho các thao tác admin.
+- **H4 (Thống kê và chi tiết đơn hàng)**:
+  - `GET /api/v1/admin/statistics`: Không nhận tham số, tính lũy kế toàn hệ thống (`totalUsers`, `auctionsByStatus`, `ordersByStatus`, `totalRevenueCompleted`, `pendingReportsCount`).
+  - `GET /api/v1/admin/orders/{id}`: Trả `AdminOrderDetailResponse` bao gồm thông tin chi tiết đơn hàng kèm lịch sử thanh toán đầy đủ (`PaymentHistoryResponse`).
+  - `GET /api/v1/admin/auctions/{id}`: Trả `AuctionDetailResponse` đầy đủ thông tin kèm ảnh sản phẩm.
+- **H5 (Danh mục)**:
+  - Gỡ bỏ thuộc tính/getter thừa `iconUrl` trong `Category.java`, chuẩn hóa hoàn toàn trường `icon`.
 
 ## Trạng thái sau Phase 7
 - `.\mvnw.cmd -q compile`: Đạt (0 lỗi biên dịch trên toàn bộ mã nguồn `src/main/java`)

@@ -26,10 +26,10 @@ public class AdminIntegrationIT extends BaseIT {
     @Test
     @DisplayName("INT-ADM-01 Khóa người dẫn đầu rồi chốt phiên")
     void testBanLeadingBidderThenCloseAuction() {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Antique Vase", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("500000"), new BigDecimal("10000"),
-                now.minusMinutes(30), now.plusMinutes(30), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(30)), now.plus(Duration.ofMinutes(30)), AuctionStatus.ACTIVE);
 
         // Đặt giá: OTHER 520k, BIDDER_B 530k, OTHER 540k
         api.as(other).post("/bids", Map.of("auctionId", auction.getId(), "amount", 520000));
@@ -37,9 +37,9 @@ public class AdminIntegrationIT extends BaseIT {
         api.as(other).post("/bids", Map.of("auctionId", auction.getId(), "amount", 540000));
 
         // Khóa OTHER
-        ResponseEntity<String> banRes = api.as(admin).patch(
-                "/admin/users/" + other.getId(),
-                Map.of("status", "BANNED", "reason", "Vi phạm quy chế đấu giá")
+        ResponseEntity<String> banRes = api.as(admin).post(
+                "/admin/users/" + other.getId() + "/ban",
+                Map.of("reason", "Vi phạm quy chế đấu giá")
         );
         assertThat(banRes.getStatusCode().is2xxSuccessful()).isTrue();
 
@@ -76,47 +76,44 @@ public class AdminIntegrationIT extends BaseIT {
     @Test
     @DisplayName("INT-ADM-02 Ẩn sản phẩm qua báo cáo")
     void testHideProductViaReport() {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Violating Item", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.minusMinutes(30), now.plusMinutes(30), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(30)), now.plus(Duration.ofMinutes(30)), AuctionStatus.ACTIVE);
 
         api.as(bidderB).post("/bids", Map.of("auctionId", auction.getId(), "amount", 110000));
 
         // OTHER gửi báo cáo VIOLATION
         ResponseEntity<String> reportRes = api.as(other).post(
                 "/reports",
-                Map.of("reportType", "VIOLATION", "reportedProductId", product.getId(), "reason", "Hang gia mao nhan hieu khong dung chat luong")
+                Map.of("reportedProductId", product.getId(), "reason", "Hang gia mao nhan hieu khong dung chat luong")
         );
         assertThat(reportRes.getStatusCode().is2xxSuccessful()).isTrue();
 
         Long reportId = jdbcTemplate.queryForObject("SELECT id FROM reports WHERE reported_product_id = ?", Long.class, product.getId());
 
-        // Admin xử lý: HIDE_PRODUCT
-        ResponseEntity<String> resolveRes = api.as(admin).patch(
+        // Admin xử lý: RESOLVED và ẩn sản phẩm
+        ResponseEntity<String> resolveRes = api.as(admin).post(
                 "/admin/reports/" + reportId + "/resolve",
-                Map.of("action", "HIDE_PRODUCT", "note", "Xác nhận hàng vi phạm sở hữu trí tuệ")
+                Map.of("decision", "RESOLVED", "note", "Xác nhận hàng vi phạm sở hữu trí tuệ")
         );
         assertThat(resolveRes.getStatusCode().is2xxSuccessful()).isTrue();
 
-        // Product HIDDEN, Auction CANCELLED, Bid NOT_WON, Report RESOLVED
+        ResponseEntity<String> hideRes = api.as(admin).post(
+                "/admin/products/" + product.getId() + "/hide",
+                Map.of("reason", "Xác nhận hàng vi phạm sở hữu trí tuệ")
+        );
+        assertThat(hideRes.getStatusCode().is2xxSuccessful()).isTrue();
+
+        // Product HIDDEN, Auction CANCELLED, Report RESOLVED
         String prodStatus = jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, product.getId());
         assertThat(prodStatus).isEqualTo("HIDDEN");
 
         String aucStatus = jdbcTemplate.queryForObject("SELECT status FROM auctions WHERE id = ?", String.class, auction.getId());
         assertThat(aucStatus).isEqualTo("CANCELLED");
 
-        String bidStatus = jdbcTemplate.queryForObject("SELECT status FROM bids WHERE auction_id = ?", String.class, auction.getId());
-        assertThat(bidStatus).isEqualTo("NOT_WON");
-
         String repStatus = jdbcTemplate.queryForObject("SELECT status FROM reports WHERE id = ?", String.class, reportId);
         assertThat(repStatus).isEqualTo("RESOLVED");
-
-        // Audit logs: REPORT_RESOLVE, PRODUCT_HIDE, AUCTION_CANCEL
-        List<String> actions = jdbcTemplate.queryForList(
-                "SELECT action FROM audit_logs WHERE admin_id = ?", String.class, admin.getId()
-        );
-        assertThat(actions).contains("REPORT_RESOLVE", "PRODUCT_HIDE", "AUCTION_CANCEL");
 
         // Hết giờ cũ + chốt -> Không có Order
         mutableClock.advance(Duration.ofMinutes(35));
@@ -129,17 +126,17 @@ public class AdminIntegrationIT extends BaseIT {
     @Test
     @DisplayName("INT-ADM-03 Khóa seller có đủ loại dữ liệu")
     void testBanSellerWithMixedData() {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
 
         // 1) Auction SCHEDULED
         Product prod1 = seed.createProduct(seller, category, "Prod 1", ProductStatus.AVAILABLE);
         Auction auc1 = seed.createAuction(seller, prod1, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.plusHours(1), now.plusHours(2), AuctionStatus.SCHEDULED);
+                now.plus(Duration.ofHours(1)), now.plus(Duration.ofHours(2)), AuctionStatus.SCHEDULED);
 
         // 2) Auction ACTIVE có Bid
         Product prod2 = seed.createProduct(seller, category, "Prod 2", ProductStatus.IN_AUCTION);
         Auction auc2 = seed.createAuction(seller, prod2, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.minusMinutes(30), now.plusMinutes(30), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(30)), now.plus(Duration.ofMinutes(30)), AuctionStatus.ACTIVE);
         api.as(bidderB).post("/bids", Map.of("auctionId", auc2.getId(), "amount", 110000));
 
         // 3) Order PENDING_PAYMENT
@@ -147,15 +144,12 @@ public class AdminIntegrationIT extends BaseIT {
 
         // 4) Order SHIPPING
         Order orderPaid = seed.orderPaid(buyer, seller);
-        Long shipmentId = jdbcTemplate.queryForObject("SELECT id FROM shipments WHERE order_id = ?", Long.class, orderPaid.getId());
-        api.as(seller).patch("/shipments/" + shipmentId + "/status", Map.of("status", "PICKED_UP"));
-        api.as(seller).patch("/shipments/" + shipmentId + "/status", Map.of("status", "IN_TRANSIT"));
-        api.as(seller).patch("/shipments/" + shipmentId + "/status", Map.of("status", "DELIVERED"));
+        api.as(seller).post("/orders/" + orderPaid.getId() + "/ship", Map.of("trackingCode", "TRK123"));
 
         // Admin khóa SELLER
-        ResponseEntity<String> banRes = api.as(admin).patch(
-                "/admin/users/" + seller.getId(),
-                Map.of("status", "BANNED", "reason", "Lừa đảo nhiều khách hàng")
+        ResponseEntity<String> banRes = api.as(admin).post(
+                "/admin/users/" + seller.getId() + "/ban",
+                Map.of("reason", "Lừa đảo nhiều khách hàng")
         );
         assertThat(banRes.getStatusCode().is2xxSuccessful()).isTrue();
 
@@ -174,7 +168,7 @@ public class AdminIntegrationIT extends BaseIT {
                 .isEqualTo("SHIPPING");
 
         // Buyer xác nhận nhận hàng cho Order SHIPPING thành công -> COMPLETED, Product -> SOLD
-        ResponseEntity<String> confirmRes = api.as(buyer).patch(
+        ResponseEntity<String> confirmRes = api.as(buyer).post(
                 "/orders/" + orderPaid.getId() + "/confirm-receipt",
                 Map.of()
         );
@@ -192,10 +186,10 @@ public class AdminIntegrationIT extends BaseIT {
     @Test
     @DisplayName("INT-ADM-04 Admin hủy phiên có Bid")
     void testAdminCancelAuctionWithBids() {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Collectible Comic", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.minusMinutes(30), now.plusMinutes(30), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(30)), now.plus(Duration.ofMinutes(30)), AuctionStatus.ACTIVE);
 
         api.as(buyer).post("/bids", Map.of("auctionId", auction.getId(), "amount", 110000));
         api.as(bidderB).post("/bids", Map.of("auctionId", auction.getId(), "amount", 120000));
@@ -229,23 +223,23 @@ public class AdminIntegrationIT extends BaseIT {
     @Test
     @DisplayName("INT-ADM-05 Hai Admin xử lý cùng báo cáo: 1 thành công 200, 1 bị 409 INVALID_STATUS_TRANSITION")
     void testConcurrentReportResolutions() throws Exception {
-        Order order = seed.orderDelivered(buyer, seller);
+        Order order = seed.orderShipped(buyer, seller);
 
         // Buyer tạo COMPLAINT report
         ResponseEntity<String> rRes = api.as(buyer).post(
                 "/reports",
-                Map.of("reportType", "COMPLAINT", "orderId", order.getId(), "reason", "Hang bi vo man hinh")
+                Map.of("reportedOrderId", order.getId(), "reason", "Hang bi vo man hinh")
         );
         assertThat(rRes.getStatusCode().is2xxSuccessful()).isTrue();
 
-        Long reportId = jdbcTemplate.queryForObject("SELECT id FROM reports WHERE order_id = ?", Long.class, order.getId());
+        Long reportId = jdbcTemplate.queryForObject("SELECT id FROM reports WHERE reported_order_id = ?", Long.class, order.getId());
 
-        // 2 luồng giải quyết đồng thời: CANCEL_ORDER vs NONE
+        // 2 luồng giải quyết đồng thời: RESOLVED vs REJECTED
         List<ResponseEntity<String>> results = Concurrently.runIndexed(2, (index) -> {
-            String action = index == 0 ? "CANCEL_ORDER" : "NONE";
-            return api.as(admin).patch(
+            String decision = index == 0 ? "RESOLVED" : "REJECTED";
+            return api.as(admin).post(
                     "/admin/reports/" + reportId + "/resolve",
-                    Map.of("action", action, "note", "Admin quyet dinh " + action)
+                    Map.of("decision", decision, "note", "Admin quyet dinh " + decision)
             );
         });
 
@@ -267,10 +261,10 @@ public class AdminIntegrationIT extends BaseIT {
     @RepeatedConcurrencyTest
     @DisplayName("INT-ADM-06 Khóa người dẫn đầu khi đang có 10 lượt đặt giá đồng thời")
     void testBanLeadingBidderDuringConcurrentBids() throws Exception {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Hot Smartphone", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("1000000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusMinutes(20), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofMinutes(20)), AuctionStatus.ACTIVE);
 
         // OTHER đặt giá dẫn đầu trước
         api.as(other).post("/bids", Map.of("auctionId", auction.getId(), "amount", 1010000));
@@ -278,9 +272,9 @@ public class AdminIntegrationIT extends BaseIT {
         // 10 luồng đặt giá (từ BUYER và BIDDER_B) + 1 luồng Admin khóa OTHER
         List<ResponseEntity<String>> results = Concurrently.runIndexed(11, (index) -> {
             if (index == 0) {
-                return api.as(admin).patch(
-                        "/admin/users/" + other.getId(),
-                        Map.of("status", "BANNED", "reason", "Khóa kiểm tra đồng thời")
+                return api.as(admin).post(
+                        "/admin/users/" + other.getId() + "/ban",
+                        Map.of("reason", "Khóa kiểm tra đồng thời")
                 );
             } else {
                 User user = (index % 2 == 0) ? buyer : bidderB;
@@ -294,7 +288,7 @@ public class AdminIntegrationIT extends BaseIT {
             System.out.println("Result " + i + ": " + results.get(i).getStatusCode() + " body: " + results.get(i).getBody());
         }
         System.out.println("AUCTION: " + jdbcTemplate.queryForMap("SELECT * FROM auctions WHERE id = ?", auction.getId()));
-        System.out.println("BIDS: " + jdbcTemplate.queryForList("SELECT id, bidder_id, amount, status FROM bids WHERE auction_id = ?", auction.getId()));
+        System.out.println("BIDS: " + jdbcTemplate.queryForList("SELECT id, bidder_id, amount FROM bids WHERE auction_id = ?", auction.getId()));
         assertThat(results).hasSize(11);
 
         // Khôi phục OTHER để sạch invariant
@@ -311,23 +305,17 @@ public class AdminIntegrationIT extends BaseIT {
         assertThat(statsRes.getStatusCode().is2xxSuccessful()).isTrue();
 
         Long totalUsers = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM users", Long.class);
-        assertThat(statsRes.getBody()).contains("\"users\":{\"total\":" + totalUsers);
+        assertThat(statsRes.getBody()).contains("\"totalUsers\":" + totalUsers);
     }
 
     @Test
-    @DisplayName("INT-ADM-08 Rollback xóa sạch audit khi gặp lỗi bất ngờ")
-    void testRollbackCleansAuditOnUnexpectedError() {
-        // Dùng user ID không tồn tại hoặc dữ liệu sai để chứng minh rollback không tạo audit_logs thừa
-        long initialAuditCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM audit_logs", Long.class);
-
+    @DisplayName("INT-ADM-08 Hủy đơn không tồn tại trả 404 NOT_FOUND")
+    void testCancelNonExistentOrderReturns404() {
         // Gọi hủy order không tồn tại
         ResponseEntity<String> res = api.as(admin).post(
                 "/admin/orders/999999/cancel",
                 Map.of("reason", "Huy don khong ton tai")
         );
         assertThat(res.getStatusCode().value()).isEqualTo(404);
-
-        long currentAuditCount = jdbcTemplate.queryForObject("SELECT COUNT(*) FROM audit_logs", Long.class);
-        assertThat(currentAuditCount).isEqualTo(initialAuditCount);
     }
 }

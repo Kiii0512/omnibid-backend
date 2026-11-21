@@ -17,6 +17,7 @@ import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionEventType;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.ProductStatus;
+import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.ProductRepository;
@@ -72,6 +73,10 @@ public class BidServiceImpl implements BidService {
 
         User bidder = userRepository.findById(bidderId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Người dùng không tồn tại"));
+
+        if (bidder.getStatus() == UserStatus.BANNED) {
+            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
+        }
 
         Instant now = Instant.now(clock);
         Long previousLeaderId = auction.getHighestBidderId();

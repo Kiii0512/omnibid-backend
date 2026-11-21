@@ -31,7 +31,7 @@ import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 
@@ -89,8 +89,8 @@ class ProductControllerTest {
     }
 
     @Test
-    @DisplayName("PATCH /api/v1/products/{id} with USED condition returns 200 OK")
-    void updateProduct_WithUsedCondition_Returns200() throws Exception {
+    @DisplayName("PATCH /api/v1/products/{id} with LIKE_NEW condition returns 200 OK")
+    void updateProduct_WithLikeNewCondition_Returns200() throws Exception {
         ProductResponse response = new ProductResponse(
                 5L,
                 2L,
@@ -99,26 +99,25 @@ class ProductControllerTest {
                 "Antiques",
                 "Bình gốm thời Chu thế kỷ 18",
                 "Mô tả",
-                ProductCondition.USED,
+                ProductCondition.LIKE_NEW,
                 ProductStatus.AVAILABLE,
                 Collections.emptyList(),
-                LocalDateTime.now(),
-                LocalDateTime.now()
+                Instant.now(),
+                Instant.now()
         );
 
         when(productService.updateProduct(eq(2L), eq(5L), any(ProductUpdateRequest.class)))
                 .thenReturn(response);
 
-        String jsonBody = "{\"categoryId\": 3, \"title\": \"Bình gốm thời Chu thế kỷ 18\", \"description\": \"Mô tả\", \"condition\": \"USED\"}";
+        String jsonBody = "{\"categoryId\": 3, \"title\": \"Bình gốm thời Chu thế kỷ 18\", \"description\": \"Mô tả\", \"condition\": \"LIKE_NEW\"}";
 
         mockMvc.perform(patch("/api/v1/products/5")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(jsonBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.message").value("Product updated successfully"))
                 .andExpect(jsonPath("$.data.id").value(5))
-                .andExpect(jsonPath("$.data.condition").value("USED"));
+                .andExpect(jsonPath("$.data.condition").value("LIKE_NEW"));
     }
 
     @Test
@@ -135,8 +134,8 @@ class ProductControllerTest {
                 ProductCondition.GOOD,
                 ProductStatus.AVAILABLE,
                 Collections.emptyList(),
-                LocalDateTime.now(),
-                LocalDateTime.now()
+                Instant.now(),
+                Instant.now()
         );
 
         when(productService.updateProduct(eq(2L), eq(5L), any(ProductUpdateRequest.class)))
@@ -149,13 +148,12 @@ class ProductControllerTest {
                         .content(jsonBody))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.message").value("Product updated successfully"))
                 .andExpect(jsonPath("$.data.title").value("Bình gốm thời Chu thế kỷ 18 mới"));
     }
 
     @Test
-    @DisplayName("POST /api/v1/products with USED condition returns 201 Created")
-    void createProduct_WithUsedCondition_Returns201() throws Exception {
+    @DisplayName("POST /api/v1/products with multipart creates product and returns 201 Created")
+    void createProduct_WithFiles_Returns201() throws Exception {
         ProductResponse response = new ProductResponse(
                 6L,
                 2L,
@@ -164,25 +162,36 @@ class ProductControllerTest {
                 "Antiques",
                 "Đĩa gốm cổ",
                 "Mô tả đĩa",
-                ProductCondition.USED,
+                ProductCondition.GOOD,
                 ProductStatus.AVAILABLE,
                 Collections.emptyList(),
-                LocalDateTime.now(),
-                LocalDateTime.now()
+                Instant.now(),
+                Instant.now()
         );
 
-        when(productService.createProduct(eq(2L), any(ProductCreateRequest.class)))
+        when(productService.createProduct(eq(2L), any(ProductCreateRequest.class), any()))
                 .thenReturn(response);
 
-        String jsonBody = "{\"categoryId\": 3, \"title\": \"Đĩa gốm cổ\", \"description\": \"Mô tả đĩa\", \"condition\": \"USED\"}";
+        MockMultipartFile productPart = new MockMultipartFile(
+                "product",
+                "product.json",
+                MediaType.APPLICATION_JSON_VALUE,
+                "{\"categoryId\": 3, \"title\": \"Đĩa gốm cổ\", \"description\": \"Mô tả đĩa\", \"condition\": \"GOOD\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+        MockMultipartFile filePart = new MockMultipartFile(
+                "files",
+                "img.jpg",
+                "image/jpeg",
+                new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0}
+        );
 
-        mockMvc.perform(post("/api/v1/products")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(jsonBody))
+        mockMvc.perform(multipart("/api/v1/products")
+                        .file(productPart)
+                        .file(filePart))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(6))
-                .andExpect(jsonPath("$.data.condition").value("USED"));
+                .andExpect(jsonPath("$.data.condition").value("GOOD"));
     }
 
     @Test
@@ -196,14 +205,14 @@ class ProductControllerTest {
                 "Antiques",
                 "Bình gốm thời Chu thế kỷ 18",
                 "Mô tả",
-                ProductCondition.USED,
+                ProductCondition.GOOD,
                 ProductStatus.AVAILABLE,
                 Collections.emptyList(),
-                LocalDateTime.now(),
-                LocalDateTime.now()
+                Instant.now(),
+                Instant.now()
         );
 
-        when(productService.getProductById(5L)).thenReturn(response);
+        when(productService.getProductById(2L, 5L)).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/products/5"))
                 .andExpect(status().isOk())
@@ -215,67 +224,46 @@ class ProductControllerTest {
     @DisplayName("DELETE /api/v1/products/{id} returns 204 No Content")
     void deleteProduct_Returns204() throws Exception {
         mockMvc.perform(delete("/api/v1/products/5"))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk());
 
         verify(productService).deleteProduct(2L, 5L);
     }
 
     @Test
-    @DisplayName("POST /api/v1/products/{id}/images uploads image successfully and returns 201 Created")
-    void uploadProductImage_Success() throws Exception {
+    @DisplayName("POST /api/v1/products/{id}/images uploads images successfully and returns 201 Created")
+    void uploadProductImages_Success() throws Exception {
         ProductImageResponse response = new ProductImageResponse(
                 10L,
-                "/uploads/products/9/uuid-keychron.jpg",
-                "products/9/uuid-keychron.jpg",
+                "https://res.cloudinary.com/demo/image/upload/v1/products/9/uuid.jpg",
+                "products/9/uuid",
                 true,
-                LocalDateTime.now()
+                Instant.now()
         );
 
-        when(productService.uploadProductImage(eq(2L), eq(9L), any())).thenReturn(response);
+        when(productService.uploadProductImages(eq(2L), eq(9L), any())).thenReturn(List.of(response));
 
         MockMultipartFile file = new MockMultipartFile(
-                "file",
+                "files",
                 "keychron.jpg",
                 "image/jpeg",
-                "fake image content".getBytes()
+                new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0}
         );
 
         mockMvc.perform(multipart("/api/v1/products/9/images")
                         .file(file))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.message").value("Image uploaded successfully"))
-                .andExpect(jsonPath("$.data.id").value(10))
-                .andExpect(jsonPath("$.data.imageUrl").value("/uploads/products/9/uuid-keychron.jpg"))
-                .andExpect(jsonPath("$.data.isPrimary").value(true));
+                .andExpect(jsonPath("$.data[0].id").value(10))
+                .andExpect(jsonPath("$.data[0].imageUrl").value("https://res.cloudinary.com/demo/image/upload/v1/products/9/uuid.jpg"))
+                .andExpect(jsonPath("$.data[0].isPrimary").value(true));
     }
 
     @Test
-    @DisplayName("DELETE /api/v1/products/{id}/images/{imageId} returns 204 No Content")
-    void deleteProductImage_Returns204() throws Exception {
+    @DisplayName("DELETE /api/v1/products/{id}/images/{imageId} returns 200 OK")
+    void deleteProductImage_Returns200() throws Exception {
         mockMvc.perform(delete("/api/v1/products/9/images/10"))
-                .andExpect(status().isNoContent());
+                .andExpect(status().isOk());
 
         verify(productService).deleteProductImage(2L, 9L, 10L);
-    }
-
-    @Test
-    @DisplayName("PATCH /api/v1/products/{id}/images/{imageId}/primary returns 200 OK")
-    void setPrimaryImage_Returns200() throws Exception {
-        ProductImageResponse response = new ProductImageResponse(
-                10L,
-                "/uploads/products/9/uuid-keychron.jpg",
-                "products/9/uuid-keychron.jpg",
-                true,
-                LocalDateTime.now()
-        );
-
-        when(productService.setPrimaryImage(2L, 9L, 10L)).thenReturn(response);
-
-        mockMvc.perform(patch("/api/v1/products/9/images/10/primary"))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.id").value(10))
-                .andExpect(jsonPath("$.data.isPrimary").value(true));
     }
 }

@@ -21,9 +21,7 @@ public class TestSupportConfig {
 
     @Bean
     @Primary
-    public CountingMockPaymentGateway countingMockPaymentGateway(AppProperties appProperties,
-                                                                 ObjectProvider<PaymentService> paymentServiceProvider,
-                                                                 TaskScheduler taskScheduler) {
-        return new CountingMockPaymentGateway(appProperties, paymentServiceProvider, taskScheduler);
+    public CountingMockPaymentGateway countingMockPaymentGateway(AppProperties appProperties) {
+        return new CountingMockPaymentGateway(appProperties);
     }
 }

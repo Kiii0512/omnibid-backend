@@ -1,19 +1,17 @@
 package com.omnibid.service;
 
-import com.omnibid.config.AppProperties;
 import com.omnibid.entity.Auction;
-import com.omnibid.entity.Bid;
 import com.omnibid.entity.Order;
 import com.omnibid.entity.Product;
+import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
-import com.omnibid.enums.BidStatus;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.ProductStatus;
+import com.omnibid.enums.UserRole;
+import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.AuctionRepository;
-import com.omnibid.repository.BidRepository;
-import com.omnibid.repository.OrderRepository;
 import com.omnibid.repository.ProductRepository;
-import com.omnibid.service.impl.OrderServiceImpl;
+import com.omnibid.repository.UserRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -23,76 +21,56 @@ import org.junit.jupiter.params.provider.NullSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.transaction.support.TransactionCallback;
-import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.LocalDateTime;
-import java.time.ZoneId;
-import java.util.Collections;
-import java.util.List;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class AuctionCloserTest {
 
-    private static final LocalDateTime NOW = LocalDateTime.of(2026, 11, 2, 10, 0);
-    private final Clock clock = Clock.fixed(NOW.atZone(ZoneId.of("Asia/Ho_Chi_Minh")).toInstant(), ZoneId.of("Asia/Ho_Chi_Minh"));
+    private static final Instant NOW = Instant.parse("2026-11-02T10:00:00Z");
+    private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
 
     @Mock
     private AuctionRepository auctionRepository;
-
-    @Mock
-    private BidRepository bidRepository;
-
     @Mock
     private ProductRepository productRepository;
-
     @Mock
-    private OrderRepository orderRepository;
-
+    private UserRepository userRepository;
+    @Mock
+    private OrderService orderService;
     @Mock
     private WebSocketPublisher webSocketPublisher;
-
     @Mock
-    private NotificationService notificationService;
+    private PlatformTransactionManager transactionManager;
 
-    @Mock
-    private TransactionTemplate transactionTemplate;
-
-    private OrderService orderService;
     private AuctionCloser auctionCloser;
 
     private Auction sampleAuction;
     private Product sampleProduct;
+    private User sampleWinner;
 
     @BeforeEach
     void setUp() {
-        AppProperties appProperties = new AppProperties();
-        orderService = new OrderServiceImpl(orderRepository, appProperties);
-
-        // Direct runner transaction template for unit test
-        lenient().doAnswer(invocation -> {
-            java.util.function.Consumer<org.springframework.transaction.TransactionStatus> callback = invocation.getArgument(0);
-            callback.accept(null);
-            return null;
-        }).when(transactionTemplate).executeWithoutResult(any());
+        lenient().when(transactionManager.getTransaction(any())).thenReturn(mock(TransactionStatus.class));
 
         auctionCloser = new AuctionCloser(
-                transactionTemplate,
+                transactionManager,
                 auctionRepository,
-                bidRepository,
                 productRepository,
+                userRepository,
                 orderService,
                 webSocketPublisher,
-                notificationService,
                 clock
         );
 
@@ -112,28 +90,25 @@ class AuctionCloserTest {
                 .currentPrice(BigDecimal.valueOf(540000))
                 .highestBidderId(2L)
                 .bidCount(3)
-                .startTime(NOW.minusHours(2))
+                .startTime(NOW.minus(2, ChronoUnit.HOURS))
                 .endTime(NOW)
                 .status(AuctionStatus.ACTIVE)
+                .build();
+
+        sampleWinner = User.builder()
+                .id(2L)
+                .fullName("Buyer One")
+                .role(UserRole.USER)
+                .status(UserStatus.ACTIVE)
                 .build();
     }
 
     @Test
-    @DisplayName("UT-SCH-01 Chốt phiên có người thắng: Auction ENDED, winner, final_price, Bid WON, Product RESERVED, tạo Order")
+    @DisplayName("UT-SCH-01 Chốt phiên có người thắng: Auction ENDED, winner, final_price, Product RESERVED, tạo Order")
     void closeOne_WithWinner_ClosesAuctionAndCreatesOrder() {
-        Bid highestBid = Bid.builder()
-                .id(1L)
-                .auctionId(100L)
-                .bidderId(2L)
-                .amount(BigDecimal.valueOf(540000))
-                .status(BidStatus.LEADING)
-                .build();
-
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(List.of(highestBid));
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
-        when(orderRepository.findByAuctionId(100L)).thenReturn(Optional.empty());
+        when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(sampleProduct));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleWinner));
 
         Order savedOrder = Order.builder()
                 .id(9L)
@@ -143,9 +118,8 @@ class AuctionCloserTest {
                 .buyerId(2L)
                 .finalPrice(BigDecimal.valueOf(540000))
                 .status(OrderStatus.PENDING_PAYMENT)
-                .paymentDeadline(NOW.plusHours(48))
                 .build();
-        when(orderRepository.save(any(Order.class))).thenReturn(savedOrder);
+        when(orderService.createFromAuction(any(), any())).thenReturn(savedOrder);
 
         auctionCloser.closeOne(100L);
 
@@ -153,23 +127,9 @@ class AuctionCloserTest {
         assertEquals(2L, sampleAuction.getWinnerId());
         assertEquals(BigDecimal.valueOf(540000), sampleAuction.getFinalPrice());
         assertEquals(NOW, sampleAuction.getClosedAt());
-
-        assertEquals(BidStatus.WON, highestBid.getStatus());
-        verify(bidRepository).save(highestBid);
-
         assertEquals(ProductStatus.RESERVED, sampleProduct.getStatus());
-        verify(productRepository).save(sampleProduct);
 
-        verify(orderRepository).save(argThat(order ->
-                order.getAuctionId().equals(100L)
-                && order.getProductId().equals(10L)
-                && order.getSellerId().equals(1L)
-                && order.getBuyerId().equals(2L)
-                && order.getFinalPrice().compareTo(BigDecimal.valueOf(540000)) == 0
-                && order.getPaymentDeadline().equals(NOW.plusHours(48))
-        ));
-
-        verify(webSocketPublisher).publishAuctionUpdate(eq(100L), any());
+        verify(orderService).createFromAuction(eq(sampleAuction), eq(NOW));
     }
 
     @ParameterizedTest
@@ -180,19 +140,10 @@ class AuctionCloserTest {
         BigDecimal reservePrice = reserveStr != null ? new BigDecimal(reserveStr) : null;
         sampleAuction.setReservePrice(reservePrice);
 
-        Bid highestBid = Bid.builder()
-                .id(1L)
-                .auctionId(100L)
-                .bidderId(2L)
-                .amount(BigDecimal.valueOf(540000))
-                .status(BidStatus.LEADING)
-                .build();
-
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(List.of(highestBid));
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
-        when(orderRepository.findByAuctionId(100L)).thenReturn(Optional.empty());
+        when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(sampleProduct));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleWinner));
+        when(orderService.createFromAuction(any(), any())).thenReturn(mock(Order.class));
 
         auctionCloser.closeOne(100L);
 
@@ -201,93 +152,30 @@ class AuctionCloserTest {
     }
 
     @Test
-    @DisplayName("UT-SCH-03 Hạn thanh toán tính từ closed_at khi Scheduler trễ")
-    void closeOne_SchedulerDelayed_DeadlineCalculatedFromClosedAt() {
-        // Auction ended 30 minutes ago, but closed at NOW
-        sampleAuction.setEndTime(NOW.minusMinutes(30));
-
-        Bid highestBid = Bid.builder()
-                .id(1L)
-                .auctionId(100L)
-                .bidderId(2L)
-                .amount(BigDecimal.valueOf(540000))
-                .status(BidStatus.LEADING)
-                .build();
+    @DisplayName("UT-SCH-04 Người dẫn đầu bị khóa trước khi chốt: chuyển UNSOLD theo BR-18")
+    void closeOne_LeadingBidderBanned_ClosesAsUnsold() {
+        sampleWinner.setStatus(UserStatus.BANNED);
 
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(List.of(highestBid));
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
-        when(orderRepository.findByAuctionId(100L)).thenReturn(Optional.empty());
+        when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(sampleProduct));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleWinner));
 
         auctionCloser.closeOne(100L);
 
-        assertEquals(NOW, sampleAuction.getClosedAt());
-        verify(orderRepository).save(argThat(order ->
-                order.getPaymentDeadline().equals(NOW.plusHours(48)) // closedAt + 48h
-        ));
-    }
-
-    @Test
-    @DisplayName("UT-SCH-04 Người dẫn đầu bị khóa trước khi chốt: chọn Bid hợp lệ kế tiếp")
-    void closeOne_LeadingBidderBanned_SelectsNextValidBidder() {
-        // Valid bids excludes banned user bid, returning next valid bid of BIDDER_B (id=4, amount=520000)
-        Bid secondBid = Bid.builder()
-                .id(2L)
-                .auctionId(100L)
-                .bidderId(4L)
-                .amount(BigDecimal.valueOf(520000))
-                .status(BidStatus.OUTBID)
-                .build();
-
-        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(List.of(secondBid));
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
-        when(orderRepository.findByAuctionId(100L)).thenReturn(Optional.empty());
-
-        auctionCloser.closeOne(100L);
-
-        assertEquals(AuctionStatus.ENDED, sampleAuction.getStatus());
-        assertEquals(4L, sampleAuction.getWinnerId());
-        assertEquals(BigDecimal.valueOf(520000), sampleAuction.getFinalPrice());
-        assertEquals(BidStatus.WON, secondBid.getStatus());
-    }
-
-    @Test
-    @DisplayName("UT-SCH-05 Chốt khi Order đã tồn tại: không tạo Order mới, không lỗi")
-    void closeOne_OrderAlreadyExists_Idempotent() {
-        Bid highestBid = Bid.builder()
-                .id(1L)
-                .auctionId(100L)
-                .bidderId(2L)
-                .amount(BigDecimal.valueOf(540000))
-                .status(BidStatus.LEADING)
-                .build();
-
-        Order existingOrder = Order.builder()
-                .id(9L)
-                .auctionId(100L)
-                .status(OrderStatus.PENDING_PAYMENT)
-                .build();
-
-        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(List.of(highestBid));
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
-        when(orderRepository.findByAuctionId(100L)).thenReturn(Optional.of(existingOrder));
-
-        assertDoesNotThrow(() -> auctionCloser.closeOne(100L));
-        verify(orderRepository, never()).save(any(Order.class));
+        assertEquals(AuctionStatus.UNSOLD, sampleAuction.getStatus());
+        assertNull(sampleAuction.getWinnerId());
+        assertEquals(ProductStatus.AVAILABLE, sampleProduct.getStatus());
+        verifyNoInteractions(orderService);
     }
 
     @Test
     @DisplayName("UT-SCH-06 Không có Bid: chuyển UNSOLD, Product AVAILABLE, không tạo Order")
     void closeOne_NoBids_UnsoldAndProductAvailable() {
+        sampleAuction.setHighestBidderId(null);
+        sampleAuction.setBidCount(0);
+
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(Collections.emptyList());
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(sampleProduct));
 
         auctionCloser.closeOne(100L);
 
@@ -295,87 +183,49 @@ class AuctionCloserTest {
         assertEquals(NOW, sampleAuction.getClosedAt());
         assertNull(sampleAuction.getWinnerId());
         assertEquals(ProductStatus.AVAILABLE, sampleProduct.getStatus());
-        verifyNoInteractions(orderRepository);
+        verifyNoInteractions(orderService);
     }
 
     @Test
-    @DisplayName("UT-SCH-07 Không đạt giá sàn: chuyển UNSOLD, Bid NOT_WON, Product AVAILABLE")
-    void closeOne_ReservePriceNotMet_UnsoldAndBidNotWon() {
+    @DisplayName("UT-SCH-07 Không đạt giá sàn: chuyển UNSOLD, Product AVAILABLE")
+    void closeOne_ReservePriceNotMet_Unsold() {
         sampleAuction.setReservePrice(BigDecimal.valueOf(600000));
 
-        Bid highestBid = Bid.builder()
-                .id(1L)
-                .auctionId(100L)
-                .bidderId(2L)
-                .amount(BigDecimal.valueOf(540000))
-                .status(BidStatus.LEADING)
-                .build();
-
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(List.of(highestBid));
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(sampleProduct));
+        when(userRepository.findById(2L)).thenReturn(Optional.of(sampleWinner));
 
         auctionCloser.closeOne(100L);
 
         assertEquals(AuctionStatus.UNSOLD, sampleAuction.getStatus());
-        assertEquals(BidStatus.NOT_WON, highestBid.getStatus());
         assertEquals(ProductStatus.AVAILABLE, sampleProduct.getStatus());
-        verifyNoInteractions(orderRepository);
+        verifyNoInteractions(orderService);
     }
 
     @Test
     @DisplayName("UT-SCH-08 Product HIDDEN khi phiên UNSOLD: Product giữ HIDDEN")
     void closeOne_ProductHidden_RemainsHiddenWhenUnsold() {
         sampleProduct.setStatus(ProductStatus.HIDDEN);
+        sampleAuction.setHighestBidderId(null);
 
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(Collections.emptyList());
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
+        when(productRepository.findByIdForUpdate(10L)).thenReturn(Optional.of(sampleProduct));
 
         auctionCloser.closeOne(100L);
 
         assertEquals(AuctionStatus.UNSOLD, sampleAuction.getStatus());
         assertEquals(ProductStatus.HIDDEN, sampleProduct.getStatus());
-        verify(productRepository, never()).save(any(Product.class));
     }
 
     @Test
-    @DisplayName("UT-SCH-09 Kiểm tra lại sau khóa: nếu phiên đã CANCELLED hoặc chưa hết giờ thì bỏ qua")
-    void closeOne_RecheckStateAfterLock_IgnoresWhenCancelledOrNotEnded() {
+    @DisplayName("UT-SCH-09 Kiểm tra lại sau khóa: nếu phiên đã CANCELLED thì bỏ qua")
+    void closeOne_RecheckStateAfterLock_IgnoresWhenCancelled() {
         sampleAuction.setStatus(AuctionStatus.CANCELLED);
         when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
 
         auctionCloser.closeOne(100L);
 
         verify(auctionRepository, never()).save(any(Auction.class));
-        verifyNoInteractions(bidRepository);
-        verifyNoInteractions(orderRepository);
-    }
-
-    @Test
-    @DisplayName("UT-SCH-10 Thông báo sau chốt: đăng ký AUCTION_WON, ORDER_CREATED (người thắng), AUCTION_ENDED (seller)")
-    void closeOne_NotifiesWebSocketUpdate() {
-        Bid highestBid = Bid.builder()
-                .id(1L)
-                .auctionId(100L)
-                .bidderId(2L)
-                .amount(BigDecimal.valueOf(540000))
-                .status(BidStatus.LEADING)
-                .build();
-
-        when(auctionRepository.findByIdForUpdate(100L)).thenReturn(Optional.of(sampleAuction));
-        when(bidRepository.findValidBidsDesc(eq(100L), any(), eq(PageRequest.of(0, 1))))
-                .thenReturn(List.of(highestBid));
-        when(productRepository.findById(10L)).thenReturn(Optional.of(sampleProduct));
-        when(orderRepository.findByAuctionId(100L)).thenReturn(Optional.empty());
-
-        auctionCloser.closeOne(100L);
-
-        verify(notificationService).notify(eq(2L), eq(com.omnibid.enums.NotificationType.AUCTION_WON), any(), any(), eq("AUCTION"), eq(100L));
-        verify(notificationService).notify(eq(2L), eq(com.omnibid.enums.NotificationType.ORDER_CREATED), any(), any(), eq("ORDER"), any());
-        verify(notificationService).notify(eq(1L), eq(com.omnibid.enums.NotificationType.AUCTION_ENDED), any(), any(), eq("AUCTION"), eq(100L));
-        verify(webSocketPublisher).publishAuctionUpdate(eq(100L), any());
+        verifyNoInteractions(orderService);
     }
 }

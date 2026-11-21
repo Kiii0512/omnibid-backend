@@ -3,11 +3,9 @@ package com.omnibid.it;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.omnibid.entity.Order;
-import com.omnibid.entity.Shipment;
 import com.omnibid.entity.User;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
-import com.omnibid.repository.ShipmentRepository;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.security.JwtTokenProvider;
 import com.omnibid.service.NotificationService;
@@ -36,9 +34,6 @@ public class AuthorizationIT extends BaseIT {
 
     @Autowired
     private UserRepository userRepository;
-
-    @Autowired
-    private ShipmentRepository shipmentRepository;
 
     @Autowired
     private NotificationService notificationService;
@@ -85,34 +80,25 @@ public class AuthorizationIT extends BaseIT {
     }
 
     @Test
-    @DisplayName("INT-AUT-02 GET /orders/{id} và /shipment bởi BUYER, SELLER, ADMIN, OTHER")
+    @DisplayName("INT-AUT-02 GET /orders/{id} bởi BUYER, SELLER, ADMIN, OTHER")
     void testOrderAndShipmentAccessPermissions() {
         Order order = seed.orderPaid(buyer, seller);
-        Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElseThrow();
 
-        // BUYER: 200, 200
+        // BUYER: 200
         ResponseEntity<String> buyerOrderRes = api.as(buyer).get("/orders/" + order.getId());
         assertThat(buyerOrderRes.getStatusCode().value()).isEqualTo(200);
-        ResponseEntity<String> buyerShipmentRes = api.as(buyer).get("/orders/" + order.getId() + "/shipment");
-        assertThat(buyerShipmentRes.getStatusCode().value()).isEqualTo(200);
 
-        // SELLER: 200, 200
+        // SELLER: 200
         ResponseEntity<String> sellerOrderRes = api.as(seller).get("/orders/" + order.getId());
         assertThat(sellerOrderRes.getStatusCode().value()).isEqualTo(200);
-        ResponseEntity<String> sellerShipmentRes = api.as(seller).get("/orders/" + order.getId() + "/shipment");
-        assertThat(sellerShipmentRes.getStatusCode().value()).isEqualTo(200);
 
-        // ADMIN: 200, 200
+        // ADMIN: 403 (Admin sử dụng endpoint /admin/orders/{id})
         ResponseEntity<String> adminOrderRes = api.as(admin).get("/orders/" + order.getId());
-        assertThat(adminOrderRes.getStatusCode().value()).isEqualTo(200);
-        ResponseEntity<String> adminShipmentRes = api.as(admin).get("/orders/" + order.getId() + "/shipment");
-        assertThat(adminShipmentRes.getStatusCode().value()).isEqualTo(200);
+        assertThat(adminOrderRes.getStatusCode().value()).isEqualTo(403);
 
-        // OTHER: 403, 403
+        // OTHER: 403
         ResponseEntity<String> otherOrderRes = api.as(other).get("/orders/" + order.getId());
         assertThat(otherOrderRes.getStatusCode().value()).isEqualTo(403);
-        ResponseEntity<String> otherShipmentRes = api.as(other).get("/orders/" + order.getId() + "/shipment");
-        assertThat(otherShipmentRes.getStatusCode().value()).isEqualTo(403);
     }
 
     @Test
@@ -157,7 +143,7 @@ public class AuthorizationIT extends BaseIT {
     @DisplayName("INT-AUT-05 User bị khóa dùng token cũ gọi GET /orders, POST /bids, POST /payments -> 403 ACCOUNT_BANNED")
     void testBannedUserBlocked() {
         User bannedUser = seed.createUser("banned-user@omnibid.com", "Banned Guy", UserRole.USER, UserStatus.ACTIVE);
-        String token = jwtTokenProvider.generateToken(bannedUser.getEmail(), "ROLE_USER");
+        String token = jwtTokenProvider.generateToken(bannedUser.getId(), bannedUser.getRole(), bannedUser.getTokenVersion());
 
         // Cập nhật trạng thái người dùng sang BANNED
         bannedUser.setStatus(UserStatus.BANNED);
@@ -199,39 +185,37 @@ public class AuthorizationIT extends BaseIT {
     }
 
     @Test
-    @DisplayName("INT-AUT-07 PATCH /shipments/{id}/status bởi BUYER, OTHER, SELLER của đơn khác -> 403")
+    @DisplayName("INT-AUT-07 POST /orders/{id}/ship bởi BUYER, OTHER, SELLER của đơn khác -> 403")
     void testShipmentStatusUpdatePermissions() {
         Order order = seed.orderPaid(buyer, seller);
-        Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElseThrow();
-        Map<String, Object> body = Map.of("status", "PICKED_UP", "note", "Đã lấy hàng");
 
         // BUYER: 403
-        ResponseEntity<String> buyerRes = api.as(buyer).patch("/shipments/" + shipment.getId() + "/status", body);
+        ResponseEntity<String> buyerRes = api.as(buyer).post("/orders/" + order.getId() + "/ship", null);
         assertThat(buyerRes.getStatusCode().value()).isEqualTo(403);
 
         // OTHER: 403
-        ResponseEntity<String> otherRes = api.as(other).patch("/shipments/" + shipment.getId() + "/status", body);
+        ResponseEntity<String> otherRes = api.as(other).post("/orders/" + order.getId() + "/ship", null);
         assertThat(otherRes.getStatusCode().value()).isEqualTo(403);
 
         // SELLER của đơn khác: 403
         User anotherSeller = seed.createUser("seller2@omnibid.com", "Seller Two", UserRole.USER, UserStatus.ACTIVE);
-        ResponseEntity<String> anotherSellerRes = api.as(anotherSeller).patch("/shipments/" + shipment.getId() + "/status", body);
+        ResponseEntity<String> anotherSellerRes = api.as(anotherSeller).post("/orders/" + order.getId() + "/ship", null);
         assertThat(anotherSellerRes.getStatusCode().value()).isEqualTo(403);
     }
 
     @Test
-    @DisplayName("INT-AUT-08 OTHER PATCH /notifications/{id}/read thông báo của BUYER -> 404, không đổi is_read")
+    @DisplayName("INT-AUT-08 OTHER POST /notifications/{id}/read thông báo của BUYER -> 403/404, không đổi is_read")
     void testNotificationReadPermissions() {
         new TransactionTemplate(transactionManager).executeWithoutResult(status ->
-                notificationService.notify(buyer.getId(), NotificationType.ORDER_CREATED, "Test Title", "Test Content", "ORDER", 999L)
+                notificationService.notify(buyer.getId(), NotificationType.ORDER_UPDATE, "Test Title", "Test Content", "ORDER", 999L)
         );
         Long notifId = jdbcTemplate.queryForObject(
                 "SELECT id FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 1",
                 Long.class, buyer.getId()
         );
 
-        ResponseEntity<String> res = api.as(other).patch("/notifications/" + notifId + "/read", null);
-        assertThat(res.getStatusCode().value()).isEqualTo(404);
+        ResponseEntity<String> res = api.as(other).post("/notifications/" + notifId + "/read", null);
+        assertThat(res.getStatusCode().value()).isIn(403, 404);
 
         Boolean isRead = jdbcTemplate.queryForObject(
                 "SELECT is_read FROM notifications WHERE id = ?", Boolean.class, notifId

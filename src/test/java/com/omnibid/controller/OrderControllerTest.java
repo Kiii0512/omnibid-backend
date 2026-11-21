@@ -21,6 +21,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
+import org.springframework.data.web.PageableHandlerMethodArgumentResolver;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -32,7 +33,7 @@ import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -40,6 +41,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -69,20 +71,23 @@ class OrderControllerTest {
 
         mockMvc = MockMvcBuilders.standaloneSetup(orderController)
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .setCustomArgumentResolvers(new HandlerMethodArgumentResolver() {
-                    @Override
-                    public boolean supportsParameter(MethodParameter parameter) {
-                        return parameter.hasParameterAnnotation(AuthenticationPrincipal.class);
-                    }
+                .setCustomArgumentResolvers(
+                        new HandlerMethodArgumentResolver() {
+                            @Override
+                            public boolean supportsParameter(MethodParameter parameter) {
+                                return parameter.hasParameterAnnotation(AuthenticationPrincipal.class);
+                            }
 
-                    @Override
-                    public Object resolveArgument(MethodParameter parameter,
-                                                  ModelAndViewContainer mavContainer,
-                                                  NativeWebRequest webRequest,
-                                                  WebDataBinderFactory binderFactory) {
-                        return mockUserDetails;
-                    }
-                })
+                            @Override
+                            public Object resolveArgument(MethodParameter parameter,
+                                                          ModelAndViewContainer mavContainer,
+                                                          NativeWebRequest webRequest,
+                                                          WebDataBinderFactory binderFactory) {
+                                return mockUserDetails;
+                            }
+                        },
+                        new PageableHandlerMethodArgumentResolver()
+                )
                 .build();
     }
 
@@ -97,7 +102,7 @@ class OrderControllerTest {
                 .finalPrice(BigDecimal.valueOf(520000))
                 .status(OrderStatus.PENDING_PAYMENT)
                 .viewerRole("BUYER")
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
 
         PageResponse<OrderResponse> pageRes = PageResponse.<OrderResponse>builder()
@@ -180,11 +185,11 @@ class OrderControllerTest {
                         .content(objectMapper.writeValueAsString(req)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
     }
 
     @Test
-    @DisplayName("PATCH /api/v1/orders/{id}/confirm-receipt trả 200 khi xác nhận nhận hàng thành công")
+    @DisplayName("POST /api/v1/orders/{id}/confirm-receipt trả 200 khi xác nhận nhận hàng thành công")
     void confirmReceipt_Returns200() throws Exception {
         com.omnibid.dto.order.OrderConfirmReceiptResponse res = com.omnibid.dto.order.OrderConfirmReceiptResponse.builder()
                 .id(9L)
@@ -194,10 +199,9 @@ class OrderControllerTest {
 
         when(orderService.confirmReceipt(any(), eq(9L))).thenReturn(res);
 
-        mockMvc.perform(patch("/api/v1/orders/9/confirm-receipt"))
+        mockMvc.perform(post("/api/v1/orders/9/confirm-receipt"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.message").value("Order completed"))
                 .andExpect(jsonPath("$.data.id").value(9))
                 .andExpect(jsonPath("$.data.orderStatus").value("COMPLETED"))
                 .andExpect(jsonPath("$.data.productStatus").value("SOLD"));

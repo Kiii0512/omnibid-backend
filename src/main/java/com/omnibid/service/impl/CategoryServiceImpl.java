@@ -175,7 +175,8 @@ public class CategoryServiceImpl implements CategoryService {
 
     private String slugify(String input) {
         if (input == null) return "";
-        String normalized = Normalizer.normalize(input, Normalizer.Form.NFD)
+        String preprocessed = input.replace('đ', 'd').replace('Đ', 'D');
+        String normalized = Normalizer.normalize(preprocessed, Normalizer.Form.NFD)
                 .replaceAll("\\p{M}", "");
         return normalized.toLowerCase()
                 .replaceAll("[^a-z0-9\\s-]", "")

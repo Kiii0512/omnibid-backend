@@ -4,7 +4,9 @@ import com.omnibid.entity.User;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.security.CustomUserDetails;
+import com.omnibid.security.JwtClaims;
 import com.omnibid.security.JwtTokenProvider;
+import com.omnibid.security.UserDetailsServiceImpl;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -20,7 +22,8 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageBuilder;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetailsService;
+
+import java.time.Instant;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -32,7 +35,7 @@ class WebSocketConfigTest {
     private JwtTokenProvider jwtTokenProvider;
 
     @Mock
-    private UserDetailsService userDetailsService;
+    private UserDetailsServiceImpl userDetailsService;
 
     @Mock
     private MessageBrokerRegistry messageBrokerRegistry;
@@ -44,15 +47,14 @@ class WebSocketConfigTest {
     private MessageChannel messageChannel;
 
     @Test
-    @DisplayName("Cấu hình Message Broker hỗ trợ /topic, /queue, /app, /user")
+    @DisplayName("Cấu hình Message Broker hỗ trợ /topic và /app")
     void configureMessageBroker_ConfiguresBrokerAndPrefixes() {
         WebSocketConfig config = new WebSocketConfig(jwtTokenProvider, userDetailsService);
 
         config.configureMessageBroker(messageBrokerRegistry);
 
-        verify(messageBrokerRegistry).enableSimpleBroker("/topic", "/queue");
+        verify(messageBrokerRegistry).enableSimpleBroker("/topic");
         verify(messageBrokerRegistry).setApplicationDestinationPrefixes("/app");
-        verify(messageBrokerRegistry).setUserDestinationPrefix("/user");
     }
 
     @Test
@@ -74,12 +76,13 @@ class WebSocketConfigTest {
                 .email(email)
                 .role(UserRole.USER)
                 .status(UserStatus.ACTIVE)
+                .tokenVersion(0)
                 .build();
         CustomUserDetails userDetails = new CustomUserDetails(user);
 
-        when(jwtTokenProvider.validateToken(token)).thenReturn(true);
-        when(jwtTokenProvider.getUsernameFromJWT(token)).thenReturn(email);
-        when(userDetailsService.loadUserByUsername(email)).thenReturn(userDetails);
+        when(jwtTokenProvider.parseClaims(token))
+                .thenReturn(new JwtClaims(2L, UserRole.USER, 0, Instant.now().plusSeconds(3600)));
+        when(userDetailsService.loadUserById(2L)).thenReturn(userDetails);
 
         StompHeaderAccessor accessor = StompHeaderAccessor.create(StompCommand.CONNECT);
         accessor.addNativeHeader("Authorization", "Bearer " + token);

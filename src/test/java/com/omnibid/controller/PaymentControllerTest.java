@@ -1,17 +1,14 @@
 package com.omnibid.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.omnibid.common.AppException;
 import com.omnibid.common.GlobalExceptionHandler;
 import com.omnibid.dto.payment.PaymentHistoryResponse;
 import com.omnibid.dto.payment.PaymentRequest;
 import com.omnibid.dto.payment.PaymentResponse;
-import com.omnibid.dto.payment.ShipmentSummaryDto;
 import com.omnibid.entity.User;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.PaymentMethod;
 import com.omnibid.enums.PaymentStatus;
-import com.omnibid.enums.ShipmentStatus;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.security.CustomUserDetails;
@@ -24,7 +21,9 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
-import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.web.PageableHandlerMethodArgumentResolver;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.test.web.servlet.MockMvc;
@@ -35,7 +34,7 @@ import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -43,7 +42,8 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @ExtendWith(MockitoExtension.class)
 class PaymentControllerTest {
@@ -86,7 +86,7 @@ class PaymentControllerTest {
 
         mockMvc = MockMvcBuilders.standaloneSetup(paymentController)
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .setCustomArgumentResolvers(authenticationPrincipalResolver)
+                .setCustomArgumentResolvers(authenticationPrincipalResolver, new PageableHandlerMethodArgumentResolver())
                 .build();
     }
 
@@ -98,7 +98,6 @@ class PaymentControllerTest {
                 .attemptNo(1)
                 .status(PaymentStatus.SUCCESS)
                 .orderStatus(OrderStatus.PAID)
-                .shipment(new ShipmentSummaryDto(4L, "SIM-000009", ShipmentStatus.CREATED))
                 .build();
 
         when(paymentService.pay(any(), eq(9L), eq("key-12345678"), any())).thenReturn(response);
@@ -113,32 +112,7 @@ class PaymentControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.paymentId").value(16))
                 .andExpect(jsonPath("$.data.status").value("SUCCESS"))
-                .andExpect(jsonPath("$.data.orderStatus").value("PAID"))
-                .andExpect(jsonPath("$.data.shipment.trackingCode").value("SIM-000009"));
-    }
-
-    @Test
-    @DisplayName("POST /orders/{id}/payments trả PENDING thì trả HTTP 202 ACCEPTED")
-    void pay_Processing_Returns202() throws Exception {
-        PaymentResponse response = PaymentResponse.builder()
-                .paymentId(17L)
-                .attemptNo(2)
-                .status(PaymentStatus.PENDING)
-                .orderStatus(OrderStatus.PENDING_PAYMENT)
-                .build();
-
-        when(paymentService.pay(any(), eq(9L), eq("key-pending-123"), any())).thenReturn(response);
-
-        PaymentRequest request = new PaymentRequest(PaymentMethod.MOCK_WALLET, null);
-
-        mockMvc.perform(post("/api/v1/orders/9/payments")
-                        .header("Idempotency-Key", "key-pending-123")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
-                .andExpect(status().isAccepted())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.status").value("PENDING"))
-                .andExpect(jsonPath("$.data.orderStatus").value("PENDING_PAYMENT"));
+                .andExpect(jsonPath("$.data.orderStatus").value("PAID"));
     }
 
     @Test
@@ -150,7 +124,7 @@ class PaymentControllerTest {
                         .content("{}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
     }
 
     @Test
@@ -162,16 +136,16 @@ class PaymentControllerTest {
                 .method(PaymentMethod.MOCK_CARD)
                 .amount(BigDecimal.valueOf(520000))
                 .status(PaymentStatus.SUCCESS)
-                .transactionRef("MOCK-TX-2")
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
 
-        when(paymentService.getPaymentsByOrder(any(), eq(9L))).thenReturn(List.of(h1));
+        when(paymentService.getPaymentsByOrder(any(), eq(9L), any()))
+                .thenReturn(new PageImpl<>(List.of(h1), PageRequest.of(0, 20), 1));
 
         mockMvc.perform(get("/api/v1/orders/9/payments"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data[0].paymentId").value(16))
-                .andExpect(jsonPath("$.data[0].status").value("SUCCESS"));
+                .andExpect(jsonPath("$.data.content[0].paymentId").value(16))
+                .andExpect(jsonPath("$.data.content[0].status").value("SUCCESS"));
     }
 }

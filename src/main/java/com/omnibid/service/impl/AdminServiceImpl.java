@@ -135,7 +135,7 @@ public class AdminServiceImpl implements AdminService {
         String sellerName = getUserName(p.getSellerId());
         String catName = categoryRepository.findById(p.getCategoryId()).map(Category::getName).orElse(null);
         List<ProductImageResponse> images = productImageRepository.findByProductIdOrderByIdAsc(p.getId())
-                .stream().map(img -> new ProductImageResponse(img.getId(), img.getImageUrl(), img.getIsPrimary())).toList();
+                .stream().map(img -> new ProductImageResponse(img.getId(), img.getImageUrl(), img.getPublicId(), img.getIsPrimary(), img.getCreatedAt())).toList();
 
         return new ProductResponse(p.getId(), p.getSellerId(), sellerName, p.getCategoryId(), catName,
                 p.getTitle(), p.getDescription(), p.getCondition(), p.getStatus(), images, p.getCreatedAt(), p.getUpdatedAt());
@@ -216,7 +216,7 @@ public class AdminServiceImpl implements AdminService {
         String sellerName = getUserName(a.getSellerId());
         String bidderName = a.getHighestBidderId() != null ? getUserName(a.getHighestBidderId()) : null;
         List<ProductImageResponse> images = productImageRepository.findByProductIdOrderByIdAsc(a.getProductId())
-                .stream().map(img -> new ProductImageResponse(img.getId(), img.getImageUrl(), img.getIsPrimary())).toList();
+                .stream().map(img -> new ProductImageResponse(img.getId(), img.getImageUrl(), img.getPublicId(), img.getIsPrimary(), img.getCreatedAt())).toList();
         String primaryImage = images.stream().filter(ProductImageResponse::isPrimary).findFirst().map(ProductImageResponse::imageUrl).orElse(null);
 
         AuctionDetailResponse detail = AuctionDetailResponse.builder()

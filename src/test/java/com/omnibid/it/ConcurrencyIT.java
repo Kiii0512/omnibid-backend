@@ -43,10 +43,10 @@ public class ConcurrencyIT extends BaseIT {
     @RepeatedConcurrencyTest
     @DisplayName("INT-CON-01 Hai người đặt cùng mức (R-01): 1 thành công, 1 lỗi giá thấp kèm minNextBid")
     void testTwoBiddersSameAmount() throws Exception {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Gold Coin", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("500000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusMinutes(20), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofMinutes(20)), AuctionStatus.ACTIVE);
 
         List<ResponseEntity<String>> results = Concurrently.runIndexed(2, (index) -> {
             User bidder = index == 0 ? buyer : bidderB;
@@ -77,10 +77,10 @@ public class ConcurrencyIT extends BaseIT {
     @RepeatedConcurrencyTest
     @DisplayName("INT-CON-02 10 người đặt giá cùng lúc: current_price cao nhất, đúng 1 LEADING, bid_count đúng")
     void testTenConcurrentBidsDifferentAmounts() throws Exception {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Silver Bar", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("500000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusMinutes(20), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofMinutes(20)), AuctionStatus.ACTIVE);
 
         // 10 luồng đặt các mức 510k..600k
         List<ResponseEntity<String>> results = Concurrently.runIndexed(10, (index) -> {
@@ -97,15 +97,9 @@ public class ConcurrencyIT extends BaseIT {
         }
         assertThat(successCount).isGreaterThan(0);
 
-        // Kiểm tra đúng 1 Bid LEADING
-        Long leadingCount = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM bids WHERE auction_id = ? AND status = 'LEADING'", Long.class, auction.getId()
-        );
-        assertThat(leadingCount).isEqualTo(1L);
-
-        // current_price trong auctions khớp với LEADING bid
+        // current_price trong auctions khớp với max bid
         BigDecimal highestSuccessfulBid = jdbcTemplate.queryForObject(
-                "SELECT amount FROM bids WHERE auction_id = ? AND status = 'LEADING'", BigDecimal.class, auction.getId()
+                "SELECT MAX(amount) FROM bids WHERE auction_id = ?", BigDecimal.class, auction.getId()
         );
         BigDecimal currentPrice = jdbcTemplate.queryForObject(
                 "SELECT current_price FROM auctions WHERE id = ?", BigDecimal.class, auction.getId()
@@ -122,10 +116,10 @@ public class ConcurrencyIT extends BaseIT {
     @RepeatedConcurrencyTest
     @DisplayName("INT-CON-03 Đặt giá đúng lúc chốt (R-02): không có Bid ghi sau closed_at")
     void testBidAtExactClosingTime() throws Exception {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Vintage Camera", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("500000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusSeconds(1), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofSeconds(1)), AuctionStatus.ACTIVE);
 
         // Luồng A: đặt giá, Luồng B: advance thời gian và chốt phiên
         List<Object> results = Concurrently.runIndexed(2, (index) -> {
@@ -140,7 +134,7 @@ public class ConcurrencyIT extends BaseIT {
 
         // Không có Bid nào created_at >= closed_at
         List<Map<String, Object>> bids = jdbcTemplate.queryForList(
-                "SELECT b.created_at as bid_time, a.closed_at as close_time, b.status " +
+                "SELECT b.created_at as bid_time, a.closed_at as close_time " +
                 "FROM bids b JOIN auctions a ON a.id = b.auction_id WHERE a.id = ?", auction.getId()
         );
 
@@ -156,10 +150,10 @@ public class ConcurrencyIT extends BaseIT {
     @RepeatedConcurrencyTest
     @DisplayName("INT-CON-04 Hai tiến trình chốt cùng phiên (R-03): đúng 1 Order")
     void testTwoProcessesClosingSameAuction() throws Exception {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Painting", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("500000"), new BigDecimal("10000"),
-                now.minusMinutes(20), now.plusMinutes(5), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(20)), now.plus(Duration.ofMinutes(5)), AuctionStatus.ACTIVE);
 
         // Seed 1 bid hợp lệ
         api.as(buyer).post("/bids", Map.of("auctionId", auction.getId(), "amount", 510000));
@@ -264,26 +258,19 @@ public class ConcurrencyIT extends BaseIT {
                 String.class, order.getId(), key
         );
         assertThat(failReason).contains("ORDER_CANCELLED");
-
-        // Không có shipment
-        Long shipmentCount = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM shipments WHERE order_id = ?", Long.class, order.getId()
-        );
-        assertThat(shipmentCount).isEqualTo(0L);
     }
 
     @RepeatedConcurrencyTest
     @DisplayName("INT-CON-07 Xác nhận vs khiếu nại (R-06): Đúng một trong hai thành công, bên còn lại 409")
     void testConfirmReceiptVsComplaint() throws Exception {
-        Order order = seed.orderDelivered(buyer, seller);
+        Order order = seed.orderShipped(buyer, seller);
 
         List<ResponseEntity<String>> results = Concurrently.runIndexed(2, (index) -> {
             if (index == 0) {
-                return api.as(buyer).patch("/orders/" + order.getId() + "/confirm-receipt", Map.of());
+                return api.as(buyer).post("/orders/" + order.getId() + "/confirm-receipt", Map.of());
             } else {
                 return api.as(buyer).post("/reports", Map.of(
-                        "reportType", "COMPLAINT",
-                        "orderId", order.getId(),
+                        "reportedOrderId", order.getId(),
                         "reason", "Hang bi vo man hinh khi nhan"
                 ));
             }
@@ -294,13 +281,13 @@ public class ConcurrencyIT extends BaseIT {
 
         if (confirmRes.getStatusCode().is2xxSuccessful()) {
             assertThat(reportRes.getStatusCode().value()).isEqualTo(409);
-            assertThat(reportRes.getBody()).contains("COMPLAINT_WINDOW_CLOSED");
+            assertThat(reportRes.getBody()).contains("INVALID_STATUS_TRANSITION");
             String status = jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.getId());
             assertThat(status).isEqualTo("COMPLETED");
         } else {
             assertThat(reportRes.getStatusCode().is2xxSuccessful()).isTrue();
             assertThat(confirmRes.getStatusCode().value()).isEqualTo(409);
-            assertThat(confirmRes.getBody()).contains("COMPLAINT_PENDING");
+            assertThat(confirmRes.getBody()).contains("INVALID_STATUS_TRANSITION");
             String status = jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.getId());
             assertThat(status).isEqualTo("SHIPPING");
         }
@@ -309,26 +296,26 @@ public class ConcurrencyIT extends BaseIT {
     @RepeatedConcurrencyTest
     @DisplayName("INT-CON-08 Khóa user vs đặt giá của chính user (R-07): không còn Bid hợp lệ của OTHER")
     void testBanUserVsOwnBid() throws Exception {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Product product = seed.createProduct(seller, category, "Rare Stamp", ProductStatus.IN_AUCTION);
         Auction auction = seed.createAuction(seller, product, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusMinutes(20), AuctionStatus.ACTIVE);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofMinutes(20)), AuctionStatus.ACTIVE);
 
         List<ResponseEntity<String>> results = Concurrently.runIndexed(2, (index) -> {
             if (index == 0) {
                 return api.as(other).post("/bids", Map.of("auctionId", auction.getId(), "amount", 110000));
             } else {
-                return api.as(admin).patch(
-                        "/admin/users/" + other.getId(),
-                        Map.of("status", "BANNED", "reason", "Khoa tai khoan test dong thoi")
+                return api.as(admin).post(
+                        "/admin/users/" + other.getId() + "/ban",
+                        Map.of("reason", "Khoa tai khoan test dong thoi")
                 );
             }
         });
 
-        // Không còn Bid LEADING của OTHER
+        // Không còn leader là OTHER
         Long otherLeadingBids = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM bids WHERE bidder_id = ? AND auction_id = ? AND status = 'LEADING'",
-                Long.class, other.getId(), auction.getId()
+                "SELECT COUNT(*) FROM auctions WHERE id = ? AND highest_bidder_id = ?",
+                Long.class, auction.getId(), other.getId()
         );
         assertThat(otherLeadingBids).isEqualTo(0L);
 
@@ -337,15 +324,12 @@ public class ConcurrencyIT extends BaseIT {
     }
 
     @RepeatedConcurrencyTest
-    @DisplayName("INT-CON-09 Hai cập nhật Shipment cùng bước (R-08): 1 thành công 200, 1 bị 409, đúng 1 event PICKED_UP")
+    @DisplayName("INT-CON-09 Hai yêu cầu ship cùng lúc: 1 thành công 200, 1 bị 409 INVALID_STATUS_TRANSITION")
     void testTwoShipmentStatusUpdatesSameStep() throws Exception {
         Order order = seed.orderPaid(buyer, seller);
-        Long shipmentId = jdbcTemplate.queryForObject(
-                "SELECT id FROM shipments WHERE order_id = ?", Long.class, order.getId()
-        );
 
         List<ResponseEntity<String>> results = Concurrently.runIndexed(2, (index) ->
-                api.as(seller).patch("/shipments/" + shipmentId + "/status", Map.of("status", "PICKED_UP"))
+                api.as(seller).post("/orders/" + order.getId() + "/ship", Map.of("trackingCode", "TRK-" + index))
         );
 
         int successCount = 0;
@@ -362,10 +346,9 @@ public class ConcurrencyIT extends BaseIT {
         assertThat(successCount).isEqualTo(1);
         assertThat(conflictCount).isEqualTo(1);
 
-        Long pickedUpEvents = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM shipment_events WHERE shipment_id = ? AND status = 'PICKED_UP'",
-                Long.class, shipmentId
+        String orderStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM orders WHERE id = ?", String.class, order.getId()
         );
-        assertThat(pickedUpEvents).isEqualTo(1L);
+        assertThat(orderStatus).isEqualTo("SHIPPING");
     }
 }

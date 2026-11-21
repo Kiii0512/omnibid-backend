@@ -47,23 +47,9 @@ public class SchedulerIntegrationIT extends BaseIT {
     private OrderService orderService;
 
     @Test
-    @DisplayName("INT-SCH-01 Thứ tự trong OrderScheduler.tick(): Payment TIMEOUT trước rồi Order EXPIRED")
+    @DisplayName("INT-SCH-01 OrderScheduler.tick(): Order quá hạn thanh toán chuyển EXPIRED và Product về AVAILABLE")
     void testOrderSchedulerTickOrdering() {
         Order order = seed.orderPendingPayment(buyer, seller);
-
-        // Tạo Payment PENDING 6 phút trước (payment pending timeout mặc định 5 phút)
-        LocalDateTime sixMinutesAgo = LocalDateTime.now(mutableClock).minusMinutes(6);
-        Payment payment = Payment.builder()
-                .orderId(order.getId())
-                .attemptNo(1)
-                .amount(order.getFinalPrice())
-                .method(PaymentMethod.MOCK_CARD)
-                .status(PaymentStatus.PENDING)
-                .idempotencyKey("KEY-SCH-01-" + UUID.randomUUID())
-                .transactionRef("TX-SCH-01-" + UUID.randomUUID())
-                .createdAt(sixMinutesAgo)
-                .build();
-        paymentRepository.save(payment);
 
         // Advance mutableClock qua deadline của Order (48h)
         mutableClock.advance(Duration.ofHours(49));
@@ -71,18 +57,13 @@ public class SchedulerIntegrationIT extends BaseIT {
         // Gọi tick() 1 lần duy nhất
         orderScheduler.tick();
 
-        // 1. Payment phải chuyển thành FAILED (TIMEOUT)
-        Payment updatedPayment = paymentRepository.findById(payment.getId()).orElseThrow();
-        assertThat(updatedPayment.getStatus()).isEqualTo(PaymentStatus.FAILED);
-        assertThat(updatedPayment.getFailureReason()).isEqualTo("TIMEOUT");
-
-        // 2. Order phải chuyển thành EXPIRED
+        // 1. Order phải chuyển thành EXPIRED
         String orderStatus = jdbcTemplate.queryForObject(
                 "SELECT status FROM orders WHERE id = ?", String.class, order.getId()
         );
         assertThat(orderStatus).isEqualTo("EXPIRED");
 
-        // 3. Product phải về AVAILABLE
+        // 2. Product phải về AVAILABLE
         String productStatus = jdbcTemplate.queryForObject(
                 "SELECT status FROM products WHERE id = ?", String.class, order.getProductId()
         );
@@ -129,13 +110,13 @@ public class SchedulerIntegrationIT extends BaseIT {
     @Test
     @DisplayName("INT-SCH-03 Một phiên lỗi không kéo theo cả lô (G-04, NFR-06)")
     void testOneFailingAuctionDoesNotRollbackBatch() {
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
 
         // Tạo 3 auction có bid cao hơn start price và end time trong tương lai gần (sẽ hết hạn khi advance)
         com.omnibid.entity.Product p1 = seed.createProduct(seller, category, "P1", ProductStatus.IN_AUCTION);
         Auction a1 = seed.createAuction(seller, p1, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusMinutes(5), AuctionStatus.ACTIVE);
-        seed.createBid(a1, buyer, new BigDecimal("120000"), com.omnibid.enums.BidStatus.LEADING);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofMinutes(5)), AuctionStatus.ACTIVE);
+        seed.createBid(a1, buyer, new BigDecimal("120000"));
         a1.setCurrentPrice(new BigDecimal("120000"));
         a1.setHighestBidderId(buyer.getId());
         a1.setBidCount(1);
@@ -143,8 +124,8 @@ public class SchedulerIntegrationIT extends BaseIT {
 
         com.omnibid.entity.Product p2 = seed.createProduct(seller, category, "P2", ProductStatus.IN_AUCTION);
         Auction a2 = seed.createAuction(seller, p2, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusMinutes(5), AuctionStatus.ACTIVE);
-        seed.createBid(a2, buyer, new BigDecimal("120000"), com.omnibid.enums.BidStatus.LEADING);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofMinutes(5)), AuctionStatus.ACTIVE);
+        seed.createBid(a2, buyer, new BigDecimal("120000"));
         a2.setCurrentPrice(new BigDecimal("120000"));
         a2.setHighestBidderId(buyer.getId());
         a2.setBidCount(1);
@@ -152,8 +133,8 @@ public class SchedulerIntegrationIT extends BaseIT {
 
         com.omnibid.entity.Product p3 = seed.createProduct(seller, category, "P3", ProductStatus.IN_AUCTION);
         Auction a3 = seed.createAuction(seller, p3, new BigDecimal("100000"), new BigDecimal("10000"),
-                now.minusMinutes(10), now.plusMinutes(5), AuctionStatus.ACTIVE);
-        seed.createBid(a3, buyer, new BigDecimal("120000"), com.omnibid.enums.BidStatus.LEADING);
+                now.minus(Duration.ofMinutes(10)), now.plus(Duration.ofMinutes(5)), AuctionStatus.ACTIVE);
+        seed.createBid(a3, buyer, new BigDecimal("120000"));
         a3.setCurrentPrice(new BigDecimal("120000"));
         a3.setHighestBidderId(buyer.getId());
         a3.setBidCount(1);
@@ -161,7 +142,7 @@ public class SchedulerIntegrationIT extends BaseIT {
 
         // Spy OrderService: phiên a2 ném RuntimeException khi createFromAuction
         doThrow(new RuntimeException("Simulated error in createFromAuction for a2"))
-                .when(orderService).createFromAuction(org.mockito.ArgumentMatchers.argThat(a -> a != null && a.getId().equals(a2.getId())));
+                .when(orderService).createFromAuction(org.mockito.ArgumentMatchers.argThat(a -> a != null && a.getId().equals(a2.getId())), any());
 
         // Đẩy clock vượt qua endTime của cả 3 phiên
         mutableClock.advance(Duration.ofHours(2));

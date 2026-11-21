@@ -1,6 +1,5 @@
 package com.omnibid.support;
 
-import com.omnibid.dto.auction.AuctionCreateRequest;
 import com.omnibid.entity.*;
 import com.omnibid.enums.*;
 import com.omnibid.repository.*;
@@ -10,7 +9,8 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 
 @Component
 @RequiredArgsConstructor
@@ -23,8 +23,6 @@ public class Seed {
     private final BidRepository bidRepository;
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
-    private final ShipmentRepository shipmentRepository;
-    private final ShipmentEventRepository shipmentEventRepository;
     private final ReportRepository reportRepository;
     private final PasswordEncoder passwordEncoder;
     private final Clock clock;
@@ -65,8 +63,8 @@ public class Seed {
     }
 
     public Auction createAuction(User seller, Product product, BigDecimal startPrice,
-                                 BigDecimal bidIncrement, LocalDateTime startTime,
-                                 LocalDateTime endTime, AuctionStatus status) {
+                                 BigDecimal bidIncrement, Instant startTime,
+                                 Instant endTime, AuctionStatus status) {
         Auction auction = Auction.builder()
                 .sellerId(seller.getId())
                 .productId(product.getId())
@@ -81,21 +79,19 @@ public class Seed {
         return auctionRepository.save(auction);
     }
 
-    public Bid createBid(Auction auction, User bidder, BigDecimal amount, BidStatus status) {
+    public Bid createBid(Auction auction, User bidder, BigDecimal amount) {
         Bid bid = Bid.builder()
                 .auctionId(auction.getId())
                 .bidderId(bidder.getId())
                 .amount(amount)
-                .status(status)
                 .build();
         Bid saved = bidRepository.save(bid);
 
-        if (status == BidStatus.LEADING) {
-            auction.setHighestBidderId(bidder.getId());
-            auction.setCurrentPrice(amount);
-            auction.setBidCount(auction.getBidCount() + 1);
-            auctionRepository.save(auction);
-        }
+        auction.setHighestBidderId(bidder.getId());
+        auction.setCurrentPrice(amount);
+        auction.setBidCount(auction.getBidCount() + 1);
+        auctionRepository.save(auction);
+
         return saved;
     }
 
@@ -104,7 +100,7 @@ public class Seed {
                 .orElseGet(() -> createCategory("Electronics", "electronics"));
         Product product = createProduct(seller, cat, "Auction Phone", ProductStatus.RESERVED);
 
-        LocalDateTime now = LocalDateTime.now(clock);
+        Instant now = Instant.now(clock);
         Auction auction = Auction.builder()
                 .sellerId(seller.getId())
                 .productId(product.getId())
@@ -115,9 +111,9 @@ public class Seed {
                 .winnerId(buyer.getId())
                 .finalPrice(new BigDecimal("530000"))
                 .bidCount(1)
-                .startTime(now.minusHours(2))
-                .endTime(now.minusMinutes(1))
-                .closedAt(now.minusMinutes(1))
+                .startTime(now.minus(2, ChronoUnit.HOURS))
+                .endTime(now.minus(1, ChronoUnit.MINUTES))
+                .closedAt(now.minus(1, ChronoUnit.MINUTES))
                 .status(AuctionStatus.ENDED)
                 .build();
         auction = auctionRepository.save(auction);
@@ -126,7 +122,6 @@ public class Seed {
                 .auctionId(auction.getId())
                 .bidderId(buyer.getId())
                 .amount(new BigDecimal("530000"))
-                .status(BidStatus.WON)
                 .build();
         bidRepository.save(bid);
 
@@ -139,7 +134,7 @@ public class Seed {
                 .status(OrderStatus.PENDING_PAYMENT)
                 .shippingAddress("123 Buyer St")
                 .phoneNumber("0987654321")
-                .paymentDeadline(auction.getClosedAt().plusHours(48))
+                .paymentDeadline(auction.getClosedAt().plus(48, ChronoUnit.HOURS))
                 .build();
         return orderRepository.save(order);
     }
@@ -147,6 +142,7 @@ public class Seed {
     public Order orderPaid(User buyer, User seller) {
         Order order = orderPendingPayment(buyer, seller);
         order.setStatus(OrderStatus.PAID);
+        order.setPaidAt(Instant.now(clock));
         order = orderRepository.save(order);
 
         Payment payment = Payment.builder()
@@ -156,46 +152,27 @@ public class Seed {
                 .status(PaymentStatus.SUCCESS)
                 .idempotencyKey("KEY-" + System.nanoTime())
                 .attemptNo(1)
-                .paidAt(LocalDateTime.now(clock))
-                .transactionRef("TX-" + System.nanoTime())
+                .paidAt(Instant.now(clock))
                 .build();
         paymentRepository.save(payment);
-
-        Shipment shipment = Shipment.builder()
-                .orderId(order.getId())
-                .carrierName("SIMULATED")
-                .trackingCode("SIM-" + System.nanoTime())
-                .status(ShipmentStatus.CREATED)
-                .build();
-        shipment = shipmentRepository.save(shipment);
-
-        ShipmentEvent event = ShipmentEvent.builder()
-                .shipmentId(shipment.getId())
-                .status(ShipmentStatus.CREATED)
-                .note("Shipment initiated")
-                .build();
-        shipmentEventRepository.save(event);
 
         return order;
     }
 
-    public Order orderDelivered(User buyer, User seller) {
+    public Order orderShipped(User buyer, User seller) {
         Order order = orderPaid(buyer, seller);
         order.setStatus(OrderStatus.SHIPPING);
-        order.setConfirmDeadline(LocalDateTime.now(clock).plusDays(7));
-        order = orderRepository.save(order);
+        Instant now = Instant.now(clock);
+        order.setShippedAt(now);
+        order.setTrackingCode("SIM-" + System.nanoTime());
+        order.setConfirmDeadline(now.plus(7, ChronoUnit.DAYS));
+        return orderRepository.save(order);
+    }
 
-        Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElseThrow();
-        shipment.setStatus(ShipmentStatus.DELIVERED);
-        shipment = shipmentRepository.save(shipment);
-
-        ShipmentEvent deliveredEvent = ShipmentEvent.builder()
-                .shipmentId(shipment.getId())
-                .status(ShipmentStatus.DELIVERED)
-                .note("Package delivered")
-                .build();
-        shipmentEventRepository.save(deliveredEvent);
-
-        return order;
+    public Order orderDelivered(User buyer, User seller) {
+        Order order = orderShipped(buyer, seller);
+        order.setStatus(OrderStatus.COMPLETED);
+        order.setCompletedAt(Instant.now(clock));
+        return orderRepository.save(order);
     }
 }

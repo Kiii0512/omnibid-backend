@@ -56,12 +56,9 @@ public abstract class BaseIT {
         gateway.reset();
 
         jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
-        jdbcTemplate.execute("TRUNCATE TABLE audit_logs");
-        jdbcTemplate.execute("TRUNCATE TABLE notifications");
-        jdbcTemplate.execute("TRUNCATE TABLE shipment_events");
-        jdbcTemplate.execute("TRUNCATE TABLE shipments");
-        jdbcTemplate.execute("TRUNCATE TABLE payments");
         jdbcTemplate.execute("TRUNCATE TABLE reports");
+        jdbcTemplate.execute("TRUNCATE TABLE notifications");
+        jdbcTemplate.execute("TRUNCATE TABLE payments");
         jdbcTemplate.execute("TRUNCATE TABLE orders");
         jdbcTemplate.execute("TRUNCATE TABLE bids");
         jdbcTemplate.execute("TRUNCATE TABLE auctions");

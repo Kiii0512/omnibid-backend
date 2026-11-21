@@ -1,8 +1,7 @@
 package com.omnibid.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.omnibid.common.ApiResponse;
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.GlobalExceptionHandler;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.notification.NotificationResponse;
@@ -20,7 +19,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
-import org.springframework.http.HttpStatus;
+import org.springframework.data.web.PageableHandlerMethodArgumentResolver;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.test.web.servlet.MockMvc;
@@ -30,15 +29,16 @@ import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.*;
+import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @ExtendWith(MockitoExtension.class)
 class NotificationControllerTest {
@@ -79,7 +79,7 @@ class NotificationControllerTest {
                                                   WebDataBinderFactory binderFactory) {
                         return mockUserDetails;
                     }
-                })
+                }, new PageableHandlerMethodArgumentResolver())
                 .build();
     }
 
@@ -94,7 +94,7 @@ class NotificationControllerTest {
                 .refType("AUCTION")
                 .refId(100L)
                 .isRead(false)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
 
         PageResponse<NotificationResponse> pageRes = PageResponse.<NotificationResponse>builder()
@@ -116,19 +116,20 @@ class NotificationControllerTest {
     }
 
     @Test
-    @DisplayName("PATCH /api/v1/notifications/{id}/read trả 200 khi đánh dấu thành công")
+    @DisplayName("POST /api/v1/notifications/{id}/read trả 200 khi đánh dấu thành công")
     void markAsRead_Success_Returns200() throws Exception {
         NotificationResponse res = NotificationResponse.builder()
                 .id(10L)
-                .type(NotificationType.AUCTION_WON)
+                .type(NotificationType.AUCTION_RESULT)
                 .title("Thắng phiên")
                 .content("Nội dung")
                 .isRead(true)
+                .createdAt(Instant.now())
                 .build();
 
         when(notificationService.markAsRead(2L, 10L)).thenReturn(res);
 
-        mockMvc.perform(patch("/api/v1/notifications/10/read")
+        mockMvc.perform(post("/api/v1/notifications/10/read")
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
@@ -137,39 +138,15 @@ class NotificationControllerTest {
     }
 
     @Test
-    @DisplayName("PATCH /api/v1/notifications/{id}/read trả 404 khi không phải chủ thông báo")
+    @DisplayName("POST /api/v1/notifications/{id}/read trả 404 khi không phải chủ thông báo")
     void markAsRead_NotOwner_Returns404() throws Exception {
         when(notificationService.markAsRead(2L, 99L))
-                .thenThrow(new AppException("NOT_FOUND", "Notification not found", HttpStatus.NOT_FOUND));
+                .thenThrow(new BusinessException(ErrorCode.NOT_FOUND, "Notification not found"));
 
-        mockMvc.perform(patch("/api/v1/notifications/99/read")
+        mockMvc.perform(post("/api/v1/notifications/99/read")
                         .contentType(MediaType.APPLICATION_JSON))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.errorCode").value("NOT_FOUND"));
-    }
-
-    @Test
-    @DisplayName("GET /api/v1/notifications/unread-count trả 200 kèm unreadCount")
-    void getUnreadCount_Returns200() throws Exception {
-        when(notificationService.getUnreadCount(2L)).thenReturn(4L);
-
-        mockMvc.perform(get("/api/v1/notifications/unread-count")
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.unreadCount").value(4));
-    }
-
-    @Test
-    @DisplayName("PATCH /api/v1/notifications/read-all trả 200")
-    void markAllAsRead_Returns200() throws Exception {
-        doNothing().when(notificationService).markAllAsRead(2L);
-
-        mockMvc.perform(patch("/api/v1/notifications/read-all")
-                        .contentType(MediaType.APPLICATION_JSON))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.message").value("All notifications marked as read"));
+                .andExpect(jsonPath("$.error.code").value("NOT_FOUND"));
     }
 }

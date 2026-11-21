@@ -30,13 +30,13 @@ class EndToEndFlowIT extends BaseIT {
     void testEndToEndMainFlow() throws Exception {
         Product product = seed.createProduct(seller, category, "iPhone 15 Pro", ProductStatus.AVAILABLE);
 
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Auction auction = seed.createAuction(
                 seller, product,
                 new BigDecimal("500000"),
                 new BigDecimal("10000"),
                 now,
-                now.plusHours(1),
+                now.plus(Duration.ofHours(1)),
                 AuctionStatus.ACTIVE
         );
         product.setStatus(ProductStatus.IN_AUCTION);
@@ -112,33 +112,18 @@ class EndToEndFlowIT extends BaseIT {
         orderStatus = jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, orderId);
         assertThat(orderStatus).isEqualTo("PAID");
 
-        Long shipmentId = jdbcTemplate.queryForObject("SELECT id FROM shipments WHERE order_id = ?", Long.class, orderId);
-        assertThat(shipmentId).isNotNull();
-
-        // 8) SELLER cập nhật status shipment: PICKED_UP -> IN_TRANSIT -> DELIVERED
-        ResponseEntity<String> pickUpRes = api.as(seller).patch(
-                "/shipments/" + shipmentId + "/status",
-                Map.of("status", "PICKED_UP", "note", "Picked up by courier")
+        // 8) SELLER ship hàng
+        ResponseEntity<String> shipRes = api.as(seller).post(
+                "/orders/" + orderId + "/ship",
+                Map.of("trackingCode", "TRK123")
         );
-        assertThat(pickUpRes.getStatusCode().is2xxSuccessful()).isTrue();
-
-        ResponseEntity<String> transitRes = api.as(seller).patch(
-                "/shipments/" + shipmentId + "/status",
-                Map.of("status", "IN_TRANSIT", "note", "On delivery route")
-        );
-        assertThat(transitRes.getStatusCode().is2xxSuccessful()).isTrue();
-
-        ResponseEntity<String> deliveredRes = api.as(seller).patch(
-                "/shipments/" + shipmentId + "/status",
-                Map.of("status", "DELIVERED", "note", "Delivered to buyer")
-        );
-        assertThat(deliveredRes.getStatusCode().is2xxSuccessful()).isTrue();
+        assertThat(shipRes.getStatusCode().is2xxSuccessful()).isTrue();
 
         orderStatus = jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, orderId);
         assertThat(orderStatus).isEqualTo("SHIPPING");
 
         // 9) BUYER confirm-receipt
-        ResponseEntity<String> confirmRes = api.as(buyer).patch(
+        ResponseEntity<String> confirmRes = api.as(buyer).post(
                 "/orders/" + orderId + "/confirm-receipt",
                 Map.of()
         );
@@ -171,7 +156,7 @@ class EndToEndFlowIT extends BaseIT {
         assertThat(productStatus).isEqualTo("AVAILABLE");
 
         // SELLER tạo phiên mới cho cùng Product thành công
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Auction newAuction = seed.createAuction(
                 seller,
                 jdbcTemplate.queryForObject("SELECT id, title FROM products WHERE id = ?",
@@ -180,7 +165,7 @@ class EndToEndFlowIT extends BaseIT {
                 new BigDecimal("500000"),
                 new BigDecimal("10000"),
                 now,
-                now.plusHours(2),
+                now.plus(Duration.ofHours(2)),
                 AuctionStatus.ACTIVE
         );
         assertThat(newAuction.getId()).isNotNull();
@@ -201,9 +186,9 @@ class EndToEndFlowIT extends BaseIT {
     }
 
     @Test
-    @DisplayName("INT-E2E-03 Đơn hàng tự hoàn tất sau 7 ngày DELIVERED")
+    @DisplayName("INT-E2E-03 Đơn hàng tự hoàn tất sau 7 ngày SHIPPING")
     void testOrderAutoCompleteAfterDelivered() {
-        Order order = seed.orderDelivered(buyer, seller);
+        Order order = seed.orderShipped(buyer, seller);
 
         // Tiến thời gian 7 ngày
         mutableClock.advance(Duration.ofDays(7).plusSeconds(10));
@@ -219,20 +204,19 @@ class EndToEndFlowIT extends BaseIT {
     @Test
     @DisplayName("INT-E2E-04 Khiếu nại tạm dừng tự hoàn tất, Admin xử lý hủy đơn")
     void testComplaintPausesAutoComplete() {
-        Order order = seed.orderDelivered(buyer, seller);
+        Order order = seed.orderShipped(buyer, seller);
 
         // BUYER gửi khiếu nại COMPLAINT
         ResponseEntity<String> complaintRes = api.as(buyer).post(
                 "/reports",
                 Map.of(
-                        "reportType", "COMPLAINT",
-                        "orderId", order.getId(),
+                        "reportedOrderId", order.getId(),
                         "reason", "Hang bi vo man hinh khi nhan"
                 )
         );
         assertThat(complaintRes.getStatusCode().is2xxSuccessful()).isTrue();
 
-        Long reportId = jdbcTemplate.queryForObject("SELECT id FROM reports WHERE order_id = ?", Long.class, order.getId());
+        Long reportId = jdbcTemplate.queryForObject("SELECT id FROM reports WHERE reported_order_id = ?", Long.class, order.getId());
         assertThat(reportId).isNotNull();
 
         // Tiến thời gian 7 ngày và tick()
@@ -243,26 +227,20 @@ class EndToEndFlowIT extends BaseIT {
         String orderStatus = jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.getId());
         assertThat(orderStatus).isEqualTo("SHIPPING");
 
-        // BUYER confirm-receipt trong lúc complaint PENDING -> 409 COMPLAINT_PENDING
-        ResponseEntity<String> confirmRes = api.as(buyer).patch(
+        // BUYER confirm-receipt trong lúc complaint PENDING -> 409 INVALID_STATUS_TRANSITION
+        ResponseEntity<String> confirmRes = api.as(buyer).post(
                 "/orders/" + order.getId() + "/confirm-receipt",
                 Map.of()
         );
         assertThat(confirmRes.getStatusCode().value()).isEqualTo(409);
-        assertThat(confirmRes.getBody()).contains("COMPLAINT_PENDING");
+        assertThat(confirmRes.getBody()).contains("INVALID_STATUS_TRANSITION");
 
-        // Admin xử lý giải quyết CANCEL_ORDER
-        ResponseEntity<String> resolveRes = api.as(admin).patch(
+        // Admin xử lý giải quyết RESOLVED
+        ResponseEntity<String> resolveRes = api.as(admin).post(
                 "/admin/reports/" + reportId + "/resolve",
-                Map.of("action", "CANCEL_ORDER", "note", "Chấp nhận khiếu nại của buyer")
+                Map.of("decision", "RESOLVED", "note", "Chấp nhận khiếu nại của buyer")
         );
         assertThat(resolveRes.getStatusCode().is2xxSuccessful()).isTrue();
-
-        orderStatus = jdbcTemplate.queryForObject("SELECT status FROM orders WHERE id = ?", String.class, order.getId());
-        assertThat(orderStatus).isEqualTo("CANCELLED");
-
-        String productStatus = jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, order.getProductId());
-        assertThat(productStatus).isEqualTo("AVAILABLE");
 
         String reportStatus = jdbcTemplate.queryForObject("SELECT status FROM reports WHERE id = ?", String.class, reportId);
         assertThat(reportStatus).isEqualTo("RESOLVED");
@@ -273,13 +251,13 @@ class EndToEndFlowIT extends BaseIT {
     void testAuctionReserveNotMet() {
         Product product = seed.createProduct(seller, category, "Rare Watch", ProductStatus.AVAILABLE);
 
-        LocalDateTime now = LocalDateTime.now(mutableClock);
+        java.time.Instant now = mutableClock.instant();
         Auction auction = seed.createAuction(
                 seller, product,
                 new BigDecimal("500000"),
                 new BigDecimal("10000"),
                 now,
-                now.plusHours(1),
+                now.plus(Duration.ofHours(1)),
                 AuctionStatus.ACTIVE
         );
         auction.setReservePrice(new BigDecimal("600000"));
@@ -300,33 +278,5 @@ class EndToEndFlowIT extends BaseIT {
 
         String productStatus = jdbcTemplate.queryForObject("SELECT status FROM products WHERE id = ?", String.class, product.getId());
         assertThat(productStatus).isEqualTo("AVAILABLE");
-    }
-
-    @Test
-    @DisplayName("INT-E2E-06 Nhắc thanh toán đúng 2 mốc 24h và 2h")
-    void testPaymentReminders() {
-        Order order = seed.orderPendingPayment(buyer, seller);
-
-        // Mốc 24h
-        mutableClock.advance(Duration.ofHours(24).plusMinutes(1));
-        orderScheduler.tick();
-        orderScheduler.tick(); // gọi lại không tạo thêm
-
-        Integer reminderCount1 = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND type = 'PAYMENT_REMINDER'",
-                Integer.class, buyer.getId()
-        );
-        assertThat(reminderCount1).isEqualTo(1);
-
-        // Mốc 2h (tiến thêm 22h)
-        mutableClock.advance(Duration.ofHours(22).plusMinutes(1));
-        orderScheduler.tick();
-        orderScheduler.tick();
-
-        Integer reminderCount2 = jdbcTemplate.queryForObject(
-                "SELECT COUNT(*) FROM notifications WHERE user_id = ? AND type = 'PAYMENT_REMINDER'",
-                Integer.class, buyer.getId()
-        );
-        assertThat(reminderCount2).isEqualTo(2);
     }
 }

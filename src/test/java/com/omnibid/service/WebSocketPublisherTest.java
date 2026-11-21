@@ -51,14 +51,14 @@ class WebSocketPublisherTest {
         webSocketPublisher.publishAuctionUpdate(10L, bidResponse);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(messagingTemplate).convertAndSend(eq("/topic/auction/10"), captor.capture());
+        verify(messagingTemplate).convertAndSend(eq("/topic/auctions/10"), captor.capture());
 
         Object captured = captor.getValue();
-        assertInstanceOf(AuctionWebSocketMessage.class, captured);
-        AuctionWebSocketMessage message = (AuctionWebSocketMessage) captured;
-        assertEquals("BID_PLACED", message.getType());
+        assertInstanceOf(BidResponse.class, captured);
+        BidResponse message = (BidResponse) captured;
+        assertEquals(1L, message.getId());
         assertEquals(10L, message.getAuctionId());
-        assertEquals(bidResponse, message.getData());
+        assertEquals(bidResponse, message);
     }
 
     @Test
@@ -72,14 +72,13 @@ class WebSocketPublisherTest {
         webSocketPublisher.publishAuctionUpdate(10L, auctionResponse);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(messagingTemplate).convertAndSend(eq("/topic/auction/10"), captor.capture());
+        verify(messagingTemplate).convertAndSend(eq("/topic/auctions/10"), captor.capture());
 
         Object captured = captor.getValue();
-        assertInstanceOf(AuctionWebSocketMessage.class, captured);
-        AuctionWebSocketMessage message = (AuctionWebSocketMessage) captured;
-        assertEquals("AUCTION_UPDATED", message.getType());
-        assertEquals(10L, message.getAuctionId());
-        assertEquals(auctionResponse, message.getData());
+        assertInstanceOf(AuctionResponse.class, captured);
+        AuctionResponse message = (AuctionResponse) captured;
+        assertEquals(10L, message.getId());
+        assertEquals(auctionResponse, message);
     }
 
     @Test

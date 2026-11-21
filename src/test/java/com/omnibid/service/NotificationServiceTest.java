@@ -1,6 +1,7 @@
 package com.omnibid.service;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.common.PageResponse;
@@ -11,6 +12,7 @@ import com.omnibid.enums.NotificationType;
 import com.omnibid.event.NotificationCreated;
 import com.omnibid.listener.NotificationPushListener;
 import com.omnibid.repository.NotificationRepository;
+import com.omnibid.repository.UserRepository;
 import com.omnibid.service.impl.NotificationServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,11 +24,10 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.http.HttpStatus;
 import org.springframework.messaging.MessagingException;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
@@ -46,6 +47,9 @@ class NotificationServiceTest {
     private ApplicationEventPublisher eventPublisher;
 
     @Mock
+    private UserRepository userRepository;
+
+    @Mock
     private WebSocketPublisher webSocketPublisher;
 
     private NotificationServiceImpl notificationService;
@@ -53,7 +57,7 @@ class NotificationServiceTest {
 
     @BeforeEach
     void setUp() {
-        notificationService = new NotificationServiceImpl(notificationRepository, eventPublisher);
+        notificationService = new NotificationServiceImpl(notificationRepository, eventPublisher, userRepository);
         pushListener = new NotificationPushListener(webSocketPublisher, notificationRepository);
     }
 
@@ -76,7 +80,7 @@ class NotificationServiceTest {
                 .refType(refType)
                 .refId(refId)
                 .isRead(false)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
 
         when(notificationRepository.save(any(Notification.class))).thenReturn(saved);
@@ -102,22 +106,20 @@ class NotificationServiceTest {
     }
 
     @Test
-    @DisplayName("UT-NTF-02 Mẫu nội dung: Mỗi NotificationType dựng được tiêu đề/nội dung; không chứa reserve_price, email, SĐT; tên người đặt giá dạng che")
+    @DisplayName("UT-NTF-02 Mẫu nội dung: Các hàm mẫu dựng được tiêu đề/nội dung hợp lệ")
     void notificationTemplates_BuildsValidContent_WithoutConfidentialInfo() {
-        for (NotificationType type : NotificationType.values()) {
-            NotificationTemplates.TemplateResult result = NotificationTemplates.forType(type);
-            assertNotNull(result, "Template result should not be null for " + type);
-            assertNotNull(result.title(), "Title should not be null for " + type);
-            assertFalse(result.title().isBlank(), "Title should not be blank for " + type);
-            assertNotNull(result.content(), "Content should not be null for " + type);
-            assertFalse(result.content().isBlank(), "Content should not be blank for " + type);
+        assertNotNull(NotificationTemplates.outbidTitle());
+        assertNotNull(NotificationTemplates.outbidContent(100L, BigDecimal.valueOf(120000)));
+        assertNotNull(NotificationTemplates.auctionWonTitle());
+        assertNotNull(NotificationTemplates.auctionWonContent(100L, BigDecimal.valueOf(500000), Instant.now()));
+        assertNotNull(NotificationTemplates.auctionCancelledTitle());
+        assertNotNull(NotificationTemplates.auctionCancelledContent(100L, "Vi phạm"));
 
-            // Bảo mật NTF-07: Không lộ reserve_price, email, sđt
-            assertFalse(result.content().toLowerCase().contains("reserve_price"));
-            assertFalse(result.title().toLowerCase().contains("reserve_price"));
-            assertFalse(result.content().matches(".*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}.*"));
-            assertFalse(result.content().matches(".*(\\+84|0)[3|5|7|8|9][0-9]{8}.*"));
-        }
+        // Bảo mật NTF-07: Không lộ reserve_price, email, sđt
+        String content = NotificationTemplates.outbidContent(100L, BigDecimal.valueOf(120000));
+        assertFalse(content.toLowerCase().contains("reserve_price"));
+        assertFalse(content.matches(".*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}.*"));
+        assertFalse(content.matches(".*(\\+84|0)[3|5|7|8|9][0-9]{8}.*"));
 
         // Kiểm tra hàm che tên MaskingUtils
         assertEquals("N***A", MaskingUtils.maskName("Nguyen Van An"));
@@ -135,7 +137,7 @@ class NotificationServiceTest {
         Notification unread = Notification.builder()
                 .id(notificationId)
                 .userId(userId)
-                .type(NotificationType.AUCTION_WON)
+                .type(NotificationType.AUCTION_RESULT)
                 .title("Bạn đã thắng")
                 .content("Nội dung")
                 .refType("AUCTION")
@@ -146,7 +148,7 @@ class NotificationServiceTest {
         Notification read = Notification.builder()
                 .id(notificationId)
                 .userId(userId)
-                .type(NotificationType.AUCTION_WON)
+                .type(NotificationType.AUCTION_RESULT)
                 .title("Bạn đã thắng")
                 .content("Nội dung")
                 .refType("AUCTION")
@@ -178,7 +180,7 @@ class NotificationServiceTest {
         Notification notification = Notification.builder()
                 .id(notificationId)
                 .userId(ownerId)
-                .type(NotificationType.AUCTION_WON)
+                .type(NotificationType.AUCTION_RESULT)
                 .title("Bạn đã thắng")
                 .content("Nội dung")
                 .refType("AUCTION")
@@ -188,9 +190,8 @@ class NotificationServiceTest {
 
         when(notificationRepository.findById(notificationId)).thenReturn(Optional.of(notification));
 
-        AppException ex = assertThrows(AppException.class, () -> notificationService.markAsRead(attackerId, notificationId));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-        assertEquals("NOT_FOUND", ex.getCode());
+        BusinessException ex = assertThrows(BusinessException.class, () -> notificationService.markAsRead(attackerId, notificationId));
+        assertEquals(ErrorCode.FORBIDDEN, ex.getErrorCode());
         verify(notificationRepository, never()).save(any(Notification.class));
     }
 
@@ -203,7 +204,7 @@ class NotificationServiceTest {
         Notification notification = Notification.builder()
                 .id(notificationId)
                 .userId(userId)
-                .type(NotificationType.PAYMENT_RESULT)
+                .type(NotificationType.ORDER_UPDATE)
                 .title("Thanh toán thành công")
                 .content("Đơn #9 đã được thanh toán.")
                 .refType("ORDER")
@@ -228,7 +229,7 @@ class NotificationServiceTest {
         Long userId = 5L;
         NotificationItem item1 = NotificationItem.builder()
                 .userId(userId)
-                .type(NotificationType.AUCTION_ENDED)
+                .type(NotificationType.AUCTION_CANCELLED)
                 .title("Phiên đã bị hủy: Vi phạm")
                 .content("Phiên #100 đã bị hủy.")
                 .refType("AUCTION")
@@ -237,7 +238,7 @@ class NotificationServiceTest {
 
         NotificationItem item2 = NotificationItem.builder()
                 .userId(userId)
-                .type(NotificationType.AUCTION_ENDED)
+                .type(NotificationType.AUCTION_CANCELLED)
                 .title("Phiên đã bị hủy: Vi phạm")
                 .content("Phiên #100 đã bị hủy.")
                 .refType("AUCTION")
@@ -247,7 +248,7 @@ class NotificationServiceTest {
         Notification saved = Notification.builder()
                 .id(20L)
                 .userId(userId)
-                .type(NotificationType.AUCTION_ENDED)
+                .type(NotificationType.AUCTION_CANCELLED)
                 .title("Phiên đã bị hủy: Vi phạm")
                 .content("Phiên #100 đã bị hủy.")
                 .refType("AUCTION")

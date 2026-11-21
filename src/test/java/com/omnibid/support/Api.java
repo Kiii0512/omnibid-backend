@@ -49,7 +49,7 @@ public class Api {
 
     public Api as(User user) {
         if (user != null) {
-            tokenHolder.set(jwtTokenProvider.generateToken(user.getEmail(), user.getRole().name()));
+            tokenHolder.set(jwtTokenProvider.generateToken(user.getId(), user.getRole(), user.getTokenVersion()));
         } else {
             tokenHolder.remove();
         }
