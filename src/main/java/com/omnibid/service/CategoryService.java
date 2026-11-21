@@ -1,12 +1,16 @@
 package com.omnibid.service;
 
+import com.omnibid.common.PageResponse;
 import com.omnibid.dto.category.CategoryRequest;
 import com.omnibid.dto.category.CategoryResponse;
 import com.omnibid.security.CurrentUser;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 
 public interface CategoryService {
+
+    PageResponse<CategoryResponse> getCategories(String q, Pageable pageable);
 
     List<CategoryResponse> getAllCategories();
 

@@ -49,6 +49,17 @@ public interface ProductRepository extends JpaRepository<Product, Long>, JpaSpec
 
     @Query("""
         SELECT p FROM Product p
+        WHERE p.sellerId = :sellerId
+          AND (:status IS NULL OR p.status = :status)
+          AND (:q IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :q, '%')))
+    """)
+    Page<Product> findMyProducts(@Param("sellerId") Long sellerId,
+                                 @Param("status") ProductStatus status,
+                                 @Param("q") String q,
+                                 Pageable pageable);
+
+    @Query("""
+        SELECT p FROM Product p
         WHERE (:status IS NULL OR p.status = :status)
           AND (:sellerId IS NULL OR p.sellerId = :sellerId)
           AND (:categoryId IS NULL OR p.categoryId = :categoryId)

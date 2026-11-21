@@ -14,6 +14,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/v1/users")
 @RequiredArgsConstructor
@@ -42,13 +44,13 @@ public class UserController {
     }
 
     @PostMapping("/me/avatar")
-    public ApiResponse<UserProfileResponse> uploadAvatarPost(
+    public ApiResponse<Map<String, String>> uploadAvatar(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam("file") MultipartFile file
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        UserProfileResponse response = userService.updateAvatar(currentUser.id(), file);
-        return ApiResponse.success("Avatar updated successfully", response);
+        String avatarUrl = userService.updateAvatar(currentUser.id(), file);
+        return ApiResponse.success(Map.of("avatarUrl", avatarUrl));
     }
 
     @PatchMapping("/me/password")

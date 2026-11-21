@@ -91,8 +91,7 @@ public class PaymentServiceImpl implements PaymentService {
     public PaymentResponse pay(CurrentUser currentUser, Long orderId, String idempotencyKey, PaymentRequest request) {
         return transactionOperations.execute(status -> {
             Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(
-                    () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
-            );
+                    () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng"));
 
             if (!order.getBuyerId().equals(currentUser.id())) {
                 throw new BusinessException(ErrorCode.FORBIDDEN, "Chỉ người mua mới được phép thanh toán");
@@ -132,7 +131,8 @@ public class PaymentServiceImpl implements PaymentService {
             }
 
             if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
-                throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng không ở trạng thái chờ thanh toán");
+                throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION,
+                        "Đơn hàng không ở trạng thái chờ thanh toán");
             }
 
             Instant now = Instant.now(clock);
@@ -142,7 +142,8 @@ public class PaymentServiceImpl implements PaymentService {
 
             if (order.getShippingAddress() == null || order.getShippingAddress().isBlank()
                     || order.getPhoneNumber() == null || order.getPhoneNumber().isBlank()) {
-                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Đơn hàng chưa có địa chỉ giao hàng hoặc số điện thoại");
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR,
+                        "Đơn hàng chưa có địa chỉ giao hàng hoặc số điện thoại");
             }
 
             int attemptNo = paymentRepository.findMaxAttemptNo(order.getId()).orElse(0) + 1;
@@ -187,8 +188,7 @@ public class PaymentServiceImpl implements PaymentService {
     @Override
     public List<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId) {
         Order order = orderRepository.findById(orderId).orElseThrow(
-                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
-        );
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng"));
 
         boolean isBuyer = order.getBuyerId().equals(currentUser.id());
         if (!isBuyer) {

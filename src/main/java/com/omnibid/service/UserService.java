@@ -11,8 +11,7 @@ public interface UserService {
 
     UserProfileResponse updateProfile(Long userId, UpdateProfileRequest request);
 
-    UserProfileResponse updateAvatar(Long userId, MultipartFile file);
+    String updateAvatar(Long userId, MultipartFile file);
 
     void changePassword(Long userId, ChangePasswordRequest request);
 }
-

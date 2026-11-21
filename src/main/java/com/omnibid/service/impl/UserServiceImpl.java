@@ -1,20 +1,23 @@
 package com.omnibid.service.impl;
 
+import com.omnibid.common.AfterCommitExecutor;
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
-import com.omnibid.dto.storage.StorageUploadResult;
+import com.omnibid.common.ImageValidator;
+import com.omnibid.dto.storage.StoredImage;
 import com.omnibid.dto.user.ChangePasswordRequest;
 import com.omnibid.dto.user.UpdateProfileRequest;
 import com.omnibid.dto.user.UserProfileResponse;
 import com.omnibid.entity.User;
 import com.omnibid.repository.UserRepository;
-import com.omnibid.service.StorageService;
+import com.omnibid.service.ImageStorageService;
 import com.omnibid.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 @Slf4j
@@ -24,7 +27,9 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final StorageService storageService;
+    private final ImageStorageService imageStorageService;
+    private final AfterCommitExecutor afterCommitExecutor;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
     @Transactional(readOnly = true)
@@ -53,14 +58,28 @@ public class UserServiceImpl implements UserService {
     }
 
     @Override
-    @Transactional
-    public UserProfileResponse updateAvatar(Long userId, MultipartFile file) {
-        User user = getUser(userId);
-        StorageUploadResult uploadResult = storageService.upload(file, "avatars/" + userId);
-        user.setAvatarUrl(uploadResult.url());
+    public String updateAvatar(Long userId, MultipartFile file) {
+        ImageValidator.ValidatedImage val = ImageValidator.validate(file);
+        StoredImage stored = imageStorageService.upload(val.bytes(), "omnibid/avatars");
 
-        User updated = userRepository.save(user);
-        return mapToProfile(updated);
+        try {
+            return transactionTemplate.execute(status -> {
+                User user = getUser(userId);
+                String oldPublicId = user.getAvatarPublicId();
+
+                user.setAvatarUrl(stored.url());
+                user.setAvatarPublicId(stored.publicId());
+                userRepository.save(user);
+
+                if (oldPublicId != null && !oldPublicId.isBlank()) {
+                    afterCommitExecutor.execute(() -> imageStorageService.delete(oldPublicId));
+                }
+                return stored.url();
+            });
+        } catch (Exception ex) {
+            imageStorageService.delete(stored.publicId());
+            throw ex;
+        }
     }
 
     @Override

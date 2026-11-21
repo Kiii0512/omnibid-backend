@@ -2,7 +2,10 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
-import com.omnibid.dto.product.*;
+import com.omnibid.dto.product.ProductCreateRequest;
+import com.omnibid.dto.product.ProductImageResponse;
+import com.omnibid.dto.product.ProductResponse;
+import com.omnibid.dto.product.ProductUpdateRequest;
 import com.omnibid.enums.ProductStatus;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.CustomUserDetails;
@@ -18,6 +21,8 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/products")
 @RequiredArgsConstructor
@@ -25,23 +30,16 @@ public class ProductController {
 
     private final ProductService productService;
 
-    @PostMapping
+    @PostMapping(consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasRole('USER')")
     public ApiResponse<ProductResponse> createProduct(
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @Valid @RequestBody ProductCreateRequest request
+            @Valid @RequestPart("product") ProductCreateRequest request,
+            @RequestPart("files") List<MultipartFile> files
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        ProductResponse response = productService.createProduct(currentUser.id(), request);
-        return ApiResponse.success("Product created successfully", response);
-    }
-
-    @GetMapping
-    public ApiResponse<PageResponse<ProductResponse>> getProducts(
-            @PageableDefault(size = 20) Pageable pageable
-    ) {
-        PageResponse<ProductResponse> response = productService.getProducts(pageable);
+        ProductResponse response = productService.createProduct(currentUser.id(), request, files);
         return ApiResponse.success(response);
     }
 
@@ -49,27 +47,23 @@ public class ProductController {
     @PreAuthorize("hasRole('USER')")
     public ApiResponse<PageResponse<ProductResponse>> getMyProducts(
             @AuthenticationPrincipal CustomUserDetails userDetails,
+            @RequestParam(required = false) String q,
             @RequestParam(required = false) ProductStatus status,
-            @PageableDefault(size = 20) Pageable pageable
+            @PageableDefault(size = 10) Pageable pageable
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        PageResponse<ProductResponse> response = productService.getMyProducts(currentUser.id(), status, pageable);
-        return ApiResponse.success(response);
-    }
-
-    @GetMapping("/mine/summary")
-    @PreAuthorize("hasRole('USER')")
-    public ApiResponse<ProductSummaryResponse> getMyProductsSummary(
-            @AuthenticationPrincipal CustomUserDetails userDetails
-    ) {
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        ProductSummaryResponse response = productService.getMyProductsSummary(currentUser.id());
+        PageResponse<ProductResponse> response = productService.getMyProducts(currentUser.id(), q, status, pageable);
         return ApiResponse.success(response);
     }
 
     @GetMapping("/{id}")
-    public ApiResponse<ProductResponse> getProductById(@PathVariable Long id) {
-        ProductResponse response = productService.getProductById(id);
+    @PreAuthorize("hasRole('USER')")
+    public ApiResponse<ProductResponse> getProductById(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long id
+    ) {
+        CurrentUser currentUser = CurrentUser.of(userDetails);
+        ProductResponse response = productService.getProductById(currentUser.id(), id);
         return ApiResponse.success(response);
     }
 
@@ -82,11 +76,10 @@ public class ProductController {
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         ProductResponse response = productService.updateProduct(currentUser.id(), id, request);
-        return ApiResponse.success("Product updated successfully", response);
+        return ApiResponse.success(response);
     }
 
     @DeleteMapping("/{id}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasRole('USER')")
     public ApiResponse<Void> deleteProduct(
             @AuthenticationPrincipal CustomUserDetails userDetails,
@@ -94,24 +87,23 @@ public class ProductController {
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         productService.deleteProduct(currentUser.id(), id);
-        return ApiResponse.success("Product deleted successfully", null);
+        return ApiResponse.success(null);
     }
 
     @PostMapping(value = "/{id}/images", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     @ResponseStatus(HttpStatus.CREATED)
     @PreAuthorize("hasRole('USER')")
-    public ApiResponse<ProductImageResponse> uploadProductImage(
+    public ApiResponse<List<ProductImageResponse>> uploadProductImages(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long id,
-            @RequestParam("file") MultipartFile file
+            @RequestPart("files") List<MultipartFile> files
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        ProductImageResponse response = productService.uploadProductImage(currentUser.id(), id, file);
-        return ApiResponse.success("Image uploaded successfully", response);
+        List<ProductImageResponse> response = productService.uploadProductImages(currentUser.id(), id, files);
+        return ApiResponse.success(response);
     }
 
     @DeleteMapping("/{id}/images/{imageId}")
-    @ResponseStatus(HttpStatus.NO_CONTENT)
     @PreAuthorize("hasRole('USER')")
     public ApiResponse<Void> deleteProductImage(
             @AuthenticationPrincipal CustomUserDetails userDetails,
@@ -120,19 +112,6 @@ public class ProductController {
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         productService.deleteProductImage(currentUser.id(), id, imageId);
-        return ApiResponse.success("Image deleted successfully", null);
-    }
-
-    @PatchMapping("/{id}/images/{imageId}/primary")
-    @PreAuthorize("hasRole('USER')")
-    public ApiResponse<ProductImageResponse> setPrimaryImage(
-            @AuthenticationPrincipal CustomUserDetails userDetails,
-            @PathVariable Long id,
-            @PathVariable Long imageId
-    ) {
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        ProductImageResponse response = productService.setPrimaryImage(currentUser.id(), id, imageId);
-        return ApiResponse.success("Primary image updated successfully", response);
+        return ApiResponse.success(null);
     }
 }
-
