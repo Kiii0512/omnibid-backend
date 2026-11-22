@@ -1,6 +1,7 @@
 package com.omnibid.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.context.properties.bind.ConstructorBinding;
 import org.springframework.boot.convert.DurationUnit;
 
 import java.time.Duration;
@@ -15,13 +16,21 @@ public record AppProperties(
         Security security,
         Cors cors
 ) {
-    public AppProperties {
-        if (order == null) order = new Order(Duration.ofHours(48), Duration.ofDays(7));
-        if (auction == null) auction = new Auction(Duration.ofMinutes(60), Duration.ofDays(30));
-        if (scheduler == null) scheduler = new Scheduler(Duration.ofSeconds(10));
-        if (payment == null) payment = new Payment(false);
-        if (security == null) security = new Security(new Security.Login(5, Duration.ofMinutes(15), Duration.ofMinutes(15)));
-        if (cors == null) cors = new Cors("http://localhost:3000");
+    @ConstructorBinding
+    public AppProperties(
+            Order order,
+            Auction auction,
+            Scheduler scheduler,
+            Payment payment,
+            Security security,
+            Cors cors
+    ) {
+        this.order = order != null ? order : new Order(Duration.ofHours(48), Duration.ofDays(7));
+        this.auction = auction != null ? auction : new Auction(Duration.ofMinutes(60), Duration.ofDays(30));
+        this.scheduler = scheduler != null ? scheduler : new Scheduler(Duration.ofSeconds(10));
+        this.payment = payment != null ? payment : new Payment(false);
+        this.security = security != null ? security : new Security(new Security.Login(5, Duration.ofMinutes(15), Duration.ofMinutes(15)));
+        this.cors = cors != null ? cors : new Cors("http://localhost:3000");
     }
 
     public AppProperties() {
