@@ -1,11 +1,10 @@
 package com.omnibid.support;
 
-import com.omnibid.config.DateTimeConfig;
-
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
+import java.time.ZoneOffset;
 
 public class MutableClock extends Clock {
 
@@ -17,8 +16,12 @@ public class MutableClock extends Clock {
         this.zone = zone;
     }
 
+    public MutableClock(Instant initialInstant) {
+        this(initialInstant, ZoneOffset.UTC);
+    }
+
     public MutableClock() {
-        this(Instant.now(), DateTimeConfig.DEFAULT_ZONE);
+        this(Instant.now(), ZoneOffset.UTC);
     }
 
     public synchronized void set(Instant instant) {

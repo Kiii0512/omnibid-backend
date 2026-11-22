@@ -13,10 +13,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class SchemaValidationIT {
 
     @Test
-    @DisplayName("IT-SCHEMA-01 Kiem tra 14 JPA entity khop hoan toan voi db/design_schema.sql")
+    @DisplayName("IT-SCHEMA-01 Kiểm tra 10 JPA entity khớp hoàn toàn với Flyway V1/V2 schema")
     void contextLoadsAndSchemaIsValid() {
-        // Neu co bat ky entity nao sai lech kieu du lieu, ten cot, ten bang, constraint
-        // thi Spring context khoi dong voi hibernate ddl-auto=validate se nem loi va test fail.
         assertThat(true).isTrue();
     }
 }

@@ -1,14 +1,16 @@
 package com.omnibid.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.omnibid.common.AppException;
 import com.omnibid.common.GlobalExceptionHandler;
 import com.omnibid.common.PageResponse;
+import com.omnibid.dto.order.OrderConfirmReceiptResponse;
 import com.omnibid.dto.order.OrderDetailResponse;
-import com.omnibid.dto.order.OrderResponse;
+import com.omnibid.dto.order.OrderSummaryResponse;
+import com.omnibid.dto.order.ShipOrderRequest;
+import com.omnibid.dto.order.ShipOrderResponse;
 import com.omnibid.dto.order.ShippingInfoRequest;
 import com.omnibid.entity.User;
 import com.omnibid.enums.OrderStatus;
+import com.omnibid.enums.ProductStatus;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.security.CustomUserDetails;
@@ -21,7 +23,7 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
-import org.springframework.http.HttpStatus;
+import org.springframework.data.web.PageableHandlerMethodArgumentResolver;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.test.web.servlet.MockMvc;
@@ -30,9 +32,11 @@ import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
@@ -40,13 +44,14 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @ExtendWith(MockitoExtension.class)
 class OrderControllerTest {
 
     private MockMvc mockMvc;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final JsonMapper jsonMapper = JsonMapper.builder().build();
 
     @Mock
     private OrderService orderService;
@@ -69,41 +74,43 @@ class OrderControllerTest {
 
         mockMvc = MockMvcBuilders.standaloneSetup(orderController)
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .setCustomArgumentResolvers(new HandlerMethodArgumentResolver() {
-                    @Override
-                    public boolean supportsParameter(MethodParameter parameter) {
-                        return parameter.hasParameterAnnotation(AuthenticationPrincipal.class);
-                    }
+                .setCustomArgumentResolvers(
+                        new PageableHandlerMethodArgumentResolver(),
+                        new HandlerMethodArgumentResolver() {
+                            @Override
+                            public boolean supportsParameter(MethodParameter parameter) {
+                                return parameter.hasParameterAnnotation(AuthenticationPrincipal.class);
+                            }
 
-                    @Override
-                    public Object resolveArgument(MethodParameter parameter,
-                                                  ModelAndViewContainer mavContainer,
-                                                  NativeWebRequest webRequest,
-                                                  WebDataBinderFactory binderFactory) {
-                        return mockUserDetails;
-                    }
-                })
+                            @Override
+                            public Object resolveArgument(MethodParameter parameter,
+                                                          ModelAndViewContainer mavContainer,
+                                                          NativeWebRequest webRequest,
+                                                          WebDataBinderFactory binderFactory) {
+                                return mockUserDetails;
+                            }
+                        }
+                )
                 .build();
     }
 
     @Test
-    @DisplayName("GET /api/v1/orders trả 200 kèm PageResponse<OrderResponse>")
+    @DisplayName("GET /api/v1/orders trả 200 kèm PageResponse<OrderSummaryResponse>")
     void getOrders_Returns200() throws Exception {
-        OrderResponse orderRes = OrderResponse.builder()
+        OrderSummaryResponse orderRes = OrderSummaryResponse.builder()
                 .id(9L)
                 .auctionId(12L)
                 .productId(4L)
-                .productTitle("Máy ảnh Fuji X100V")
+                .title("Máy ảnh Fuji X100V")
                 .finalPrice(BigDecimal.valueOf(520000))
                 .status(OrderStatus.PENDING_PAYMENT)
-                .viewerRole("BUYER")
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
 
-        PageResponse<OrderResponse> pageRes = PageResponse.<OrderResponse>builder()
+        PageResponse<OrderSummaryResponse> pageRes = PageResponse.<OrderSummaryResponse>builder()
                 .content(List.of(orderRes))
                 .page(0)
-                .size(20)
+                .size(10)
                 .totalElements(1)
                 .totalPages(1)
                 .build();
@@ -116,7 +123,7 @@ class OrderControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.content[0].id").value(9))
-                .andExpect(jsonPath("$.data.content[0].viewerRole").value("BUYER"));
+                .andExpect(jsonPath("$.data.content[0].title").value("Máy ảnh Fuji X100V"));
     }
 
     @Test
@@ -126,10 +133,9 @@ class OrderControllerTest {
                 .id(9L)
                 .auctionId(12L)
                 .productId(4L)
-                .productTitle("Máy ảnh Fuji X100V")
+                .title("Máy ảnh Fuji X100V")
                 .status(OrderStatus.PENDING_PAYMENT)
                 .viewerRole("BUYER")
-                .allowedActions(List.of("PAY", "UPDATE_SHIPPING_INFO"))
                 .build();
 
         when(orderService.getOrderById(any(), eq(9L))).thenReturn(detail);
@@ -139,7 +145,7 @@ class OrderControllerTest {
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(9))
-                .andExpect(jsonPath("$.data.allowedActions[0]").value("PAY"));
+                .andExpect(jsonPath("$.data.viewerRole").value("BUYER"));
     }
 
     @Test
@@ -161,7 +167,7 @@ class OrderControllerTest {
 
         mockMvc.perform(patch("/api/v1/orders/9/shipping-info")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
+                        .content(jsonMapper.writeValueAsString(req)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.shippingAddress").value("12 Trần Hưng Đạo, Hà Nội"));
@@ -172,32 +178,54 @@ class OrderControllerTest {
     void updateShippingInfo_ValidationFails_Returns400() throws Exception {
         ShippingInfoRequest req = ShippingInfoRequest.builder()
                 .shippingAddress("12 Trần Hưng Đạo")
-                .phoneNumber("abc") // Invalid phone
+                .phoneNumber("abc")
                 .build();
 
         mockMvc.perform(patch("/api/v1/orders/9/shipping-info")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(req)))
+                        .content(jsonMapper.writeValueAsString(req)))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.success").value(false))
-                .andExpect(jsonPath("$.errorCode").value("VALIDATION_ERROR"));
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
     }
 
     @Test
-    @DisplayName("PATCH /api/v1/orders/{id}/confirm-receipt trả 200 khi xác nhận nhận hàng thành công")
+    @DisplayName("POST /api/v1/orders/{id}/ship trả 200 khi người bán xác nhận gửi hàng")
+    void shipOrder_Returns200() throws Exception {
+        Instant now = Instant.now();
+        ShipOrderResponse res = ShipOrderResponse.builder()
+                .id(9L)
+                .orderStatus(OrderStatus.SHIPPING)
+                .trackingCode("VN123456")
+                .shippedAt(now)
+                .confirmDeadline(now.plus(7, ChronoUnit.DAYS))
+                .build();
+
+        when(orderService.shipOrder(any(), eq(9L), any())).thenReturn(res);
+
+        mockMvc.perform(post("/api/v1/orders/9/ship")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(jsonMapper.writeValueAsString(new ShipOrderRequest("VN123456"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.orderStatus").value("SHIPPING"))
+                .andExpect(jsonPath("$.data.trackingCode").value("VN123456"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/orders/{id}/confirm-receipt trả 200 khi xác nhận nhận hàng thành công")
     void confirmReceipt_Returns200() throws Exception {
-        com.omnibid.dto.order.OrderConfirmReceiptResponse res = com.omnibid.dto.order.OrderConfirmReceiptResponse.builder()
+        OrderConfirmReceiptResponse res = OrderConfirmReceiptResponse.builder()
                 .id(9L)
                 .orderStatus(OrderStatus.COMPLETED)
-                .productStatus(com.omnibid.enums.ProductStatus.SOLD)
+                .productStatus(ProductStatus.SOLD)
                 .build();
 
         when(orderService.confirmReceipt(any(), eq(9L))).thenReturn(res);
 
-        mockMvc.perform(patch("/api/v1/orders/9/confirm-receipt"))
+        mockMvc.perform(post("/api/v1/orders/9/confirm-receipt"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.message").value("Order completed"))
                 .andExpect(jsonPath("$.data.id").value(9))
                 .andExpect(jsonPath("$.data.orderStatus").value("COMPLETED"))
                 .andExpect(jsonPath("$.data.productStatus").value("SOLD"));

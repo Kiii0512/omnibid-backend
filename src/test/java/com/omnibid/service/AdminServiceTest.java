@@ -202,14 +202,14 @@ class AdminServiceTest {
         when(userRepository.findById(88L)).thenReturn(Optional.of(otherAdmin));
         assertThatThrownBy(() -> adminService.banUser(adminUser, 88L, "test"))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.CANNOT_BAN_ADMIN);
 
         activeUser.setStatus(UserStatus.BANNED);
         when(userRepository.findById(USER_ID)).thenReturn(Optional.of(activeUser));
         assertThatThrownBy(() -> adminService.banUser(adminUser, USER_ID, "test"))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION);
     }
 
@@ -228,7 +228,7 @@ class AdminServiceTest {
         activeUser.setStatus(UserStatus.ACTIVE);
         assertThatThrownBy(() -> adminService.unbanUser(adminUser, USER_ID, null))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION);
     }
 
@@ -284,7 +284,7 @@ class AdminServiceTest {
 
         assertThatThrownBy(() -> adminService.hideProduct(adminUser, PRODUCT_ID, "reason"))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION);
     }
 
@@ -350,7 +350,7 @@ class AdminServiceTest {
 
         assertThatThrownBy(() -> adminService.cancelOrder(adminUser, ORDER_ID, new AdminCancelOrderRequest("Huy don")))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION);
     }
 
@@ -363,7 +363,7 @@ class AdminServiceTest {
                 new Object[]{AuctionStatus.ACTIVE, 5L},
                 new Object[]{AuctionStatus.ENDED, 10L}
         ));
-        when(orderRepository.countGroupedByStatus()).thenReturn(List.of(
+        when(orderRepository.countGroupedByStatus()).thenReturn(List.<Object[]>of(
                 new Object[]{OrderStatus.COMPLETED, 8L}
         ));
         when(orderRepository.sumCompletedOrderValue()).thenReturn(BigDecimal.valueOf(15000000));
@@ -388,12 +388,12 @@ class AdminServiceTest {
     void securityAndSortWhitelist() {
         assertThatThrownBy(() -> adminService.getUsers(regularUser, null, null, null, PageRequest.of(0, 10)))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
 
         assertThatThrownBy(() -> adminService.getUsers(adminUser, null, null, null, PageRequest.of(0, 10, Sort.by("passwordHash"))))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.VALIDATION_ERROR);
     }
 

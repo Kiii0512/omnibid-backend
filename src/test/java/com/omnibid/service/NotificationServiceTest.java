@@ -182,12 +182,12 @@ class NotificationServiceTest {
         when(notificationRepository.findById(10L)).thenReturn(Optional.of(notification));
         BusinessException forbidden = assertThrows(BusinessException.class,
                 () -> notificationService.markAsRead(3L, 10L));
-        assertEquals(ErrorCode.FORBIDDEN, forbidden.getErrorCode());
+        assertEquals(ErrorCode.FORBIDDEN, forbidden.getCode());
 
         when(notificationRepository.findById(99L)).thenReturn(Optional.empty());
         BusinessException notFound = assertThrows(BusinessException.class,
                 () -> notificationService.markAsRead(2L, 99L));
-        assertEquals(ErrorCode.NOT_FOUND, notFound.getErrorCode());
+        assertEquals(ErrorCode.NOT_FOUND, notFound.getCode());
     }
 
     @Test
@@ -219,6 +219,6 @@ class NotificationServiceTest {
                         userId, null, null, PageRequest.of(0, 10, Sort.by("unknownField"))
                 )
         );
-        assertEquals(ErrorCode.VALIDATION_ERROR, invalidSort.getErrorCode());
+        assertEquals(ErrorCode.VALIDATION_ERROR, invalidSort.getCode());
     }
 }

@@ -1,13 +1,12 @@
 package com.omnibid.support;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.omnibid.common.ApiResponse;
 import com.omnibid.entity.User;
 import com.omnibid.security.JwtTokenProvider;
-import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
 import org.springframework.stereotype.Component;
+import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.Map;
@@ -19,7 +18,6 @@ public class Api {
 
     private final RestTemplate restTemplate;
     private final JwtTokenProvider jwtTokenProvider;
-    private final ObjectMapper objectMapper = new ObjectMapper();
     private final ThreadLocal<String> tokenHolder = new ThreadLocal<>();
 
     public Api(JwtTokenProvider jwtTokenProvider) {
@@ -49,7 +47,7 @@ public class Api {
 
     public Api as(User user) {
         if (user != null) {
-            tokenHolder.set(jwtTokenProvider.generateToken(user.getEmail(), user.getRole().name()));
+            tokenHolder.set(jwtTokenProvider.generateToken(user.getId(), user.getRole(), user.getTokenVersion()));
         } else {
             tokenHolder.remove();
         }
@@ -99,6 +97,17 @@ public class Api {
 
     public ResponseEntity<String> post(String url, Object body, Map<String, String> headers) {
         HttpEntity<?> entity = new HttpEntity<>(body, createHeaders(headers));
+        return restTemplate.exchange(toFullUrl(url), HttpMethod.POST, entity, String.class);
+    }
+
+    public ResponseEntity<String> postMultipart(String url, MultiValueMap<String, Object> body) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.MULTIPART_FORM_DATA);
+        String token = tokenHolder.get();
+        if (token != null && !token.isBlank()) {
+            headers.setBearerAuth(token);
+        }
+        HttpEntity<MultiValueMap<String, Object>> entity = new HttpEntity<>(body, headers);
         return restTemplate.exchange(toFullUrl(url), HttpMethod.POST, entity, String.class);
     }
 

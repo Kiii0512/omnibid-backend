@@ -12,7 +12,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 6. Đơn hàng, thanh toán, giao hàng
 - [x] 7. Thông báo, báo cáo vi phạm
 - [x] 8. Quản trị
-- [ ] 9. Kiểm thử, tài liệu, rà soát cuối
+- [x] 9. Kiểm thử, tài liệu, rà soát cuối
 
 ## Baseline (phase 0)
 - test-compile ban đầu: Đạt (0 lỗi, `.\mvnw.cmd -q test-compile` exit code 0)
@@ -69,6 +69,11 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
   - Danh sách & chi tiết quản trị: bổ sung `GET /admin/products/{id}`, `GET /admin/auctions`, `GET /admin/auctions/{id}`, `GET /admin/orders/{id}` (kèm `payments`); chuẩn hóa bộ lọc (`keyword`, `role`, `fromDate`/`toDate`) và `SortWhitelist` (mặc định `size=10, createdAt,desc`); tất cả DTO khớp `RESPONSE_DTO_v4.md` §7.
   - `GET /admin/statistics`: bỏ `from`/`to`, trả số liệu tích lũy `{ totalUsers, bannedUsers, auctionsByStatus, ordersByStatus, completedOrderValue, pendingReports }` dùng `COUNT ... GROUP BY`, luôn đủ khóa mọi trạng thái kể cả 0.
   - Viết lại `AdminServiceTest` theo v4 và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
+- **Phase 9** (`refactor(v4): phase 9 - tests and docs`):
+  - `I1`, `I2`, `I3`, `I4`: Cập nhật toàn bộ hạ tầng test (`BaseIT` TRUNCATE 10 bảng + reset `FakeImageStorageService` & `LoginAttemptLimiter`, `Seed` theo 10 entity v4 với `Instant`/`BigDecimal` scale 0, `InvariantCheck` với đúng 7 bất biến v4, `MutableClock` UTC, `CountingMockPaymentGateway`, `FakeImageStorageService`, `TestSupportConfig`, `Api` với JWT `userId`/`ver` và multipart).
+  - Xóa 2 tệp test lỗi thời (`ShipmentControllerTest`, `ShipmentServiceTest`); sửa toàn bộ unit test và controller test (`CategoryServiceTest`, `ProductServiceTest`, `OrderControllerTest`, `PaymentControllerTest`, `AdminControllerTest`, `ProductControllerTest`, `WebSocketConfigTest`, `AdminServiceTest`, `AuctionCloserTest`, `NotificationServiceTest`, `ReportServiceTest`).
+  - Viết lại toàn bộ 10 Integration Test theo chuẩn v4 (`ApiContractIT` gồm kiểm tra đúng 54 endpoint `/api/v1/**` qua `RequestMappingHandlerMapping`, `AuthorizationIT` gồm logout/đổi mật khẩu/rate limit 429 + khôi phục sau 15 phút/BANNED trên Public & Protected/Admin bị chặn ở `/orders/{id}`, `PaymentIntegrationIT`, `NotificationIntegrationIT` với STOMP `/ws` & `/topic/auctions/{id}`, `AdminIntegrationIT` với BR-09/BR-16/BR-17/BR-18/CANNOT_BAN_ADMIN/report resolve, `ConcurrencyIT` với 20 luồng bid & BR-15 2 luồng tạo phiên, `DatabaseConstraintIT`, `EndToEndFlowIT`, `SchedulerIntegrationIT`, `SchemaValidationIT`).
+  - Tài liệu: Cập nhật `README.md` theo v4 (10 bảng, Flyway, Cloudinary, UTC/+07:00, profile `demo`, tài khoản admin seed `admin@omnibid.local`, dẫn chiếu 54 endpoint và lệnh test); rà soát hoàn thiện `docs/v4/API_CHANGES_FOR_FRONTEND.md`. (Thư mục `docs/01-requirements`…`docs/04-testing` không tồn tại trong repo hiện tại nên không cần di chuyển sang `docs/legacy/`.)
 
 ## Bảng ánh xạ mã lỗi cũ → mới (phase 1)
 | Mã cũ (`AppException`) | Mã mới (`ErrorCode`) | HTTP mới | Ghi chú |
@@ -107,9 +112,13 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - **Xóa các DTO cũ không còn sử dụng (Phase 8)**: Đã xóa `AdminController`, `UserStatusUpdateRequest`, `UserStatusUpdateResponse`, `ProductHideRequest`, `AdminOrderSummaryResponse`, `AdminProductResponse`, `AuctionResponse`, `OrderResponse` sau khi toàn bộ endpoint chuyển sang DTO chuẩn `RESPONSE_DTO_v4.md`.
 
 ## Cần người duyệt
+- Chạy `.\mvnw.cmd verify` trên máy đã bật **Docker Desktop** để chạy trọn bộ 10 Integration Test (Testcontainers MySQL 8.0 + Flyway V1/V2).
+- Thử khởi động ứng dụng với profile `dev,local` trên database MySQL rỗng mới và đăng nhập `admin@omnibid.local` / `Admin@123456`.
+- Review nhánh `refactor/v4-sync` và merge vào `main` sau khi xác nhận `verify` xanh.
 
 ## Việc tồn / test còn lỗi
-- Sau Phase 8: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` đạt **ALL v4 CHECKS PASSED** (đủ đúng **54 endpoint REST v4**, 10 bảng, 24 mã lỗi, 0 từ khóa cấm).
-- Đã viết lại `AdminServiceTest` biên dịch sạch theo v4.
-- **11 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` (`AdminControllerTest`, `OrderControllerTest`, `PaymentControllerTest`, `ShipmentControllerTest`, `AuthorizationIT`, `NotificationIntegrationIT`, `PaymentIntegrationIT`, `CategoryServiceTest`, `ProductServiceTest`, `ShipmentServiceTest`, `Seed`) — sẽ sửa/gỡ ở Phase 9.
-- Đã thêm `src/test/java/com/omnibid/common/ImageValidatorTest.java` và `src/test/java/com/omnibid/config/JacksonConfigTest.java`.
+- Sau Phase 9:
+  - `.\mvnw.cmd test-compile`: **0 lỗi** (biên dịch sạch toàn bộ 48 tệp test).
+  - `.\mvnw.cmd test`: **146/146 unit test ĐẠT** (0 failures, 0 errors, 0 skipped).
+  - `verify-v4.ps1`: **ALL v4 CHECKS PASSED** (10 bảng, 54 endpoint `/api/v1/**`, 24 mã lỗi, 0 từ khóa cấm).
+  - `.\mvnw.cmd verify` (Integration Tests): **Chưa chạy** do Docker Desktop không khả dụng trong môi trường sandbox (`npipe:////./pipe/docker_engine` không kết nối được) — toàn bộ 10 tệp `*IT.java` đã biên dịch sạch và sẵn sàng chạy khi bật Docker Desktop.

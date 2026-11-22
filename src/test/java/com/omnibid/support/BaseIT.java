@@ -6,6 +6,7 @@ import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.scheduler.AuctionScheduler;
 import com.omnibid.scheduler.OrderScheduler;
+import com.omnibid.security.LoginAttemptLimiter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -34,6 +35,12 @@ public abstract class BaseIT {
     protected CountingMockPaymentGateway gateway;
 
     @Autowired
+    protected FakeImageStorageService fakeImageStorageService;
+
+    @Autowired
+    protected LoginAttemptLimiter loginAttemptLimiter;
+
+    @Autowired
     protected OrderScheduler orderScheduler;
 
     @Autowired
@@ -54,12 +61,11 @@ public abstract class BaseIT {
         api.setPort(port);
         mutableClock.reset();
         gateway.reset();
+        fakeImageStorageService.reset();
+        loginAttemptLimiter.clear();
 
         jdbcTemplate.execute("SET FOREIGN_KEY_CHECKS = 0");
-        jdbcTemplate.execute("TRUNCATE TABLE audit_logs");
         jdbcTemplate.execute("TRUNCATE TABLE notifications");
-        jdbcTemplate.execute("TRUNCATE TABLE shipment_events");
-        jdbcTemplate.execute("TRUNCATE TABLE shipments");
         jdbcTemplate.execute("TRUNCATE TABLE payments");
         jdbcTemplate.execute("TRUNCATE TABLE reports");
         jdbcTemplate.execute("TRUNCATE TABLE orders");
@@ -74,7 +80,7 @@ public abstract class BaseIT {
         seller = seed.createUser("seller@omnibid.com", "Seller One", UserRole.USER, UserStatus.ACTIVE);
         buyer = seed.createUser("buyer@omnibid.com", "Buyer One", UserRole.USER, UserStatus.ACTIVE);
         bidderB = seed.createUser("bidderb@omnibid.com", "Bidder B", UserRole.USER, UserStatus.ACTIVE);
-        admin = seed.createUser("admin@omnibid.com", "Admin One", UserRole.ADMIN, UserStatus.ACTIVE);
+        admin = seed.createUser("admin@omnibid.local", "Admin One", UserRole.ADMIN, UserStatus.ACTIVE);
         other = seed.createUser("other@omnibid.com", "Other User", UserRole.USER, UserStatus.ACTIVE);
 
         category = seed.createCategory("Electronics", "electronics");

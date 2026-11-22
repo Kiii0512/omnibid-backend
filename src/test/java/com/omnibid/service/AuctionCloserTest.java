@@ -88,7 +88,6 @@ class AuctionCloserTest {
                 productRepository,
                 productImageRepository,
                 userRepository,
-                paymentRepository,
                 orderAccessPolicy,
                 orderLifecycleSupport,
                 appProperties,

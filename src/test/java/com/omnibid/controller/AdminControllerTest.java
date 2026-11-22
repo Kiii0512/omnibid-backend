@@ -1,13 +1,10 @@
 package com.omnibid.controller;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.omnibid.common.GlobalExceptionHandler;
-import com.omnibid.common.PageResponse;
+import com.omnibid.controller.admin.*;
 import com.omnibid.dto.admin.*;
-import com.omnibid.dto.auction.AuctionResponse;
+import com.omnibid.dto.category.AdminCategoryResponse;
 import com.omnibid.dto.category.CategoryRequest;
-import com.omnibid.dto.category.CategoryResponse;
-import com.omnibid.dto.order.OrderResponse;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.OrderStatus;
@@ -21,10 +18,10 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
+import org.springframework.data.web.PageableHandlerMethodArgumentResolver;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.test.web.servlet.MockMvc;
@@ -33,16 +30,17 @@ import org.springframework.web.bind.support.WebDataBinderFactory;
 import org.springframework.web.context.request.NativeWebRequest;
 import org.springframework.web.method.support.HandlerMethodArgumentResolver;
 import org.springframework.web.method.support.ModelAndViewContainer;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
-import java.util.List;
+import java.time.Instant;
 import java.util.Map;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.when;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.*;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -50,15 +48,12 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class AdminControllerTest {
 
     private MockMvc mockMvc;
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final JsonMapper jsonMapper = JsonMapper.builder().build();
 
     @Mock
     private AdminService adminService;
     @Mock
     private CategoryService categoryService;
-
-    @InjectMocks
-    private AdminController adminController;
 
     private CustomUserDetails adminUserDetails;
 
@@ -66,7 +61,7 @@ class AdminControllerTest {
     void setUp() {
         User adminUser = User.builder()
                 .id(9L)
-                .email("admin@omnibid.com")
+                .email("admin@omnibid.local")
                 .fullName("Admin System")
                 .role(UserRole.ADMIN)
                 .status(UserStatus.ACTIVE)
@@ -88,66 +83,66 @@ class AdminControllerTest {
             }
         };
 
-        mockMvc = MockMvcBuilders.standaloneSetup(adminController)
+        mockMvc = MockMvcBuilders.standaloneSetup(
+                        new AdminUserController(adminService),
+                        new AdminProductController(adminService),
+                        new AdminAuctionController(adminService),
+                        new AdminOrderController(adminService),
+                        new AdminCategoryController(categoryService),
+                        new AdminStatisticsController(adminService)
+                )
                 .setControllerAdvice(new GlobalExceptionHandler())
-                .setCustomArgumentResolvers(authResolver)
+                .setCustomArgumentResolvers(new PageableHandlerMethodArgumentResolver(), authResolver)
                 .build();
     }
 
     @Test
-    @DisplayName("PATCH /api/v1/admin/users/{id} — khóa user trả 200 kèm effects")
-    void updateUserStatus_BanUser_Success() throws Exception {
-        UserStatusUpdateResponse response = new UserStatusUpdateResponse(
-                7L,
-                UserStatus.BANNED,
-                Map.of("invalidatedBids", 3, "affectedAuctionIds", List.of(12, 15))
-        );
-        when(adminService.updateUserStatus(any(), eq(7L), any())).thenReturn(response);
+    @DisplayName("POST /api/v1/admin/users/{id}/ban — khóa user trả 200")
+    void banUser_Success() throws Exception {
+        AdminBanUserResponse response = new AdminBanUserResponse(7L, UserStatus.BANNED, 2, 1);
+        when(adminService.banUser(any(), eq(7L), eq("Gian lận"))).thenReturn(response);
 
-        UserStatusUpdateRequest request = new UserStatusUpdateRequest(UserStatus.BANNED, "Gian lận đặt giá");
-
-        mockMvc.perform(patch("/api/v1/admin/users/7")
+        mockMvc.perform(post("/api/v1/admin/users/7/ban")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
+                        .content(jsonMapper.writeValueAsString(new AdminReasonRequest("Gian lận"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.userId").value(7))
+                .andExpect(jsonPath("$.data.id").value(7))
                 .andExpect(jsonPath("$.data.status").value("BANNED"))
-                .andExpect(jsonPath("$.data.effects.invalidatedBids").value(3));
+                .andExpect(jsonPath("$.data.cancelledAuctions").value(2))
+                .andExpect(jsonPath("$.data.cancelledOrders").value(1));
     }
 
     @Test
-    @DisplayName("PATCH /api/v1/admin/products/{id} — ẩn sản phẩm trả 200")
+    @DisplayName("POST /api/v1/admin/products/{id}/hide — ẩn sản phẩm trả 200")
     void hideProduct_Success() throws Exception {
-        ProductHideResponse response = new ProductHideResponse(4L, ProductStatus.HIDDEN, List.of(12L), List.of());
-        when(adminService.hideProduct(any(), eq(4L), any())).thenReturn(response);
+        ProductHideResponse response = new ProductHideResponse(4L, ProductStatus.HIDDEN, 1, 0);
+        when(adminService.hideProduct(any(), eq(4L), eq("Hàng cấm"))).thenReturn(response);
 
-        ProductHideRequest request = new ProductHideRequest(ProductStatus.HIDDEN, "Hàng cấm bán");
-
-        mockMvc.perform(patch("/api/v1/admin/products/4")
+        mockMvc.perform(post("/api/v1/admin/products/4/hide")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
+                        .content(jsonMapper.writeValueAsString(new AdminReasonRequest("Hàng cấm"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.productId").value(4))
+                .andExpect(jsonPath("$.data.id").value(4))
                 .andExpect(jsonPath("$.data.status").value("HIDDEN"));
     }
 
     @Test
     @DisplayName("POST /api/v1/admin/auctions/{id}/cancel — admin hủy phiên trả 200")
     void cancelAuction_Success() throws Exception {
-        AuctionResponse response = AuctionResponse.builder()
-                .id(12L)
-                .status(AuctionStatus.CANCELLED)
-                .cancelReason("Vi phạm quy định")
-                .build();
+        AdminAuctionDetailResponse response = new AdminAuctionDetailResponse(
+                12L, 4L, "Item", null, 1L, "Cat", AuctionStatus.CANCELLED,
+                BigDecimal.valueOf(100000), BigDecimal.valueOf(100000), BigDecimal.valueOf(100000),
+                0, null, Instant.now(), Instant.now(), Instant.now(),
+                "Desc", null, java.util.List.of(), BigDecimal.valueOf(10000), null,
+                null, null, null, null, Instant.now(), "Vi phạm quy định", ProductStatus.AVAILABLE, null
+        );
         when(adminService.cancelAuction(any(), eq(12L), any())).thenReturn(response);
-
-        AdminCancelAuctionRequest request = new AdminCancelAuctionRequest("Vi phạm quy định");
 
         mockMvc.perform(post("/api/v1/admin/auctions/12/cancel")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
+                        .content(jsonMapper.writeValueAsString(new AdminCancelAuctionRequest("Vi phạm quy định"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(12))
@@ -157,17 +152,16 @@ class AdminControllerTest {
     @Test
     @DisplayName("POST /api/v1/admin/orders/{id}/cancel — admin hủy đơn trả 200")
     void cancelOrder_Success() throws Exception {
-        OrderResponse response = OrderResponse.builder()
-                .id(9L)
-                .status(OrderStatus.CANCELLED)
-                .build();
+        AdminOrderDetailResponse response = new AdminOrderDetailResponse(
+                9L, 12L, 4L, "Item", null, BigDecimal.valueOf(500000), OrderStatus.CANCELLED,
+                null, null, Instant.now(), null, Instant.now(),
+                null, null, null, null, null, null, Instant.now(), "Hủy đơn", ProductStatus.AVAILABLE, java.util.List.of()
+        );
         when(adminService.cancelOrder(any(), eq(9L), any())).thenReturn(response);
-
-        AdminCancelOrderRequest request = new AdminCancelOrderRequest("Hủy đơn theo khiếu nại");
 
         mockMvc.perform(post("/api/v1/admin/orders/9/cancel")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
+                        .content(jsonMapper.writeValueAsString(new AdminCancelOrderRequest("Hủy đơn"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(9))
@@ -177,14 +171,12 @@ class AdminControllerTest {
     @Test
     @DisplayName("POST /api/v1/admin/categories — tạo danh mục trả 201")
     void createCategory_Success() throws Exception {
-        CategoryResponse response = new CategoryResponse(1L, "Đồng hồ", "dong-ho", null, LocalDateTime.now());
+        AdminCategoryResponse response = new AdminCategoryResponse(1L, "Đồng hồ", "dong-ho", "watch", 0L);
         when(categoryService.createCategory(any(), any())).thenReturn(response);
-
-        CategoryRequest request = new CategoryRequest("Đồng hồ", null);
 
         mockMvc.perform(post("/api/v1/admin/categories")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(objectMapper.writeValueAsString(request)))
+                        .content(jsonMapper.writeValueAsString(new CategoryRequest("Đồng hồ", null, "watch"))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(1))
@@ -192,25 +184,22 @@ class AdminControllerTest {
     }
 
     @Test
-    @DisplayName("GET /api/v1/admin/statistics — thống kê hệ thống trả 200")
+    @DisplayName("GET /api/v1/admin/statistics — thống kê tích lũy trả 200")
     void getStatistics_Success() throws Exception {
         AdminStatisticsResponse response = new AdminStatisticsResponse(
-                new AdminStatisticsResponse.RangeDto(LocalDateTime.now().minusDays(30), LocalDateTime.now()),
-                new AdminStatisticsResponse.UserStats(120, 117, 3, 25),
-                Map.of("AVAILABLE", 40L),
-                new AdminStatisticsResponse.AuctionStats(4, 12, 30, 9, 6, 0.77),
-                new AdminStatisticsResponse.BidStats(640, 310, 7.3),
-                Map.of("COMPLETED", 24L),
-                new AdminStatisticsResponse.RevenueStats(true, BigDecimal.valueOf(18450000.00)),
-                new AdminStatisticsResponse.PaymentStats(31, 12, 0, 0.72),
-                Map.of("PENDING", 3L)
+                120L,
+                3L,
+                Map.of(AuctionStatus.ACTIVE, 12L, AuctionStatus.ENDED, 30L),
+                Map.of(OrderStatus.COMPLETED, 24L),
+                BigDecimal.valueOf(18450000),
+                5L
         );
-        when(adminService.getStatistics(any(), any(), any())).thenReturn(response);
+        when(adminService.getStatistics(any())).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/admin/statistics"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.success").value(true))
-                .andExpect(jsonPath("$.data.users.total").value(120))
-                .andExpect(jsonPath("$.data.revenue.simulated").value(true));
+                .andExpect(jsonPath("$.data.totalUsers").value(120))
+                .andExpect(jsonPath("$.data.pendingReports").value(5));
     }
 }

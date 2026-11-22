@@ -15,89 +15,58 @@ public class InvariantCheck implements AfterEachCallback {
     private static final Map<String, String> INVARIANTS = new LinkedHashMap<>();
 
     static {
-        // INV-1 Phiên ENDED phải có đúng một Order
+        // INV-1: Mỗi product có tối đa 1 auction SCHEDULED hoặc ACTIVE (BR-15)
         INVARIANTS.put("INV-1",
-                "SELECT a.id FROM auctions a LEFT JOIN orders o ON o.auction_id = a.id " +
-                "WHERE a.status = 'ENDED' AND o.id IS NULL");
+                "SELECT product_id FROM auctions " +
+                "WHERE status IN ('SCHEDULED','ACTIVE') " +
+                "GROUP BY product_id HAVING COUNT(*) > 1");
 
-        // INV-2 Phiên không ENDED không được có Order
+        // INV-2: auctions.bid_count = COUNT(bids)
         INVARIANTS.put("INV-2",
-                "SELECT a.id FROM auctions a JOIN orders o ON o.auction_id = a.id WHERE a.status <> 'ENDED'");
-
-        // INV-3 Phiên đã đóng/hủy không còn Bid LEADING
-        INVARIANTS.put("INV-3",
-                "SELECT DISTINCT b.auction_id FROM bids b JOIN auctions a ON a.id = b.auction_id " +
-                "WHERE a.status IN ('ENDED','UNSOLD','CANCELLED') AND b.status = 'LEADING'");
-
-        // INV-4 Phiên ACTIVE có Bid: đúng một Bid LEADING và khớp highest_bidder_id/current_price
-        INVARIANTS.put("INV-4",
                 "SELECT a.id FROM auctions a " +
-                "LEFT JOIN bids b ON b.auction_id = a.id AND b.status = 'LEADING' " +
-                "WHERE a.status = 'ACTIVE' AND a.bid_count > 0 " +
-                "GROUP BY a.id, a.highest_bidder_id, a.current_price " +
-                "HAVING COUNT(b.id) <> 1 OR MAX(b.bidder_id) <> a.highest_bidder_id OR MAX(b.amount) <> a.current_price");
+                "LEFT JOIN bids b ON b.auction_id = a.id " +
+                "GROUP BY a.id, a.bid_count " +
+                "HAVING a.bid_count <> COUNT(b.id)");
 
-        // INV-5 Order PAID/SHIPPING/COMPLETED phải có Shipment; đơn khác không có Shipment
+        // INV-3: Phiên có bid thì current_price = MAX(bids.amount) và highest_bidder_id = bidder của bid max
+        INVARIANTS.put("INV-3",
+                "SELECT a.id FROM auctions a " +
+                "JOIN bids b ON b.auction_id = a.id " +
+                "WHERE a.bid_count > 0 " +
+                "  AND b.amount = (SELECT MAX(b2.amount) FROM bids b2 WHERE b2.auction_id = a.id) " +
+                "  AND (a.current_price <> b.amount OR a.highest_bidder_id <> b.bidder_id)");
+
+        // INV-4: Mỗi order có tối đa 1 payment SUCCESS (BR-11)
+        INVARIANTS.put("INV-4",
+                "SELECT order_id FROM payments " +
+                "WHERE status = 'SUCCESS' " +
+                "GROUP BY order_id HAVING COUNT(*) > 1");
+
+        // INV-5: Order PAID/SHIPPING/COMPLETED có đúng 1 payment SUCCESS; PENDING_PAYMENT/EXPIRED có 0
         INVARIANTS.put("INV-5",
-                "SELECT o.id FROM orders o LEFT JOIN shipments s ON s.order_id = o.id " +
-                "WHERE (o.status IN ('PAID','SHIPPING','COMPLETED') AND s.id IS NULL) " +
-                "   OR (o.status IN ('PENDING_PAYMENT','EXPIRED') AND s.id IS NOT NULL)");
-
-        // INV-6 Order PAID/SHIPPING/COMPLETED có đúng một Payment SUCCESS; đơn khác không có
-        INVARIANTS.put("INV-6",
-                "SELECT o.id FROM orders o LEFT JOIN payments p ON p.order_id = o.id AND p.status = 'SUCCESS' " +
+                "SELECT o.id FROM orders o " +
+                "LEFT JOIN payments p ON p.order_id = o.id AND p.status = 'SUCCESS' " +
                 "GROUP BY o.id, o.status " +
                 "HAVING (o.status IN ('PAID','SHIPPING','COMPLETED') AND COUNT(p.id) <> 1) " +
-                "    OR (o.status IN ('PENDING_PAYMENT','EXPIRED')   AND COUNT(p.id) <> 0)");
+                "    OR (o.status IN ('PENDING_PAYMENT','EXPIRED') AND COUNT(p.id) <> 0)");
 
-        // INV-7 Order đã đóng không còn Payment PENDING
+        // INV-6: Product HIDDEN không có phiên mở (SCHEDULED/ACTIVE)
+        INVARIANTS.put("INV-6",
+                "SELECT p.id FROM products p " +
+                "JOIN auctions a ON a.product_id = p.id " +
+                "WHERE p.status = 'HIDDEN' AND a.status IN ('SCHEDULED','ACTIVE')");
+
+        // INV-7: Auction ENDED <=> có đúng 1 order
         INVARIANTS.put("INV-7",
-                "SELECT p.order_id FROM payments p JOIN orders o ON o.id = p.order_id " +
-                "WHERE p.status = 'PENDING' AND o.status IN ('EXPIRED','CANCELLED','COMPLETED')");
-
-        // INV-8 Product RESERVED ⇒ có Order PENDING_PAYMENT/PAID/SHIPPING
-        INVARIANTS.put("INV-8",
-                "SELECT p.id FROM products p " +
-                "WHERE p.status = 'RESERVED' " +
-                "  AND NOT EXISTS (SELECT 1 FROM orders o WHERE o.product_id = p.id " +
-                "                  AND o.status IN ('PENDING_PAYMENT','PAID','SHIPPING'))");
-
-        // INV-9 Product AVAILABLE không có phiên mở hay Order tiến hành
-        INVARIANTS.put("INV-9",
-                "SELECT p.id FROM products p " +
-                "WHERE p.status = 'AVAILABLE' " +
-                "  AND (EXISTS (SELECT 1 FROM auctions a WHERE a.product_id = p.id AND a.status IN ('SCHEDULED','ACTIVE')) " +
-                "    OR EXISTS (SELECT 1 FROM orders o   WHERE o.product_id = p.id AND o.status IN ('PENDING_PAYMENT','PAID','SHIPPING')))");
-
-        // INV-10 Order COMPLETED ⇒ Product SOLD
-        INVARIANTS.put("INV-10",
-                "SELECT o.id FROM orders o JOIN products p ON p.id = o.product_id " +
-                "WHERE o.status = 'COMPLETED' AND p.status <> 'SOLD'");
-
-        // INV-11 Không còn Order PENDING_PAYMENT của user BANNED hoặc Product HIDDEN
-        INVARIANTS.put("INV-11",
-                "SELECT o.id FROM orders o " +
-                "JOIN users b ON b.id = o.buyer_id JOIN users s ON s.id = o.seller_id JOIN products p ON p.id = o.product_id " +
-                "WHERE o.status = 'PENDING_PAYMENT' AND (b.status = 'BANNED' OR s.status = 'BANNED' OR p.status = 'HIDDEN')");
-
-        // INV-12 Shipment: sự kiện cuối khớp trạng thái hiện tại
-        INVARIANTS.put("INV-12",
-                "SELECT s.id FROM shipments s " +
-                "WHERE s.status <> (SELECT e.status FROM shipment_events e WHERE e.shipment_id = s.id " +
-                "                   ORDER BY e.created_at DESC, e.id DESC LIMIT 1)");
-
-        // INV-13 Report đã xử lý có người xử lý và thời điểm
-        INVARIANTS.put("INV-13",
-                "SELECT id FROM reports WHERE status <> 'PENDING' AND (resolved_by IS NULL OR resolved_at IS NULL)");
-
-        // INV-14 Hạn thanh toán đúng closed_at + 48h (cho phép sai số 2 giây)
-        INVARIANTS.put("INV-14",
-                "SELECT o.id FROM orders o JOIN auctions a ON a.id = o.auction_id " +
-                "WHERE ABS(TIMESTAMPDIFF(SECOND, o.payment_deadline, a.closed_at + INTERVAL 48 HOUR)) > 2");
+                "SELECT a.id FROM auctions a " +
+                "LEFT JOIN orders o ON o.auction_id = a.id " +
+                "GROUP BY a.id, a.status " +
+                "HAVING (a.status = 'ENDED' AND COUNT(o.id) <> 1) " +
+                "    OR (a.status <> 'ENDED' AND COUNT(o.id) <> 0)");
     }
 
     @Override
-    public void afterEach(ExtensionContext context) throws Exception {
+    public void afterEach(ExtensionContext context) {
         ApplicationContext applicationContext = SpringExtension.getApplicationContext(context);
         JdbcTemplate jdbcTemplate = applicationContext.getBean(JdbcTemplate.class);
 

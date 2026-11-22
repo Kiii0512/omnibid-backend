@@ -1,253 +1,135 @@
-# OmniBid - Online Auction System (Backend)
+# OmniBid — Online Auction System (Backend v4)
 
-Hệ thống Backend cho nền tảng đấu giá trực tuyến **OmniBid**, được xây dựng theo mô hình kiến trúc phân tầng nguyên khối (**Monolith Layered Architecture**) trên nền tảng **Spring Boot 4.0.9** và **Java 17**.
-
----
-
-## 1. THÀNH VIÊN DỰ ÁN & PHÂN CÔNG NHIỆM VỤ (SCRUM)
-
-| Thành viên | MSSV | Vai trò Scrum | Mảng kỹ thuật chính phụ trách |
-| :--- | :---: | :--- | :--- |
-| **Nguyễn Huy Hoàng** | 0011968 | Product Owner + Scrum Master | **Backend lõi:** Auction, Bid, khóa dòng (Pessimistic Lock), WebSocket STOMP, AuctionScheduler |
-| **Nguyễn Hà Tuấn Anh** | 0001168 | Developer | **Frontend Next.js:** Toàn bộ giao diện Guest / Buyer / Seller / Admin (React + TypeScript + Tailwind CSS) |
-| **Nguyễn Công Đương** | 0008968 | Developer | **Backend sau đấu giá:** Order, Payment, Shipment, Report, Admin; Database schema & kiểm thử |
-
-* **Giảng viên hướng dẫn:** TS. Phạm Hữu Tùng
+Hệ thống Backend cho nền tảng đấu giá trực tuyến **OmniBid**, xây dựng theo kiến trúc phân tầng nguyên khối (**Monolith Layered Architecture**) trên **Spring Boot 4.0.9**, **Java 17**, **MySQL 8.0+**, **Flyway**, **Cloudinary** và **WebSocket STOMP**.
 
 ---
 
-## 2. NGUYÊN TẮC KIẾN TRÚC & PHÂN TẦNG (BẮT BUỘC TUÂN THỦ)
+## 1. Kiến trúc & Nguyên tắc cốt lõi (v4)
 
-Hệ thống tuân thủ nghiêm ngặt mô hình **Monolith Layered Architecture** (Controller – Service – Repository) kết hợp với các dịch vụ hạ tầng bổ trợ. Toàn bộ các Service là module nghiệp vụ nội bộ chạy trong cùng một ứng dụng Spring Boot, **không tách Microservices**:
-
-```text
-HTTP Request (REST) / WebSocket (STOMP)
-                    │
-                    ▼
-┌────────────────────────────────────────────────────────┐
-│             1. Controller & Security Layer             │
-│  - REST Controllers                                    │
-│  - Spring Security + JWT Authentication Filter         │
-│  - Bean Validation (@Valid, Request DTOs)              │
-│  - Phân quyền RBAC (ROLE_USER, ROLE_ADMIN)             │
-└───────────────────────────┬────────────────────────────┘
-                            │
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│             2. Business Service Layer                  │
-│  - Business Services & Lifecycle Supports              │
-│  - Concurrency Lock (Pessimistic Write Lock cho Bid)   │
-│  - Schedulers (AuctionScheduler & OrderScheduler)      │
-│  - WebSocket Publisher (STOMP Topic: /topic/auction/*) │
-└───────────────────────────┬────────────────────────────┘
-                            │
-                            ▼
-┌────────────────────────────────────────────────────────┐
-│             3. Data Access Layer (JPA)                 │
-│  - 14 Spring Data JPA Repositories                     │
-│  - 14 JPA Entities (Trùng khớp 14 bảng trong Database) │
-└───────────────────────────┬────────────────────────────┘
-                            │
-                            ▼
-           MySQL 8.0+ Database (Aiven Cloud Managed)
-```
-
-### 5 Nguyên tắc vàng khi viết code:
-
-1. **Phân tách tầng triệt để:** Controller **chỉ** gọi Service; Controller **tuyệt đối không** gọi trực tiếp Repository hoặc can thiệp Entity.
-2. **Không trả Entity ra ngoài Controller:** Toàn bộ dữ liệu trao đổi với Client bắt buộc phải thông qua DTO (`...Request` và `...Response`).
-3. **Phản hồi chuẩn hóa (Unified API Response):** Mọi endpoint API đều phải trả về bọc qua `ApiResponse<T>`:
-```json
-{
-  "success": true,
-  "errorCode": null,
-  "message": "Thông báo kết quả",
-  "data": { ... },
-  "timestamp": "2026-10-28T05:00:00"
-}
-```
-4. **Kiểm tra dữ liệu đầu vào (Validation):** Sử dụng Bean Validation (`@NotNull`, `@NotBlank`, `@Min`, `@DecimalMin`, `@Pattern`) và khai báo `@Valid` tại các Controller method.
-5. **Cập nhật trạng thái, không xóa vật lý (Soft Delete / Status change):**
-   * Khóa tài khoản: `users.status = BANNED`
-   * Ẩn/gỡ sản phẩm: `products.status = HIDDEN` hoặc `REMOVED`
-   * Lịch sử đặt giá (`bids`), hóa đơn (`orders`), vận đơn (`shipments`) được lưu trữ vĩnh viễn phục vụ kiểm toán và xử lý khiếu nại.
+- **Monolith 3 tầng:** `Controller → Service → Repository/Entity`. Controller chỉ gọi Service và không bao giờ trả Entity trực tiếp.
+- **10 bảng dữ liệu quản lý bởi Flyway (`src/main/resources/db/migration/`):**
+  1. `users` (có `token_version` vô hiệu hóa JWT khi đăng xuất/đổi mật khẩu, `avatar_public_id`)
+  2. `categories` (`icon` cho Lucide icons)
+  3. `products` (`item_condition`, trạng thái `AVAILABLE | IN_AUCTION | RESERVED | SOLD | HIDDEN`)
+  4. `product_images` (1–5 ảnh/sản phẩm lưu trên **Cloudinary**, `public_id` NOT NULL)
+  5. `auctions` (cột sinh `active_product_id` + UNIQUE đảm bảo BR-15: tối đa 1 phiên `SCHEDULED`/`ACTIVE` mỗi sản phẩm)
+  6. `bids` (bất biến, không có cột trạng thái — lịch sử đặt giá giữ nguyên kể cả khi người đặt bị khóa)
+  7. `orders` (tích hợp giao hàng đơn bước: `tracking_code`, `shipped_at`, `payment_deadline` +48h, `confirm_deadline` +7d)
+  8. `payments` (thanh toán mô phỏng đồng bộ, `Idempotency-Key` UUID, chỉ `SUCCESS`/`FAILED`, cột sinh `success_order_id` + UNIQUE đảm bảo tối đa 1 `SUCCESS`/đơn)
+  9. `notifications` (5 loại: `OUTBID`, `AUCTION_RESULT`, `AUCTION_CANCELLED`, `ORDER_UPDATE`, `REPORT_RESOLVED`; chỉ ghi sau `COMMIT`)
+  10. `reports` (báo cáo sản phẩm/người dùng/đơn hàng, xử lý bằng `RESOLVED`/`REJECTED` kèm `note`, tách biệt với hành động quản trị)
+- **Thời gian & Tiền tệ:**
+  - Lưu trữ nội bộ và DB hoàn toàn theo **UTC** (`Instant`, `TimeZone.setDefault(UTC)`, `hibernate.jdbc.time_zone=UTC`).
+  - JSON response trả thời gian kèm múi giờ **`+07:00`** (`Asia/Ho_Chi_Minh`); nhận đầu vào cả `Z` và `+07:00`.
+  - Tiền tệ dùng `DECIMAL(15,0)` / `BigDecimal` scale 0 (số nguyên VND, không `.00`).
+- **Định dạng phản hồi chuẩn hóa (`ApiResponse<T>`):**
+  - Thành công: `{ "success": true, "data": ... }`
+  - Lỗi: `{ "success": false, "error": { "code": "...", "message": "...", "details": ... } }` (24 mã lỗi chuẩn hóa trong `ErrorCode`).
+- **Đồng thời & An toàn dữ liệu:**
+  - Khóa dòng bi quan (`PESSIMISTIC_WRITE`, timeout 5s) theo thứ tự cố định **`auctions → orders → products`** (cùng bảng theo `id` tăng dần). Không khóa bảng `users`.
+  - Thông báo và sự kiện WebSocket (`/ws`, topic `/topic/auctions/{id}`, chỉ đọc) chỉ phát **sau `COMMIT`** (`AFTER_COMMIT`).
+  - Ảnh tải lên kiểm tra bằng **magic bytes** (JPEG/PNG/WEBP, ≤ 5 MB), upload Cloudinary ngoài transaction, có bù trừ xóa asset khi lỗi DB và xóa asset cũ sau `COMMIT`.
 
 ---
 
-## 3. CẤU TRÚC THƯ MỤC PACKAGE
+## 2. Cấu trúc thư mục
 
 ```text
 src/main/java/com/omnibid/
- ├── common/               # ApiResponse, AppException, GlobalExceptionHandler, PageResponse
- ├── config/               # SecurityConfig, WebSocketConfig, DateTimeConfig, AppProperties
- ├── controller/           # REST API Controllers
- ├── dto/                  # Request & Response DTOs theo từng module (auth, auction, bid, order...)
- ├── entity/               # 14 JPA Entities khớp 14 bảng cơ sở dữ liệu
- ├── enums/                # Danh sách Enums trạng thái dùng chung trong hệ thống
- ├── repository/           # 14 Spring Data JPA Repositories
- ├── scheduler/            # AuctionScheduler & OrderScheduler (Xử lý tác vụ định kỳ)
- ├── security/             # JwtTokenProvider, JwtAuthenticationFilter, CustomUserDetails, UserDetailsServiceImpl
- └── service/              # Service Interfaces, Implementations & Closer/Lifecycle components
+ ├── common/          # ApiResponse, ErrorCode, BusinessException, GlobalExceptionHandler, ImageValidator, PageResponse, SortWhitelist
+ ├── config/          # SecurityConfig, WebSocketConfig, DateTimeConfig, JacksonConfig, CloudinaryConfig, AppProperties
+ ├── controller/      # REST Controllers (và controller/admin/*) — đúng 54 endpoint /api/v1/**
+ ├── dto/             # Request & Response DTOs
+ ├── entity/          # 10 JPA Entities khớp Flyway V1
+ ├── enums/           # Enums trạng thái nghiệp vụ v4
+ ├── gateway/         # MockPaymentGateway & DefaultMockPaymentGateway
+ ├── listener/        # NotificationPushListener (AFTER_COMMIT)
+ ├── repository/      # 10 Spring Data JPA Repositories + Specifications
+ ├── scheduler/       # AuctionScheduler & OrderScheduler
+ ├── security/        # JwtTokenProvider (ver), JwtAuthenticationFilter, LoginAttemptLimiter (429), PublicEndpointMatcher
+ └── service/         # Business Services, AuctionCloser, OrderLifecycleSupport, CloudinaryImageStorageService
 ```
 
 ---
 
-## 4. QUY HOẠCH 14 ENTITY & CÁC MODULE CHÍNH
+## 3. Tài khoản Admin mặc định (Flyway V2)
 
-### 14 Bảng Database & Entity tương ứng:
+Khi Flyway chạy migration `V2__seed_data.sql` trên database mới, hệ thống tạo sẵn 1 tài khoản quản trị:
 
-1. `User` (`users`): Thông tin người dùng, mật khẩu băm BCrypt, vai trò (`USER`, `ADMIN`), trạng thái (`ACTIVE`, `BANNED`).
-2. `Category` (`categories`): Danh mục phân loại sản phẩm (tên, slug, icon).
-3. `Product` (`products`): Sản phẩm đăng bán, tình trạng (`condition`), trạng thái (`AVAILABLE`, `IN_AUCTION`, `RESERVED`, `SOLD`, `HIDDEN`, `REMOVED`).
-4. `ProductImage` (`product_images`): Ảnh sản phẩm (1 đến 5 ảnh, cờ `is_primary`).
-5. `Auction` (`auctions`): Phiên đấu giá, giá khởi điểm, bước giá, giá sàn, giá hiện tại, người giữ giá cao nhất, số lượt bid, thời gian chốt.
-6. `Bid` (`bids`): Lịch sử đặt giá, mức giá là duy nhất trong mỗi phiên, trạng thái (`LEADING`, `OUTBID`, `WON`, `NOT_WON`, `INVALIDATED`).
-7. `Watchlist` (`watchlists`): Danh sách phiên đấu giá được người dùng lưu theo dõi.
-8. `Order` (`orders`): Hóa đơn phiên kết thúc, hạn thanh toán 48h (`payment_deadline`), hạn tự động nhận hàng 7 ngày (`confirm_deadline`).
-9. `Payment` (`payments`): Các lần thanh toán mô phỏng (tối đa 1 `PENDING` và 1 `SUCCESS` cho mỗi đơn).
-10. `Shipment` (`shipments`): Vận đơn mô phỏng sau khi đơn hàng được thanh toán.
-11. `ShipmentEvent` (`shipment_events`): Lịch sử cập nhật trạng thái vận đơn (`CREATED` → `PICKED_UP` → `IN_TRANSIT` → `DELIVERED`).
-12. `Notification` (`notifications`): Thông báo hệ thống (`OUTBID`, `AUCTION_WON`, `PAYMENT_REMINDER`...).
-13. `Report` (`reports`): Khiếu nại đơn hàng và báo cáo vi phạm gửi Admin giải quyết.
-14. `AuditLog` (`audit_logs`): Nhật ký ghi vết các hành động quản trị hệ thống.
+| Email | Mật khẩu mặc định | Vai trò |
+| :--- | :---: | :---: |
+| `admin@omnibid.local` | `Admin@123456` | `ADMIN` |
+
+> [!WARNING]
+> **Bắt buộc đổi mật khẩu ngay** qua `PATCH /api/v1/users/me/password` sau lần đăng nhập đầu tiên trên môi trường thật hoặc chia sẻ.
 
 ---
 
-## 5. QUY TẮC NGHIỆP VỤ CỐT LÕI (CORE BUSINESS RULES)
+## 4. Hướng dẫn cài đặt & khởi chạy
 
-1. **Quy tắc Đặt giá (Bidding) & Xử lý đồng thời:**
-   * Phiên phải ở trạng thái `ACTIVE` và thời gian máy chủ còn hiệu lực (`now < end_time`).
-   * Người đặt giá phải có trạng thái tài khoản `ACTIVE`, không phải là chủ sở hữu sản phẩm/phiên, và không phải là người đang dẫn đầu (`LEADING`).
-   * Mức giá hợp lệ: `amount >= current_price + bid_increment` (hoặc `>= start_price` nếu phiên chưa có ai đặt).
-   * Bắt buộc xử lý đặt giá bên trong một Transaction có khóa dòng bi quan (`@Lock(LockModeType.PESSIMISTIC_WRITE)` qua `findByIdForUpdate`).
+### Yêu cầu
+- **Java 17** (OpenJDK 17)
+- **MySQL 8.0+** (charset `utf8mb4`, collation `utf8mb4_unicode_ci`)
+- **Docker Desktop** (chỉ cần khi chạy Integration Test `verify`)
 
-2. **Quy tắc Đóng phiên & Tạo đơn hàng (AuctionScheduler & AuctionCloser):**
-   * Mỗi phiên đóng/mở trong transaction riêng biệt (`REQUIRES_NEW`), độc lập lỗi giữa các phiên.
-   * Khi hết giờ: Chọn người thắng bằng Bid hợp lệ cao nhất của bidder `ACTIVE`. Nếu đạt giá sàn (`reserve_price`), phiên chuyển sang `ENDED`, Bid thắng chuyển `WON`, Sản phẩm chuyển `RESERVED`, và gọi `OrderService.createFromAuction` sinh đơn hàng `PENDING_PAYMENT`.
-   * Ngược lại (không có bid hoặc không đạt giá sàn), phiên chuyển `UNSOLD`, Bid cao nhất chuyển `NOT_WON`, Sản phẩm trả về `AVAILABLE` (nếu không `HIDDEN`/`REMOVED`).
-   * Hạn chốt thanh toán: `payment_deadline = closed_at + 48 giờ` (cấu hình qua `app.order.payment-deadline-hours`).
+### Biến môi trường cần thiết
 
-3. **Quy tắc Thanh toán & Giao vận mô phỏng:**
-   * Mỗi lần bấm thanh toán tạo 1 bản ghi `Payment` với `idempotency_key` chống thanh toán lặp.
-   * Khi thanh toán `SUCCESS`, đơn hàng chuyển sang `PAID` và tự động sinh 1 vận đơn `Shipment` ở trạng thái `CREATED`.
-   * Trạng thái vận đơn chỉ cập nhật đơn chiều tuần tự: `CREATED` → `PICKED_UP` → `IN_TRANSIT` → `DELIVERED`.
-   * Sau khi giao hàng thành công (`DELIVERED`), hệ thống tính `confirm_deadline = delivered_at + 7 ngày`. Nếu người mua xác nhận nhận hàng hoặc quá 7 ngày không có khiếu nại `PENDING`, đơn hàng chuyển `COMPLETED` và sản phẩm chuyển `SOLD`.
+Các cấu hình nhạy cảm được đọc từ biến môi trường (xem mẫu tại [application-example.properties](src/main/resources/application-example.properties)) hoặc đặt trong `src/main/resources/application-local.properties` (đã có trong `.gitignore`):
 
----
+| Biến môi trường | Mô tả |
+| :--- | :--- |
+| `DB_URL` | JDBC URL MySQL (ví dụ `jdbc:mysql://localhost:3306/omnibid_v4?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&connectionTimeZone=UTC`) |
+| `DB_USERNAME`, `DB_PASSWORD` | Tài khoản kết nối MySQL |
+| `JWT_SECRET` | Chuỗi bí mật ký HS256 (tối thiểu 32 ký tự / 256-bit) |
+| `CORS_ALLOWED_ORIGINS` | Nguồn Frontend được phép (mặc định `http://localhost:3000`) |
+| `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Thông tin tài khoản Cloudinary (nếu bỏ trống ứng dụng vẫn khởi động nhưng API upload ảnh sẽ trả `502 IMAGE_UPLOAD_FAILED`) |
 
-## 6. HƯỚNG DẪN MÔI TRƯỜNG & KHỞI CHẠY (LOCAL SETUP)
+### Khởi chạy ứng dụng
 
-1. **Yêu cầu môi trường:**
-   * **Java SDK:** OpenJDK 17.
-   * **Build Tool:** Maven Wrapper (`.\mvnw.cmd` trên Windows hoặc `./mvnw` trên Linux/macOS).
-   * **Cơ sở dữ liệu:** MySQL 8.0+ (InnoDB, UTF8mb4).
+- **Môi trường phát triển cục bộ (dùng `application-local.properties`):**
+  ```powershell
+  .\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=dev,local
+  ```
+- **Chế độ Demo (rút ngắn thời lượng phiên tối thiểu xuống 2 phút, scheduler 5s, bật `simulateResult` cho thanh toán mô phỏng):**
+  ```powershell
+  .\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=demo,local
+  ```
 
-2. **Cấu hình ứng dụng:**
-   Chép `src/main/resources/application-example.properties` thành `src/main/resources/application.properties` rồi điền giá trị thật:
-   * `spring.datasource.url`: URL kết nối MySQL.
-   * `spring.datasource.username` & `spring.datasource.password`: Tài khoản và mật khẩu MySQL.
-   * `jwt.secret`: Chuỗi bí mật JWT tối thiểu 256-bit.
-   * `app.cors.allowed-origins`: Danh sách nguồn Frontend được phép kết nối qua CORS (phân tách bằng dấu phẩy).
-
-3. **Lệnh biên dịch kiểm tra:**
-   ```powershell
-   .\mvnw.cmd test-compile
-   ```
-
-4. **Lệnh chạy kiểm thử:**
-   * **Unit tests (không cần Docker):**
-     ```powershell
-     .\mvnw.cmd test
-     ```
-   * **Toàn bộ kiểm thử tích hợp & xác thực (cần Docker):**
-     ```powershell
-     .\mvnw.cmd clean verify
-     ```
-   * **Chạy kiểm thử đồng thời (ConcurrencyIT) 20 lần:**
-     ```powershell
-     .\mvnw.cmd test -Dtest=ConcurrencyIT -Dconcurrency.repeats=20
-     ```
-
-5. **Lệnh khởi chạy ứng dụng:**
-   ```powershell
-   .\mvnw.cmd spring-boot:run
-   ```
-
-6. **Cổng kiểm thử API:** `http://localhost:8080`.
+Ứng dụng lắng nghe tại `http://localhost:8080` và WebSocket STOMP tại `ws://localhost:8080/ws`.
 
 ---
 
-## 7. DỮ LIỆU MẪU ĐỂ KIỂM THỬ API (SEED DEMO DATA)
+## 5. Danh sách 54 API Endpoint (v4)
 
-Toàn bộ dữ liệu mẫu được nạp tự động qua file script [db/seed_demo.sql](file:///d:/Code/omnibid-backend/db/seed_demo.sql). Thành viên dự án và kiểm thử viên có thể sử dụng trực tiếp các tài nguyên có sẵn dưới đây để gọi API mà không cần truy vấn trực tiếp vào Database.
+Toàn bộ đặc tả 54 endpoint REST `/api/v1/**`, tham số, mã HTTP, 24 mã lỗi, và cấu trúc WebSocket `/ws` + `/topic/auctions/{id}` được tài liệu hóa chi tiết tại:
+- [API_SPEC_v4.md](.agents/skills/omnibid-v4-sync/references/API_SPEC_v4.md)
+- [RESPONSE_DTO_v4.md](.agents/skills/omnibid-v4-sync/references/RESPONSE_DTO_v4.md)
+- [API_CHANGES_FOR_FRONTEND.md](docs/v4/API_CHANGES_FOR_FRONTEND.md) (bảng tổng hợp thay đổi từ bản cũ sang v4 cho Frontend)
 
-### 7.1. Danh sách tài khoản đăng nhập mẫu
-
-> [!NOTE]
-> Mật khẩu đăng nhập chung cho **tất cả** tài khoản demo là: **`Demo@123`** (đã được băm chuẩn BCrypt trong cơ sở dữ liệu).
-
-| ID | Vai trò / Mô tả | Họ và tên | Email đăng nhập | Mật khẩu | Trạng thái |
-| :---: | :--- | :--- | :--- | :---: | :---: |
-| **1** | **Quản trị viên hệ thống (Admin)** | Admin OmniBid | `admin@omnibid.com` | `Demo@123` | `ACTIVE` |
-| **2** | **Người bán mẫu (Seller 1)** | Nguyen Van Seller | `seller1@omnibid.com` | `Demo@123` | `ACTIVE` |
-| **3** | **Người mua 1 (Buyer 1 - Đã thắng phiên 4)** | Tran Thi Buyer 1 | `buyer1@omnibid.com` | `Demo@123` | `ACTIVE` |
-| **4** | **Người mua 2 (Buyer 2 - Đã tham gia đặt giá)** | Le Van Buyer 2 | `buyer2@omnibid.com` | `Demo@123` | `ACTIVE` |
-| **5** | **Người mua 3 (Buyer 3 - Đang dẫn đầu phiên 3)** | Pham Van Buyer 3 | `buyer3@omnibid.com` | `Demo@123` | `ACTIVE` |
-
----
-
-### 7.2. Danh mục sản phẩm (Categories)
-
-| ID | Tên danh mục | Slug | Mục đích / Sản phẩm mẫu liên kết |
-| :---: | :--- | :--- | :--- |
-| **1** | Đồng hồ & Trang sức | `dong-ho-trang-suc` | Đồng hồ Rolex Submariner (SP 1), Omega Moonwatch (SP 4) |
-| **2** | Đồ điện tử & Công nghệ | `dien-tu-cong-nghe` | iPhone 15 Pro Max (SP 2), MacBook Pro M3 (SP 3), PS5 Slim (SP 7) |
-| **3** | Đồ cổ & Sưu tầm | `do-co-suu-tam` | Bình gốm thời Chu (SP 5), Tiền xu Đông Dương (SP 6), Tranh cổ (SP 8) |
+Tóm tắt nhóm endpoint:
+- **Xác thực (`/api/v1/auth`):** 3 endpoint (`register`, `login`, `logout`)
+- **Hồ sơ cá nhân (`/api/v1/users/me`):** 4 endpoint (xem, sửa, đổi mật khẩu, đổi avatar)
+- **Danh mục công khai (`/api/v1/categories`):** 1 endpoint
+- **Sản phẩm người bán (`/api/v1/products`):** 7 endpoint (tạo multipart 1–5 ảnh, danh sách của tôi, chi tiết, sửa, xóa, thêm ảnh, xóa ảnh)
+- **Phiên đấu giá & Đặt giá (`/api/v1/auctions`, `/api/v1/bids`):** 10 endpoint (tìm kiếm, chi tiết, tạo, sửa, hủy, của tôi, đặt giá `POST /auctions/{id}/bids`, lịch sử phiên, lịch sử của tôi)
+- **Đơn hàng & Thanh toán (`/api/v1/orders`):** 7 endpoint (danh sách, chi tiết, cập nhật giao hàng, thanh toán đồng bộ, lịch sử thanh toán, gửi hàng `/ship`, xác nhận nhận hàng `/confirm-receipt`)
+- **Thông báo & Báo cáo (`/api/v1/notifications`, `/api/v1/reports`):** 3 endpoint
+- **Quản trị (`/api/v1/admin/**`):** 19 endpoint (người dùng, sản phẩm, phiên, đơn hàng, báo cáo, danh mục, thống kê tích lũy)
 
 ---
 
-### 7.3. Sản phẩm mẫu (Products)
+## 6. Lệnh kiểm thử & rà soát
 
-> [!TIP]
-> Tất cả 8 sản phẩm mẫu thuộc quyền sở hữu của **Seller 1 (ID = 2)**.
+```powershell
+# Biên dịch mã nguồn và kiểm thử
+.\mvnw.cmd test-compile
 
-| ID | Tên sản phẩm | Danh mục | Tình trạng | Trạng thái | Khuyến nghị sử dụng để kiểm thử API |
-| :---: | :--- | :---: | :---: | :---: | :--- |
-| **1** | Đồng hồ Rolex Submariner Date | 1 | `LIKE_NEW` | `IN_AUCTION` | Gắn với phiên đấu giá `SCHEDULED` (ID 1). |
-| **2** | iPhone 15 Pro Max 256GB | 2 | `NEW` | `IN_AUCTION` | Gắn với phiên đấu giá `ACTIVE` chưa có lượt bid (ID 2). |
-| **3** | MacBook Pro 16 inch M3 Max | 2 | `LIKE_NEW` | `IN_AUCTION` | Gắn với phiên đấu giá `ACTIVE` đã có 3 lượt bid (ID 3). |
-| **4** | Đồng hồ Omega Speedmaster Moonwatch | 1 | `GOOD` | `RESERVED` | Đã chốt đấu giá thành công (Phiên 4), sinh đơn hàng `Order ID = 1`. |
-| **5** | Bình gốm thời Chu thế kỷ 18 | 3 | `GOOD` | `AVAILABLE` | **Sẵn sàng test:** Thử gọi `PATCH /api/v1/products/5` sửa thông tin, upload ảnh `POST /api/v1/products/5/images`, hoặc tạo phiên đấu giá mới. |
-| **6** | Tiền xu cổ Đông Dương 1885 | 3 | `GOOD` | `AVAILABLE` | **Sẵn sàng test:** Thử tạo phiên đấu giá mới hoặc gọi `DELETE /api/v1/products/6` để xóa sản phẩm. |
-| **7** | Sony PlayStation 5 Slim | 2 | `GOOD` | `SOLD` | Sản phẩm đã bán thành công và hoàn tất giao dịch. |
-| **8** | Tranh sơn dầu nghệ thuật cổ | 3 | `GOOD` | `HIDDEN` | **Sẵn sàng test Admin:** Dùng tài khoản Admin gọi `PATCH /api/v1/admin/products/8/status` để bỏ ẩn (`AVAILABLE`). |
+# Chạy toàn bộ Unit Test (không cần Docker)
+.\mvnw.cmd test
 
----
+# Chạy toàn bộ Unit Test + Integration Test với Testcontainers MySQL 8.0 (cần Docker Desktop)
+.\mvnw.cmd verify
 
-### 7.4. Phiên đấu giá mẫu (Auctions)
-
-| ID | Sản phẩm liên kết | Trạng thái | Giá hiện tại | Giá sàn (Reserve) | Người dẫn đầu | Số lượt bid | Khuyến nghị sử dụng để kiểm thử |
-| :---: | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
-| **1** | Rolex Submariner (SP 1) | `SCHEDULED` | 50.000.000 đ | Không có | *Chưa có* | 0 | Kiểm thử phiên sắp diễn ra (hệ thống chặn không cho đặt giá trước giờ bắt đầu). |
-| **2** | iPhone 15 Pro Max (SP 2) | `ACTIVE` | 25.000.000 đ | Không có | *Chưa có* | 0 | Kiểm thử đặt lượt giá đầu tiên (`POST /api/v1/bids` với giá tối thiểu 25.000.000 đ). |
-| **3** | MacBook Pro M3 (SP 3) | `ACTIVE` | 63.000.000 đ | Không có | Buyer 3 (ID 5) | 3 | Kiểm thử đặt giá cạnh tranh (bước giá 1.000.000 đ, giá tối thiểu tiếp theo 64.000.000 đ) và bắn tin WebSocket thời gian thực `/topic/auction/3`. |
-| **4** | Omega Moonwatch (SP 4) | `ENDED` | 43.000.000 đ | 42.000.000 đ | Buyer 1 (ID 3) | 2 | Phiên đã kết thúc thành công (đạt giá sàn), đã sinh ra hóa đơn `Order ID = 1`. |
-| **5** | Bình gốm thời Chu (SP 5) | `UNSOLD` | 12.000.000 đ | 15.000.000 đ | Buyer 2 (ID 4) | 1 | Phiên kết thúc không thành công vì bid cao nhất (12tr) chưa đạt giá sàn (15tr). |
-| **6** | Tiền xu Đông Dương (SP 6) | `CANCELLED` | 2.000.000 đ | Không có | *Chưa có* | 0 | Phiên bị hủy bởi người bán khi chưa có ai đặt giá. |
-
----
-
-### 7.5. Đơn hàng & Danh sách theo dõi mẫu (Orders & Watchlists)
-
-* **Hóa đơn mua hàng (Order ID = 1):**
-  - **Phiên đấu giá:** Phiên ID 4 (Omega Moonwatch).
-  - **Người bán:** `seller1@omnibid.com` (ID = 2) | **Người mua trúng đấu giá:** `buyer1@omnibid.com` (ID = 3).
-  - **Số tiền thanh toán:** `43.000.000 đ`.
-  - **Trạng thái:** `PENDING_PAYMENT` (Chờ người mua thanh toán).
-  - **Khuyến nghị test:** Đăng nhập dưới tài khoản `buyer1@omnibid.com`, gọi API tạo giao dịch thanh toán mô phỏng `POST /api/v1/payments` để chuyển đơn hàng sang trạng thái `PAID` và sinh vận đơn `Shipment`.
-
-* **Danh sách theo dõi (Watchlists):**
-  - `buyer1@omnibid.com` (ID = 3) đang theo dõi Phiên 1 (Rolex Submariner).
-  - `buyer2@omnibid.com` (ID = 4) đang theo dõi Phiên 2 (iPhone 15 Pro Max).
-  - `buyer3@omnibid.com` (ID = 5) đang theo dõi Phiên 3 (MacBook Pro M3 Max).
-
+# Rà soát tuân thủ chuẩn v4 (10 bảng, 54 endpoint, 24 mã lỗi, không từ khóa cũ)
+powershell -ExecutionPolicy Bypass -File .agents\skills\omnibid-v4-sync\scripts\verify-v4.ps1
+```

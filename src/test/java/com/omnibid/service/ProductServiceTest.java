@@ -1,8 +1,14 @@
 package com.omnibid.service;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.AfterCommitExecutor;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
+import com.omnibid.common.ImageValidator;
+import com.omnibid.dto.product.ProductCreateRequest;
 import com.omnibid.dto.product.ProductImageResponse;
-import com.omnibid.dto.storage.StorageUploadResult;
+import com.omnibid.dto.product.ProductResponse;
+import com.omnibid.dto.product.ProductUpdateRequest;
+import com.omnibid.entity.Category;
 import com.omnibid.entity.Product;
 import com.omnibid.entity.ProductImage;
 import com.omnibid.enums.ProductCondition;
@@ -12,46 +18,66 @@ import com.omnibid.repository.CategoryRepository;
 import com.omnibid.repository.ProductImageRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.service.impl.ProductServiceImpl;
+import com.omnibid.support.FakeImageStorageService;
+import com.omnibid.test.DirectTransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.http.HttpStatus;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.mock.web.MockMultipartFile;
+import org.springframework.web.multipart.MultipartFile;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
 class ProductServiceTest {
 
+    private static final byte[] VALID_PNG = new byte[]{
+            (byte) 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D
+    };
+    private static final byte[] FAKE_PDF = "%PDF-1.7\n1 0 obj".getBytes();
+
     @Mock
     private ProductRepository productRepository;
+    @Mock
+    private ProductImageRepository productImageRepository;
     @Mock
     private CategoryRepository categoryRepository;
     @Mock
     private AuctionRepository auctionRepository;
-    @Mock
-    private ProductImageRepository productImageRepository;
-    @Mock
-    private StorageService storageService;
 
-    @InjectMocks
+    private FakeImageStorageService fakeStorage;
     private ProductServiceImpl productService;
-
     private Product product;
 
     @BeforeEach
     void setUp() {
+        fakeStorage = new FakeImageStorageService();
+        ImageValidator imageValidator = new ImageValidator();
+        AfterCommitExecutor afterCommitExecutor = new AfterCommitExecutor();
+        DirectTransactionTemplate txTemplate = new DirectTransactionTemplate();
+
+        productService = new ProductServiceImpl(
+                productRepository,
+                productImageRepository,
+                categoryRepository,
+                auctionRepository,
+                imageValidator,
+                fakeStorage,
+                afterCommitExecutor,
+                txTemplate
+        );
+
         product = Product.builder()
                 .id(9L)
                 .sellerId(2L)
@@ -60,120 +86,153 @@ class ProductServiceTest {
                 .description("Bàn phím custom")
                 .condition(ProductCondition.LIKE_NEW)
                 .status(ProductStatus.AVAILABLE)
-                .createdAt(LocalDateTime.now())
+                .createdAt(Instant.now())
                 .build();
     }
 
     @Test
-    @DisplayName("uploadProductImage — first image becomes primary")
-    void uploadProductImage_FirstImage_BecomesPrimary() {
-        when(productRepository.findById(9L)).thenReturn(Optional.of(product));
-        when(productImageRepository.countByProductId(9L)).thenReturn(0L);
+    @DisplayName("createProduct: tệp .png chứa PDF -> 400 INVALID_IMAGE, không gọi storage")
+    void createProduct_PdfDisguisedAsPng_ThrowsInvalidImage() {
+        ProductCreateRequest req = new ProductCreateRequest(1L, "Laptop", "Mô tả", ProductCondition.NEW);
+        MockMultipartFile pdfAsPng = new MockMultipartFile("files", "fake.png", "image/png", FAKE_PDF);
 
-        StorageUploadResult uploadResult = new StorageUploadResult("/uploads/products/9/uuid-1.jpg", "products/9/uuid-1.jpg");
-        when(storageService.upload(any(), eq("products/9"))).thenReturn(uploadResult);
+        assertThatThrownBy(() -> productService.createProduct(2L, req, List.of(pdfAsPng)))
+                .isInstanceOf(BusinessException.class)
+                .matches(e -> ((BusinessException) e).getCode() == ErrorCode.INVALID_IMAGE);
 
-        ProductImage savedImage = ProductImage.builder()
-                .id(101L)
-                .productId(9L)
-                .imageUrl(uploadResult.url())
-                .publicId(uploadResult.publicId())
-                .isPrimary(true)
-                .createdAt(LocalDateTime.now())
-                .build();
-        when(productImageRepository.save(any(ProductImage.class))).thenReturn(savedImage);
-
-        MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", "image content".getBytes());
-        ProductImageResponse response = productService.uploadProductImage(2L, 9L, file);
-
-        assertThat(response.id()).isEqualTo(101L);
-        assertThat(response.imageUrl()).isEqualTo("/uploads/products/9/uuid-1.jpg");
-        assertThat(response.isPrimary()).isTrue();
-        verify(productImageRepository).save(argThat(img -> Boolean.TRUE.equals(img.getIsPrimary())));
+        assertThat(fakeStorage.uploadCount()).isZero();
     }
 
     @Test
-    @DisplayName("uploadProductImage — subsequent image is not primary")
-    void uploadProductImage_SubsequentImage_NotPrimary() {
-        when(productRepository.findById(9L)).thenReturn(Optional.of(product));
-        when(productImageRepository.countByProductId(9L)).thenReturn(1L);
+    @DisplayName("createProduct: 6 ảnh -> 400 INVALID_IMAGE, không gọi storage")
+    void createProduct_SixImages_ThrowsInvalidImage() {
+        ProductCreateRequest req = new ProductCreateRequest(1L, "Laptop", "Mô tả", ProductCondition.NEW);
+        List<MultipartFile> sixFiles = List.of(
+                pngFile("1.png"), pngFile("2.png"), pngFile("3.png"),
+                pngFile("4.png"), pngFile("5.png"), pngFile("6.png")
+        );
 
-        StorageUploadResult uploadResult = new StorageUploadResult("/uploads/products/9/uuid-2.jpg", "products/9/uuid-2.jpg");
-        when(storageService.upload(any(), eq("products/9"))).thenReturn(uploadResult);
+        assertThatThrownBy(() -> productService.createProduct(2L, req, sixFiles))
+                .isInstanceOf(BusinessException.class)
+                .matches(e -> ((BusinessException) e).getCode() == ErrorCode.INVALID_IMAGE);
 
-        ProductImage savedImage = ProductImage.builder()
-                .id(102L)
-                .productId(9L)
-                .imageUrl(uploadResult.url())
-                .publicId(uploadResult.publicId())
-                .isPrimary(false)
-                .createdAt(LocalDateTime.now())
-                .build();
-        when(productImageRepository.save(any(ProductImage.class))).thenReturn(savedImage);
-
-        MockMultipartFile file = new MockMultipartFile("file", "test2.jpg", "image/jpeg", "image content".getBytes());
-        ProductImageResponse response = productService.uploadProductImage(2L, 9L, file);
-
-        assertThat(response.id()).isEqualTo(102L);
-        assertThat(response.isPrimary()).isFalse();
-        verify(productImageRepository).save(argThat(img -> Boolean.FALSE.equals(img.getIsPrimary())));
+        assertThat(fakeStorage.uploadCount()).isZero();
     }
 
     @Test
-    @DisplayName("uploadProductImage — throws MAX_IMAGES_REACHED when count >= 5")
-    void uploadProductImage_MaxImagesReached_ThrowsBadRequest() {
+    @DisplayName("createProduct: lỗi DB sau upload -> bù trừ xóa toàn bộ asset đã upload")
+    void createProduct_DbFailureAfterUpload_CompensatesByDeletingUploadedAssets() {
+        ProductCreateRequest req = new ProductCreateRequest(1L, "Laptop", "Mô tả", ProductCondition.NEW);
+        Category category = Category.builder().id(1L).name("Electronics").slug("electronics").build();
+
+        when(categoryRepository.existsById(1L)).thenReturn(true);
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(category));
+        when(productRepository.save(any(Product.class))).thenThrow(new DataIntegrityViolationException("DB fail"));
+
+        assertThatThrownBy(() -> productService.createProduct(2L, req, List.of(pngFile("1.png"), pngFile("2.png"))))
+                .isInstanceOf(DataIntegrityViolationException.class);
+
+        assertThat(fakeStorage.uploadCount()).isEqualTo(2);
+        assertThat(fakeStorage.deleteCount()).isEqualTo(2);
+        assertThat(fakeStorage.deletedPublicIds()).containsExactlyInAnyOrderElementsOf(fakeStorage.uploadedPublicIds());
+    }
+
+    @Test
+    @DisplayName("createProduct: thành công với 2 ảnh -> ảnh đầu là isPrimary=true")
+    void createProduct_Success_FirstImageIsPrimary() {
+        ProductCreateRequest req = new ProductCreateRequest(1L, "Laptop", "Mô tả", ProductCondition.NEW);
+        Category category = Category.builder().id(1L).name("Electronics").slug("electronics").build();
+
+        when(categoryRepository.existsById(1L)).thenReturn(true);
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(category));
+        when(productRepository.save(any(Product.class))).thenAnswer(inv -> {
+            Product p = inv.getArgument(0);
+            p.setId(50L);
+            return p;
+        });
+        when(productImageRepository.save(any(ProductImage.class))).thenAnswer(inv -> {
+            ProductImage img = inv.getArgument(0);
+            img.setId(Boolean.TRUE.equals(img.getIsPrimary()) ? 101L : 102L);
+            return img;
+        });
+
+        ProductResponse response = productService.createProduct(2L, req, List.of(pngFile("1.png"), pngFile("2.png")));
+
+        assertThat(response.id()).isEqualTo(50L);
+        assertThat(response.images()).hasSize(2);
+        assertThat(response.images().get(0).isPrimary()).isTrue();
+        assertThat(response.images().get(1).isPrimary()).isFalse();
+        assertThat(fakeStorage.uploadCount()).isEqualTo(2);
+        assertThat(fakeStorage.deleteCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("updateProduct: sản phẩm đang IN_AUCTION -> 409 PRODUCT_NOT_EDITABLE")
+    void updateProduct_InAuction_ThrowsProductNotEditable() {
+        product.setStatus(ProductStatus.IN_AUCTION);
+        when(productRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(product));
+
+        ProductUpdateRequest req = new ProductUpdateRequest(1L, "Tên mới", "Mô tả mới", ProductCondition.NEW);
+
+        assertThatThrownBy(() -> productService.updateProduct(2L, 9L, req))
+                .isInstanceOf(BusinessException.class)
+                .matches(e -> ((BusinessException) e).getCode() == ErrorCode.PRODUCT_NOT_EDITABLE);
+    }
+
+    @Test
+    @DisplayName("addProductImages: vượt quá 5 ảnh -> 400 INVALID_IMAGE, không upload")
+    void addProductImages_ExceedsMax_ThrowsInvalidImage() {
         when(productRepository.findById(9L)).thenReturn(Optional.of(product));
         when(productImageRepository.countByProductId(9L)).thenReturn(5L);
 
-        MockMultipartFile file = new MockMultipartFile("file", "test5.jpg", "image/jpeg", "image content".getBytes());
-        assertThatThrownBy(() -> productService.uploadProductImage(2L, 9L, file))
-                .isInstanceOf(AppException.class)
-                .satisfies(e -> {
-                    AppException ex = (AppException) e;
-                    assertThat(ex.getCode()).isEqualTo("MAX_IMAGES_REACHED");
-                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                });
+        assertThatThrownBy(() -> productService.addProductImages(2L, 9L, List.of(pngFile("6.png"))))
+                .isInstanceOf(BusinessException.class)
+                .matches(e -> ((BusinessException) e).getCode() == ErrorCode.INVALID_IMAGE);
+
+        assertThat(fakeStorage.uploadCount()).isZero();
     }
 
     @Test
-    @DisplayName("uploadProductImage — throws FORBIDDEN when user does not own product")
-    void uploadProductImage_NotOwner_ThrowsForbidden() {
+    @DisplayName("addProductImages: người khác không phải chủ sở hữu -> 403 FORBIDDEN")
+    void addProductImages_NotOwner_ThrowsForbidden() {
         when(productRepository.findById(9L)).thenReturn(Optional.of(product));
 
-        MockMultipartFile file = new MockMultipartFile("file", "test.jpg", "image/jpeg", "image content".getBytes());
-        assertThatThrownBy(() -> productService.uploadProductImage(999L, 9L, file))
-                .isInstanceOf(AppException.class)
-                .satisfies(e -> {
-                    AppException ex = (AppException) e;
-                    assertThat(ex.getCode()).isEqualTo("FORBIDDEN");
-                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.FORBIDDEN);
-                });
+        assertThatThrownBy(() -> productService.addProductImages(999L, 9L, List.of(pngFile("1.png"))))
+                .isInstanceOf(BusinessException.class)
+                .matches(e -> ((BusinessException) e).getCode() == ErrorCode.FORBIDDEN);
+
+        assertThat(fakeStorage.uploadCount()).isZero();
     }
 
     @Test
-    @DisplayName("uploadProductImage — throws FILE_EMPTY when file is empty")
-    void uploadProductImage_EmptyFile_ThrowsBadRequest() {
-        MockMultipartFile file = new MockMultipartFile("file", "empty.jpg", "image/jpeg", new byte[0]);
-        assertThatThrownBy(() -> productService.uploadProductImage(2L, 9L, file))
-                .isInstanceOf(AppException.class)
-                .satisfies(e -> {
-                    AppException ex = (AppException) e;
-                    assertThat(ex.getCode()).isEqualTo("FILE_EMPTY");
-                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                });
+    @DisplayName("addProductImages: thêm ảnh thứ 2 thành công -> isPrimary=false")
+    void addProductImages_SubsequentImage_NotPrimary() {
+        Category category = Category.builder().id(1L).name("Electronics").slug("electronics").build();
+        ProductImage existing = ProductImage.builder()
+                .id(201L).productId(9L).imageUrl("https://cdn/1.png").publicId("omnibid/1").isPrimary(true).build();
+        when(productRepository.findById(9L)).thenReturn(Optional.of(product));
+        when(productRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(product));
+        when(productImageRepository.countByProductId(9L)).thenReturn(1L);
+        when(productImageRepository.save(any(ProductImage.class))).thenAnswer(inv -> {
+            ProductImage img = inv.getArgument(0);
+            img.setId(202L);
+            return img;
+        });
+        when(productImageRepository.findByProductIdOrderByIdAsc(9L))
+                .thenReturn(List.of(existing, ProductImage.builder()
+                        .id(202L).productId(9L).imageUrl("https://cdn/2.png").publicId("omnibid/2").isPrimary(false).build()));
+        when(categoryRepository.findById(1L)).thenReturn(Optional.of(category));
+        when(auctionRepository.findFirstByProductIdAndStatusIn(eq(9L), any())).thenReturn(Optional.empty());
+        when(auctionRepository.existsByProductId(9L)).thenReturn(false);
+
+        ProductResponse updated = productService.addProductImages(2L, 9L, List.of(pngFile("2.png")));
+
+        assertThat(updated.images()).hasSize(2);
+        assertThat(updated.images().get(1).id()).isEqualTo(202L);
+        assertThat(updated.images().get(1).isPrimary()).isFalse();
     }
 
-    @Test
-    @DisplayName("uploadProductImage — throws INVALID_FILE_TYPE when file is not an image")
-    void uploadProductImage_InvalidFileType_ThrowsBadRequest() {
-        MockMultipartFile file = new MockMultipartFile("file", "script.sh", "application/x-sh", "echo hello".getBytes());
-        assertThatThrownBy(() -> productService.uploadProductImage(2L, 9L, file))
-                .isInstanceOf(AppException.class)
-                .satisfies(e -> {
-                    AppException ex = (AppException) e;
-                    assertThat(ex.getCode()).isEqualTo("INVALID_FILE_TYPE");
-                    assertThat(ex.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
-                });
+    private MockMultipartFile pngFile(String name) {
+        return new MockMultipartFile("files", name, "image/png", VALID_PNG);
     }
 }
-

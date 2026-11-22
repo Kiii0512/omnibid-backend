@@ -148,7 +148,7 @@ class ReportServiceTest {
 
         assertThatThrownBy(() -> reportService.createReport(otherUser, request))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.FORBIDDEN);
     }
 
@@ -157,24 +157,24 @@ class ReportServiceTest {
     void createReport_ValidationErrors() {
         assertThatThrownBy(() -> reportService.createReport(otherUser, new ReportRequest(null, null, null, "Lý do")))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.VALIDATION_ERROR);
 
         assertThatThrownBy(() -> reportService.createReport(otherUser, new ReportRequest(null, OTHER_ID, null, "Lý do")))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.VALIDATION_ERROR);
 
         when(productRepository.findById(PRODUCT_ID)).thenReturn(Optional.of(product10));
         assertThatThrownBy(() -> reportService.createReport(sellerUser, new ReportRequest(PRODUCT_ID, null, null, "Lý do")))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.VALIDATION_ERROR);
 
         when(productRepository.findById(999L)).thenReturn(Optional.empty());
         assertThatThrownBy(() -> reportService.createReport(otherUser, new ReportRequest(999L, null, null, "Lý do")))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.NOT_FOUND);
     }
 
@@ -263,7 +263,7 @@ class ReportServiceTest {
         assertThatThrownBy(() -> reportService.resolveReport(
                 adminUser, REPORT_ID, new ReportResolveRequest(ReportDecision.REJECTED, "Bác bỏ")))
                 .isInstanceOf(BusinessException.class)
-                .extracting(e -> ((BusinessException) e).getErrorCode())
+                .extracting(e -> ((BusinessException) e).getCode())
                 .isEqualTo(ErrorCode.INVALID_STATUS_TRANSITION);
 
         verifyNoInteractions(notificationService);
