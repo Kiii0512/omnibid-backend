@@ -3,7 +3,7 @@ package com.omnibid.dto.product;
 import com.omnibid.enums.ProductCondition;
 import com.omnibid.enums.ProductStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 public record ProductResponse(
@@ -17,7 +17,7 @@ public record ProductResponse(
         ProductCondition condition,
         ProductStatus status,
         List<ProductImageResponse> images,
-        LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        Instant createdAt,
+        Instant updatedAt
 ) {}
 

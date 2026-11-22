@@ -3,16 +3,18 @@ package com.omnibid.repository;
 import com.omnibid.entity.Order;
 import com.omnibid.enums.OrderStatus;
 import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -21,8 +23,14 @@ import java.util.Optional;
 public interface OrderRepository extends JpaRepository<Order, Long> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("SELECT o FROM Order o WHERE o.id = :id")
     Optional<Order> findByIdForUpdate(@Param("id") Long id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
+    @Query("SELECT o FROM Order o WHERE o.id IN :ids ORDER BY o.id ASC")
+    List<Order> findAllByIdInForUpdateOrderByIdAsc(@Param("ids") List<Long> ids);
 
     Optional<Order> findByAuctionId(Long auctionId);
 
@@ -47,15 +55,15 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("SELECT o FROM Order o WHERE (:status IS NULL OR o.status = :status)")
     Page<Order> findAllByStatus(@Param("status") OrderStatus status, Pageable pageable);
 
-    List<Order> findByStatusAndPaymentDeadlineLessThanEqual(OrderStatus status, LocalDateTime now);
+    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.paymentDeadline < :now")
+    List<Long> findIdsByStatusAndPaymentDeadlineLessThan(@Param("status") OrderStatus status, @Param("now") Instant now);
 
-    @Query("SELECT o FROM Order o WHERE o.status = 'PENDING_PAYMENT' AND o.reminder24hSentAt IS NULL AND o.paymentDeadline <= :threshold24h AND o.paymentDeadline > :now")
-    List<Order> findOrdersFor24hReminder(@Param("threshold24h") LocalDateTime threshold24h, @Param("now") LocalDateTime now);
+    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.confirmDeadline < :now")
+    List<Long> findIdsByStatusAndConfirmDeadlineLessThan(@Param("status") OrderStatus status, @Param("now") Instant now);
 
-    @Query("SELECT o FROM Order o WHERE o.status = 'PENDING_PAYMENT' AND o.reminder2hSentAt IS NULL AND o.paymentDeadline <= :threshold2h AND o.paymentDeadline > :now")
-    List<Order> findOrdersFor2hReminder(@Param("threshold2h") LocalDateTime threshold2h, @Param("now") LocalDateTime now);
+    List<Order> findByStatusAndPaymentDeadlineLessThanEqual(OrderStatus status, Instant now);
 
-    List<Order> findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus status, LocalDateTime now);
+    List<Order> findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus status, Instant now);
 
     long countByStatus(OrderStatus status);
 
@@ -66,7 +74,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     List<Object[]> countBySellerIdGroupByStatus(@Param("sellerId") Long sellerId);
 
     @Query("SELECT COALESCE(SUM(o.finalPrice), 0) FROM Order o WHERE o.status = com.omnibid.enums.OrderStatus.COMPLETED AND o.completedAt >= :from AND o.completedAt <= :to")
-    BigDecimal sumCompletedRevenue(@Param("from") LocalDateTime from, @Param("to") LocalDateTime to);
+    BigDecimal sumCompletedRevenue(@Param("from") Instant from, @Param("to") Instant to);
 
     @Query("""
         SELECT o FROM Order o
@@ -79,7 +87,7 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     Page<Order> findAdminOrders(@Param("status") OrderStatus status,
                                 @Param("buyerId") Long buyerId,
                                 @Param("sellerId") Long sellerId,
-                                @Param("from") LocalDateTime from,
-                                @Param("to") LocalDateTime to,
+                                @Param("from") Instant from,
+                                @Param("to") Instant to,
                                 Pageable pageable);
 }

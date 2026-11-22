@@ -2,13 +2,14 @@ package com.omnibid.repository;
 
 import com.omnibid.entity.Report;
 import com.omnibid.enums.ReportStatus;
-import com.omnibid.enums.ReportType;
 import jakarta.persistence.LockModeType;
+import jakarta.persistence.QueryHint;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.jpa.repository.QueryHints;
 import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
@@ -19,6 +20,7 @@ import java.util.Optional;
 public interface ReportRepository extends JpaRepository<Report, Long> {
 
     @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "5000"))
     @Query("SELECT r FROM Report r WHERE r.id = :id")
     Optional<Report> findByIdForUpdate(@Param("id") Long id);
 
@@ -26,18 +28,27 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     List<Report> findByStatus(ReportStatus status);
 
-    List<Report> findByOrderId(Long orderId);
+    List<Report> findByReportedOrderId(Long reportedOrderId);
 
-    boolean existsByOrderIdAndReportTypeAndStatus(Long orderId, ReportType reportType, ReportStatus status);
-
-    boolean existsByReporterIdAndOrderIdAndStatus(Long reporterId, Long orderId, ReportStatus status);
+    boolean existsByReporterIdAndReportedOrderIdAndStatus(Long reporterId, Long reportedOrderId, ReportStatus status);
 
     boolean existsByReporterIdAndReportedUserIdAndStatus(Long reporterId, Long reportedUserId, ReportStatus status);
 
     boolean existsByReporterIdAndReportedProductIdAndStatus(Long reporterId, Long reportedProductId, ReportStatus status);
 
-    @Query("SELECT r FROM Report r WHERE (:status IS NULL OR r.status = :status) AND (:reportType IS NULL OR r.reportType = :reportType)")
-    Page<Report> findAdminReports(@Param("status") ReportStatus status, @Param("reportType") ReportType reportType, Pageable pageable);
+    @Query("""
+        SELECT r FROM Report r
+        WHERE (:status IS NULL OR r.status = :status)
+          AND (
+              :targetType IS NULL
+              OR (:targetType = 'PRODUCT' AND r.reportedProductId IS NOT NULL)
+              OR (:targetType = 'USER' AND r.reportedUserId IS NOT NULL)
+              OR (:targetType = 'ORDER' AND r.reportedOrderId IS NOT NULL)
+          )
+    """)
+    Page<Report> findAdminReports(@Param("status") ReportStatus status,
+                                  @Param("targetType") String targetType,
+                                  Pageable pageable);
 
     long countByStatus(ReportStatus status);
 }

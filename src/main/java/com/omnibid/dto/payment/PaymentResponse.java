@@ -19,5 +19,4 @@ public class PaymentResponse {
     private PaymentStatus status;
     private OrderStatus orderStatus;
     private String failureReason;
-    private ShipmentSummaryDto shipment;
 }

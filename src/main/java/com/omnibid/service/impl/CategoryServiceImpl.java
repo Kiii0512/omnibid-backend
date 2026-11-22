@@ -9,11 +9,9 @@ import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.CategoryRepository;
 import com.omnibid.repository.ProductRepository;
 import com.omnibid.security.CurrentUser;
-import com.omnibid.service.AuditService;
 import com.omnibid.service.CategoryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -30,7 +28,6 @@ public class CategoryServiceImpl implements CategoryService {
     private final CategoryRepository categoryRepository;
     private final ProductRepository productRepository;
     private final AuctionRepository auctionRepository;
-    private final AuditService auditService;
 
     @Override
     @Transactional(readOnly = true)
@@ -48,7 +45,7 @@ public class CategoryServiceImpl implements CategoryService {
                         cat.getId(),
                         cat.getName(),
                         cat.getSlug(),
-                        cat.getIconUrl(),
+                        cat.getIcon(),
                         cat.getCreatedAt(),
                         counts.getOrDefault(cat.getId(), 0L)
                 ))
@@ -65,7 +62,7 @@ public class CategoryServiceImpl implements CategoryService {
                 category.getId(),
                 category.getName(),
                 category.getSlug(),
-                category.getIconUrl(),
+                category.getIcon(),
                 category.getCreatedAt(),
                 activeCount
         );
@@ -84,11 +81,11 @@ public class CategoryServiceImpl implements CategoryService {
         Category category = Category.builder()
                 .name(request.name().trim())
                 .slug(slug)
-                .iconUrl(request.iconUrl())
+                .icon(request.icon())
                 .build();
         category = categoryRepository.save(category);
 
-        auditService.log(admin.id(), "CATEGORY_CREATE", "CATEGORY", category.getId(), "name=" + category.getName());
+        log.info("Admin {} action=CATEGORY_CREATE target=CATEGORY:{} name={}", admin.id(), category.getId(), category.getName());
 
         return mapToResponse(category);
     }
@@ -108,10 +105,10 @@ public class CategoryServiceImpl implements CategoryService {
 
         category.setName(request.name().trim());
         category.setSlug(slug);
-        category.setIconUrl(request.iconUrl());
+        category.setIcon(request.icon());
         category = categoryRepository.save(category);
 
-        auditService.log(admin.id(), "CATEGORY_UPDATE", "CATEGORY", category.getId(), "name=" + category.getName());
+        log.info("Admin {} action=CATEGORY_UPDATE target=CATEGORY:{} name={}", admin.id(), category.getId(), category.getName());
 
         return mapToResponse(category);
     }
@@ -130,7 +127,7 @@ public class CategoryServiceImpl implements CategoryService {
 
         categoryRepository.delete(category);
 
-        auditService.log(admin.id(), "CATEGORY_DELETE", "CATEGORY", id, "name=" + category.getName());
+        log.info("Admin {} action=CATEGORY_DELETE target=CATEGORY:{} name={}", admin.id(), id, category.getName());
     }
 
     public static String slugify(String input) {
@@ -155,7 +152,7 @@ public class CategoryServiceImpl implements CategoryService {
                 category.getId(),
                 category.getName(),
                 category.getSlug(),
-                category.getIconUrl(),
+                category.getIcon(),
                 category.getCreatedAt()
         );
     }

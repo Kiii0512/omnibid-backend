@@ -11,7 +11,7 @@ import org.springframework.stereotype.Component;
 
 import java.math.BigDecimal;
 import java.time.Clock;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,7 +23,6 @@ public class AuctionMapper {
     private final ProductImageRepository productImageRepository;
     private final CategoryRepository categoryRepository;
     private final UserRepository userRepository;
-    private final WatchlistRepository watchlistRepository;
     private final Clock clock;
 
     public AuctionResponse toAuctionResponse(Auction auction, Long currentUserId) {
@@ -40,12 +39,7 @@ public class AuctionMapper {
                 ? productImageRepository.findByProductIdOrderByIdAsc(product.getId())
                 : List.of();
 
-        boolean isWatched = false;
-        if (currentUserId != null) {
-            isWatched = watchlistRepository.existsByUserIdAndAuctionId(currentUserId, auction.getId());
-        }
-
-        return buildResponse(auction, product, category, seller, highestBidder, imageEntities, isWatched);
+        return buildResponse(auction, product, category, seller, highestBidder, imageEntities);
     }
 
     public PageResponse<AuctionResponse> toAuctionResponsePage(Page<Auction> page, Long currentUserId) {
@@ -76,19 +70,14 @@ public class AuctionMapper {
             imagesByProduct.put(pid, productImageRepository.findByProductIdOrderByIdAsc(pid));
         }
 
-        Set<Long> watchedAuctionIds = (currentUserId != null)
-                ? watchlistRepository.findByUserId(currentUserId).stream().map(Watchlist::getAuctionId).collect(Collectors.toSet())
-                : Collections.emptySet();
-
         List<AuctionResponse> content = auctions.stream().map(auction -> {
             Product product = productMap.get(auction.getProductId());
             Category category = (product != null) ? categoryMap.get(product.getCategoryId()) : null;
             User seller = userMap.get(auction.getSellerId());
             User highestBidder = (auction.getHighestBidderId() != null) ? userMap.get(auction.getHighestBidderId()) : null;
             List<ProductImage> imageEntities = (product != null) ? imagesByProduct.getOrDefault(product.getId(), List.of()) : List.of();
-            boolean isWatched = watchedAuctionIds.contains(auction.getId());
 
-            return buildResponse(auction, product, category, seller, highestBidder, imageEntities, isWatched);
+            return buildResponse(auction, product, category, seller, highestBidder, imageEntities);
         }).toList();
 
         return PageResponse.<AuctionResponse>builder()
@@ -106,8 +95,7 @@ public class AuctionMapper {
             Category category,
             User seller,
             User highestBidder,
-            List<ProductImage> imageEntities,
-            boolean isWatched
+            List<ProductImage> imageEntities
     ) {
         String productTitle = (product != null) ? product.getTitle() : null;
         String productDescription = (product != null) ? product.getDescription() : null;
@@ -124,8 +112,8 @@ public class AuctionMapper {
                 .findFirst()
                 .orElse(imageEntities.isEmpty() ? null : imageEntities.get(0).getImageUrl());
 
-        BigDecimal minNextBid = calculateMinNextBid(auction);
-        String reserveStatus = calculateReserveStatus(auction);
+        BigDecimal minNextBid = auction.minNextBid();
+        String reserveStatus = auction.reserveStatus().name();
 
         return AuctionResponse.builder()
                 .id(auction.getId())
@@ -155,29 +143,8 @@ public class AuctionMapper {
                 .createdAt(auction.getCreatedAt())
                 .primaryImageUrl(primaryImageUrl)
                 .images(images)
-                .serverTime(LocalDateTime.now(clock))
-                .isWatched(isWatched)
+                .serverTime(Instant.now(clock))
                 .build();
-    }
-
-    private BigDecimal calculateMinNextBid(Auction auction) {
-        if (auction == null) return null;
-        if (auction.getBidCount() == null || auction.getBidCount() == 0) {
-            return auction.getCurrentPrice() != null ? auction.getCurrentPrice() : auction.getStartPrice();
-        }
-        if (auction.getCurrentPrice() == null) return null;
-        BigDecimal inc = auction.getBidIncrement() != null ? auction.getBidIncrement() : BigDecimal.ZERO;
-        return auction.getCurrentPrice().add(inc);
-    }
-
-    private String calculateReserveStatus(Auction auction) {
-        if (auction == null || auction.getReservePrice() == null) {
-            return "NO_RESERVE";
-        }
-        if (auction.getCurrentPrice() != null && auction.getCurrentPrice().compareTo(auction.getReservePrice()) >= 0) {
-            return "MET";
-        }
-        return "NOT_MET";
     }
 
     private ProductImageResponse toImageResponse(ProductImage image) {

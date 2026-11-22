@@ -3,7 +3,7 @@ package com.omnibid.dto.admin;
 import com.omnibid.enums.ProductCondition;
 import com.omnibid.enums.ProductStatus;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record AdminProductResponse(
         Long id,
@@ -15,5 +15,5 @@ public record AdminProductResponse(
         String description,
         ProductCondition condition,
         ProductStatus status,
-        LocalDateTime createdAt
+        Instant createdAt
 ) {}

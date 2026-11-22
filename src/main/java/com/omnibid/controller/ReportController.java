@@ -8,7 +8,7 @@ import com.omnibid.dto.report.ReportResolveRequest;
 import com.omnibid.dto.report.ReportResolveResponse;
 import com.omnibid.dto.report.ReportResponse;
 import com.omnibid.enums.ReportStatus;
-import com.omnibid.enums.ReportType;
+import com.omnibid.enums.ReportTargetType;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.ReportService;
@@ -43,17 +43,18 @@ public class ReportController {
     public ResponseEntity<ApiResponse<PageResponse<ReportDetailResponse>>> getAdminReports(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false, defaultValue = "PENDING") ReportStatus status,
-            @RequestParam(required = false) ReportType reportType,
+            @RequestParam(required = false) ReportTargetType targetType,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
         CurrentUser currentUser = CurrentUser.of(userDetails);
         Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.ASC, "createdAt"));
-        PageResponse<ReportDetailResponse> response = reportService.getAdminReports(currentUser, status, reportType, pageable);
+        PageResponse<ReportDetailResponse> response = reportService.getAdminReports(currentUser, status, targetType, pageable);
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
+    // TODO v4-phase-7: change to @PostMapping and add GET /api/v1/admin/reports/{id}
     @PatchMapping("/api/v1/admin/reports/{id}/resolve")
     public ResponseEntity<ApiResponse<ReportResolveResponse>> resolveReport(
             @AuthenticationPrincipal CustomUserDetails userDetails,

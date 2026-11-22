@@ -9,7 +9,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 @Data
@@ -52,9 +52,9 @@ public class AuctionResponse {
 
     private Integer bidCount;
 
-    private LocalDateTime startTime;
+    private Instant startTime;
 
-    private LocalDateTime endTime;
+    private Instant endTime;
 
     private AuctionStatus status;
 
@@ -62,17 +62,15 @@ public class AuctionResponse {
 
     private BigDecimal finalPrice;
 
-    private LocalDateTime closedAt;
+    private Instant closedAt;
 
     private String cancelReason;
 
-    private LocalDateTime createdAt;
+    private Instant createdAt;
 
     private String primaryImageUrl;
 
     private List<ProductImageResponse> images;
 
-    private LocalDateTime serverTime;
-
-    private Boolean isWatched;
+    private Instant serverTime;
 }

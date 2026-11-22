@@ -1,7 +1,7 @@
 package com.omnibid.dto.admin;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.Map;
 
 public record AdminStatisticsResponse(
@@ -15,7 +15,7 @@ public record AdminStatisticsResponse(
         PaymentStats payments,
         Map<String, Long> reports
 ) {
-    public record RangeDto(LocalDateTime from, LocalDateTime to) {}
+    public record RangeDto(Instant from, Instant to) {}
     public record UserStats(long total, long active, long banned, long newInRange) {}
     public record AuctionStats(long scheduled, long active, long ended, long unsold, long cancelled, double sellThroughRate) {}
     public record BidStats(long total, long inRange, double avgPerAuction) {}

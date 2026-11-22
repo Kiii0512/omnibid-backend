@@ -6,102 +6,54 @@ import com.omnibid.entity.Product;
 import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.PaymentStatus;
-import com.omnibid.enums.ProductStatus;
-import com.omnibid.enums.ReportStatus;
-import com.omnibid.enums.ReportType;
 import com.omnibid.repository.OrderRepository;
 import com.omnibid.repository.PaymentRepository;
 import com.omnibid.repository.ProductRepository;
-import com.omnibid.repository.ReportRepository;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Slf4j
 @Component
+@RequiredArgsConstructor
 public class OrderLifecycleSupport {
 
     private final OrderRepository orderRepository;
     private final ProductRepository productRepository;
     private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
-    private ReportRepository reportRepository;
-
-    public OrderLifecycleSupport(OrderRepository orderRepository,
-                                 ProductRepository productRepository,
-                                 PaymentRepository paymentRepository,
-                                 NotificationService notificationService) {
-        this.orderRepository = orderRepository;
-        this.productRepository = productRepository;
-        this.paymentRepository = paymentRepository;
-        this.notificationService = notificationService;
-    }
-
-    @Autowired
-    public OrderLifecycleSupport(OrderRepository orderRepository,
-                                 ProductRepository productRepository,
-                                 PaymentRepository paymentRepository,
-                                 NotificationService notificationService,
-                                 ReportRepository reportRepository) {
-        this.orderRepository = orderRepository;
-        this.productRepository = productRepository;
-        this.paymentRepository = paymentRepository;
-        this.notificationService = notificationService;
-        this.reportRepository = reportRepository;
-    }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void expireOne(Long orderId, LocalDateTime now) {
-        // Đọc không khóa để lấy product_id (AUCTION_ORDER_INTEGRATION §4.1)
-        Order initial = orderRepository.findById(orderId)
-                .or(() -> orderRepository.findByIdForUpdate(orderId))
-                .orElse(null);
-        if (initial == null || initial.getStatus() != OrderStatus.PENDING_PAYMENT) {
-            return;
-        }
-
-        if (now.isBefore(initial.getPaymentDeadline())) {
-            return;
-        }
-
-        // Thứ tự khóa toàn cục: L2 Product -> L3 Order -> L4 Payment
-        Long productId = initial.getProductId();
-        Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
+    public void expireOne(Long orderId, Instant now) {
+        // Lock order -> product per v4 lock ordering (auctions -> orders -> products)
         Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
         if (order == null || order.getStatus() != OrderStatus.PENDING_PAYMENT) {
             return;
         }
-
-        if (product == null && order.getProductId() != null) {
-            product = productRepository.findByIdForUpdate(order.getProductId()).orElse(null);
+        if (!order.isPaymentOverdue(now)) {
+            return;
         }
-
-        // Kiểm tra quá hạn
-        if (now.isBefore(order.getPaymentDeadline())) {
+        if (paymentRepository.existsByOrderIdAndStatus(order.getId(), PaymentStatus.SUCCESS)) {
+            log.info("Order {} already has SUCCESS payment, skipping expiration", order.getId());
             return;
         }
 
-        // Không hết hạn nếu còn Payment PENDING (PAY-10) hoặc đã có SUCCESS
-        if (paymentRepository.existsByOrderIdAndStatus(order.getId(), PaymentStatus.PENDING)
-                || paymentRepository.existsByOrderIdAndStatus(order.getId(), PaymentStatus.SUCCESS)) {
-            log.info("Order {} has PENDING or SUCCESS payment, skipping expiration", order.getId());
-            return;
-        }
+        Product product = order.getProductId() != null
+                ? productRepository.findByIdForUpdate(order.getProductId()).orElse(null)
+                : null;
 
-        order.expire();
+        order.expire(now);
         orderRepository.save(order);
 
-        // Hiệu ứng Product theo ORD-11: chỉ về AVAILABLE khi không HIDDEN/REMOVED
-        if (product != null && product.getStatus() != ProductStatus.HIDDEN && product.getStatus() != ProductStatus.REMOVED) {
-            product.setStatus(ProductStatus.AVAILABLE);
+        if (product != null) {
+            product.release();
             productRepository.save(product);
         }
 
-        // Thông báo ORDER_UPDATE cho buyer và seller
         notificationService.notify(
                 order.getBuyerId(),
                 NotificationType.ORDER_UPDATE,
@@ -124,112 +76,27 @@ public class OrderLifecycleSupport {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void sendReminder24h(Long orderId, LocalDateTime now) {
-        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
-        if (order == null || order.getStatus() != OrderStatus.PENDING_PAYMENT) {
-            return;
-        }
-
-        if (order.getReminder24hSentAt() != null) {
-            return;
-        }
-
-        // Còn trong khoảng <= 24h và chưa quá hạn
-        if (!now.isBefore(order.getPaymentDeadline()) || order.getPaymentDeadline().isAfter(now.plusHours(24))) {
-            return;
-        }
-
-        order.setReminder24hSentAt(now);
-        orderRepository.save(order);
-
-        notificationService.notify(
-                order.getBuyerId(),
-                NotificationType.PAYMENT_REMINDER,
-                NotificationTemplates.paymentReminderTitle("24 giờ", order.getId()),
-                NotificationTemplates.paymentReminderContent(order.getId(), order.getPaymentDeadline()),
-                "ORDER",
-                order.getId()
-        );
-
-        log.info("Sent 24h payment reminder for order {}", order.getId());
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void sendReminder2h(Long orderId, LocalDateTime now) {
-        Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
-        if (order == null || order.getStatus() != OrderStatus.PENDING_PAYMENT) {
-            return;
-        }
-
-        if (order.getReminder2hSentAt() != null) {
-            return;
-        }
-
-        // Còn trong khoảng <= 2h và chưa quá hạn
-        if (!now.isBefore(order.getPaymentDeadline()) || order.getPaymentDeadline().isAfter(now.plusHours(2))) {
-            return;
-        }
-
-        order.setReminder2hSentAt(now);
-        orderRepository.save(order);
-
-        notificationService.notify(
-                order.getBuyerId(),
-                NotificationType.PAYMENT_REMINDER,
-                NotificationTemplates.paymentReminderTitle("2 giờ", order.getId()),
-                NotificationTemplates.paymentReminderContent(order.getId(), order.getPaymentDeadline()),
-                "ORDER",
-                order.getId()
-        );
-
-        log.info("Sent 2h payment reminder for order {}", order.getId());
-    }
-
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void autoCompleteOne(Long orderId, LocalDateTime now) {
-        // Đọc không khóa để lấy product_id (AUCTION_ORDER_INTEGRATION §4.1)
-        Order initial = orderRepository.findById(orderId)
-                .or(() -> orderRepository.findByIdForUpdate(orderId))
-                .orElse(null);
-        if (initial == null || initial.getStatus() != OrderStatus.SHIPPING) {
-            return;
-        }
-
-        if (initial.getConfirmDeadline() == null || now.isBefore(initial.getConfirmDeadline())) {
-            return;
-        }
-
-        // Thứ tự khóa toàn cục: L2 Product -> L3 Order
-        Long productId = initial.getProductId();
-        Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
+    public void autoCompleteOne(Long orderId, Instant now) {
         Order order = orderRepository.findByIdForUpdate(orderId).orElse(null);
         if (order == null || order.getStatus() != OrderStatus.SHIPPING) {
             return;
         }
-
-        if (product == null && order.getProductId() != null) {
-            product = productRepository.findByIdForUpdate(order.getProductId()).orElse(null);
-        }
-
         if (order.getConfirmDeadline() == null || now.isBefore(order.getConfirmDeadline())) {
             return;
         }
 
-        // Kiểm tra khiếu nại PENDING (ORD-09, UT-ORD-15)
-        if (reportRepository != null && reportRepository.existsByOrderIdAndReportTypeAndStatus(order.getId(), ReportType.COMPLAINT, ReportStatus.PENDING)) {
-            log.info("Order {} has PENDING complaint, skipping auto-completion", order.getId());
-            return;
-        }
+        Product product = order.getProductId() != null
+                ? productRepository.findByIdForUpdate(order.getProductId()).orElse(null)
+                : null;
 
         order.autoComplete(now);
         orderRepository.save(order);
 
         if (product != null) {
-            product.setStatus(ProductStatus.SOLD);
+            product.markSold();
             productRepository.save(product);
         }
 
-        // Thông báo ORDER_UPDATE cho buyer & seller
         notificationService.notify(
                 order.getBuyerId(),
                 NotificationType.ORDER_UPDATE,

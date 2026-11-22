@@ -1,17 +1,15 @@
 package com.omnibid.dto.report;
 
 import com.omnibid.enums.ReportStatus;
-import com.omnibid.enums.ReportType;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 public record ReportResponse(
         Long id,
-        ReportType reportType,
-        Long orderId,
+        Long reportedOrderId,
         Long reportedUserId,
         Long reportedProductId,
         String reason,
         ReportStatus status,
-        LocalDateTime createdAt
+        Instant createdAt
 ) {}

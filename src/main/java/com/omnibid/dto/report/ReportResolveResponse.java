@@ -1,16 +1,13 @@
 package com.omnibid.dto.report;
 
-import com.omnibid.enums.ReportAction;
 import com.omnibid.enums.ReportStatus;
 
-import java.time.LocalDateTime;
-import java.util.Map;
+import java.time.Instant;
 
 public record ReportResolveResponse(
         Long id,
         ReportStatus status,
-        ReportAction action,
+        String adminNote,
         Long resolvedBy,
-        LocalDateTime resolvedAt,
-        Map<String, Object> effects
+        Instant resolvedAt
 ) {}

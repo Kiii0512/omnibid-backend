@@ -67,7 +67,6 @@ public class ProductServiceImpl implements ProductService {
     @Transactional(readOnly = true)
     public ProductResponse getProductById(Long id) {
         Product product = productRepository.findById(id)
-                .filter(p -> p.getStatus() != ProductStatus.REMOVED)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found with id: " + id));
         return mapToResponse(product);
     }
@@ -112,16 +111,14 @@ public class ProductServiceImpl implements ProductService {
         }
 
         if (auctionRepository.existsByProductId(id)) {
-            product.setStatus(ProductStatus.REMOVED);
-            productRepository.save(product);
-        } else {
-            List<ProductImage> images = productImageRepository.findByProductId(id);
-            for (ProductImage img : images) {
-                storageService.delete(img.getPublicId());
-            }
-            productImageRepository.deleteByProductId(id);
-            productRepository.delete(product);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot delete product that has been in an auction");
         }
+        List<ProductImage> images = productImageRepository.findByProductId(id);
+        for (ProductImage img : images) {
+            storageService.delete(img.getPublicId());
+        }
+        productImageRepository.deleteByProductId(id);
+        productRepository.delete(product);
     }
 
     @Override

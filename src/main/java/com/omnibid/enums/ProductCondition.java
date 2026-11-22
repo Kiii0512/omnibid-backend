@@ -5,7 +5,6 @@ import com.fasterxml.jackson.annotation.JsonCreator;
 public enum ProductCondition {
     NEW,
     LIKE_NEW,
-    USED,
     GOOD,
     FAIR,
     POOR;

@@ -8,7 +8,7 @@ import lombok.Data;
 import lombok.NoArgsConstructor;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Data
 @Builder
@@ -20,8 +20,7 @@ public class PaymentHistoryResponse {
     private PaymentMethod method;
     private BigDecimal amount;
     private PaymentStatus status;
-    private String transactionRef;
     private String failureReason;
-    private LocalDateTime paidAt;
-    private LocalDateTime createdAt;
+    private Instant paidAt;
+    private Instant createdAt;
 }

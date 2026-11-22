@@ -19,13 +19,12 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
-import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 
 @RestController
@@ -35,10 +34,6 @@ public class AdminController {
 
     private final AdminService adminService;
     private final CategoryService categoryService;
-
-    // =========================================================================
-    // USERS (ADM-01, 02, 06)
-    // =========================================================================
 
     @GetMapping("/users")
     public ResponseEntity<ApiResponse<PageResponse<AdminUserResponse>>> getUsers(
@@ -55,6 +50,7 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
+    // TODO v4-phase-8: split into POST /users/{id}/ban and POST /users/{id}/unban
     @PatchMapping("/users/{id}")
     public ResponseEntity<ApiResponse<UserStatusUpdateResponse>> updateUserStatus(
             @AuthenticationPrincipal CustomUserDetails userDetails,
@@ -66,10 +62,6 @@ public class AdminController {
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }
-
-    // =========================================================================
-    // PRODUCTS (ADM-07, 08)
-    // =========================================================================
 
     @GetMapping("/products")
     public ResponseEntity<ApiResponse<PageResponse<AdminProductResponse>>> getProducts(
@@ -87,6 +79,7 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
+    // TODO v4-phase-8: change to POST /products/{id}/hide and add GET /products/{id}
     @PatchMapping("/products/{id}")
     public ResponseEntity<ApiResponse<ProductHideResponse>> hideProduct(
             @AuthenticationPrincipal CustomUserDetails userDetails,
@@ -99,10 +92,6 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    // =========================================================================
-    // AUCTIONS (ADM-09)
-    // =========================================================================
-
     @PostMapping("/auctions/{id}/cancel")
     public ResponseEntity<ApiResponse<AuctionResponse>> cancelAuction(
             @AuthenticationPrincipal CustomUserDetails userDetails,
@@ -114,10 +103,6 @@ public class AdminController {
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }
-
-    // =========================================================================
-    // CATEGORIES (ADM-10)
-    // =========================================================================
 
     @GetMapping("/categories")
     public ResponseEntity<ApiResponse<List<CategoryResponse>>> getCategories() {
@@ -159,18 +144,14 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success("Category deleted", null));
     }
 
-    // =========================================================================
-    // ORDERS (ADM-11, 12)
-    // =========================================================================
-
     @GetMapping("/orders")
     public ResponseEntity<ApiResponse<PageResponse<AdminOrderSummaryResponse>>> getOrders(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false) OrderStatus status,
             @RequestParam(required = false) Long buyerId,
             @RequestParam(required = false) Long sellerId,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size) {
 
@@ -193,37 +174,15 @@ public class AdminController {
         return ResponseEntity.ok(ApiResponse.success(response));
     }
 
-    // =========================================================================
-    // STATISTICS & AUDIT LOGS (ADM-14, 15)
-    // =========================================================================
-
+    // TODO v4-phase-8: remove from/to params per FR-20
     @GetMapping("/statistics")
     public ResponseEntity<ApiResponse<AdminStatisticsResponse>> getStatistics(
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to) {
+            @RequestParam(required = false) Instant from,
+            @RequestParam(required = false) Instant to) {
 
         CurrentUser currentUser = CurrentUser.of(userDetails);
         AdminStatisticsResponse response = adminService.getStatistics(currentUser, from, to);
-
-        return ResponseEntity.ok(ApiResponse.success(response));
-    }
-
-    @GetMapping("/audit-logs")
-    public ResponseEntity<ApiResponse<PageResponse<AuditLogResponse>>> getAuditLogs(
-            @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestParam(required = false) Long adminId,
-            @RequestParam(required = false) String action,
-            @RequestParam(required = false) String targetType,
-            @RequestParam(required = false) Long targetId,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime to,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size) {
-
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        PageResponse<AuditLogResponse> response = adminService.getAuditLogs(currentUser, adminId, action, targetType, targetId, from, to, pageable);
 
         return ResponseEntity.ok(ApiResponse.success(response));
     }

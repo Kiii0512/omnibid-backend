@@ -3,12 +3,8 @@ package com.omnibid.service;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.entity.Auction;
-import com.omnibid.entity.Bid;
 import com.omnibid.entity.Product;
-import com.omnibid.enums.AuctionStatus;
-import com.omnibid.enums.BidStatus;
 import com.omnibid.enums.NotificationType;
-import com.omnibid.enums.ProductStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.ProductRepository;
@@ -17,8 +13,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
-import java.time.LocalDateTime;
-import java.util.Optional;
+import java.time.Instant;
 
 @Slf4j
 @Component
@@ -56,38 +51,28 @@ public class AuctionLifecycleSupport {
 
     @Transactional
     public Auction cancelLocked(Auction auction, String reason) {
-        LocalDateTime now = LocalDateTime.now(clock);
-        auction.setStatus(AuctionStatus.CANCELLED);
-        auction.setCancelReason(reason);
+        Instant now = Instant.now(clock);
+        auction.cancel(reason);
         auction.setClosedAt(now);
 
-        // LEADING bid chuyển thành NOT_WON khi hủy phiên
-        Optional<Bid> leadingBid = bidRepository.findTopByAuctionIdAndStatusOrderByAmountDesc(
-                auction.getId(), BidStatus.LEADING);
-        leadingBid.ifPresent(bid -> {
-            bid.setStatus(BidStatus.NOT_WON);
-            bidRepository.save(bid);
-
-            // N-05 / D-05: Thông báo AUCTION_ENDED cho người đang dẫn đầu khi phiên bị hủy
-            if (notificationService != null) {
-                notificationService.notify(
-                        bid.getBidderId(),
-                        NotificationType.AUCTION_ENDED,
-                        NotificationTemplates.auctionCancelledTitle(reason),
-                        NotificationTemplates.auctionCancelledContent(auction.getId(), reason),
-                        "AUCTION",
-                        auction.getId()
-                );
-            }
-        });
+        if (notificationService != null && auction.getHighestBidderId() != null) {
+            notificationService.notify(
+                    auction.getHighestBidderId(),
+                    NotificationType.AUCTION_CANCELLED,
+                    NotificationTemplates.auctionCancelledTitle(reason),
+                    NotificationTemplates.auctionCancelledContent(auction.getId(), reason),
+                    "AUCTION",
+                    auction.getId()
+            );
+        }
 
         Auction savedAuction = auctionRepository.save(auction);
 
         Product product = productRepository.findByIdForUpdate(auction.getProductId())
                 .or(() -> productRepository.findById(auction.getProductId()))
                 .orElse(null);
-        if (product != null && product.getStatus() != ProductStatus.HIDDEN && product.getStatus() != ProductStatus.REMOVED) {
-            product.setStatus(ProductStatus.AVAILABLE);
+        if (product != null) {
+            product.release();
             productRepository.save(product);
         }
 

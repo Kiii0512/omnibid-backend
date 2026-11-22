@@ -8,7 +8,7 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.time.Instant;
 
 @Data
 @Builder
@@ -24,7 +24,7 @@ public class NotificationResponse {
     private String refType;
     private Long refId;
     private Boolean isRead;
-    private LocalDateTime createdAt;
+    private Instant createdAt;
     private Long unreadCount;
 
     public static NotificationResponse from(Notification n) {

@@ -3,26 +3,22 @@ package com.omnibid.service;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.entity.Auction;
-import com.omnibid.entity.Bid;
 import com.omnibid.entity.Order;
 import com.omnibid.entity.Product;
 import com.omnibid.enums.AuctionStatus;
-import com.omnibid.enums.BidStatus;
 import com.omnibid.enums.NotificationType;
-import com.omnibid.enums.ProductStatus;
+import com.omnibid.enums.ReserveStatus;
 import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.ProductRepository;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
-import java.time.LocalDateTime;
-import java.util.List;
+import java.time.Instant;
 
 @Slf4j
 @Component
@@ -58,7 +54,6 @@ public class AuctionCloser {
         this.clock = clock;
     }
 
-    // Overloaded constructor for tests or custom transaction template
     public AuctionCloser(TransactionTemplate transactionTemplate,
                          AuctionRepository auctionRepository,
                          BidRepository bidRepository,
@@ -78,136 +73,98 @@ public class AuctionCloser {
     }
 
     public void closeOne(Long auctionId) {
-        transactionTemplate.executeWithoutResult(status -> doClose(auctionId, LocalDateTime.now(clock)));
+        transactionTemplate.executeWithoutResult(status -> doClose(auctionId, Instant.now(clock)));
     }
 
-    public void doClose(Long auctionId, LocalDateTime now) {
-        // Khóa dòng phiên trước khi kiểm tra trạng thái
+    public void doClose(Long auctionId, Instant now) {
         Auction auction = auctionRepository.findByIdForUpdate(auctionId).orElse(null);
         if (auction == null) {
             log.warn("Auction {} not found when closing", auctionId);
             return;
         }
 
-        // Bỏ qua nếu phiên không còn ở trạng thái ACTIVE hoặc chưa hết giờ (R-02)
         if (auction.getStatus() != AuctionStatus.ACTIVE || now.isBefore(auction.getEndTime())) {
             log.info("Auction {} status is {} or not yet expired (endTime={}), skipping close",
                     auctionId, auction.getStatus(), auction.getEndTime());
             return;
         }
 
-        // 6.1: Chọn Bid hợp lệ cao nhất của bidder ACTIVE
-        List<Bid> validBids = bidRepository.findValidBidsDesc(
-                auction.getId(),
-                List.of(BidStatus.LEADING, BidStatus.OUTBID),
-                PageRequest.of(0, 1)
-        );
-        boolean hasValidBid = !validBids.isEmpty();
-        Bid winningBid = hasValidBid ? validBids.get(0) : null;
-        boolean reserveMet = winningBid != null && (
-                auction.getReservePrice() == null
-                || winningBid.getAmount().compareTo(auction.getReservePrice()) >= 0
-        );
+        // TODO v4-phase-5: verify highestBidderId is ACTIVE per BR-09
+        boolean hasLeader = auction.getHighestBidderId() != null && auction.getBidCount() != null && auction.getBidCount() > 0;
+        boolean reserveMet = auction.reserveStatus() != ReserveStatus.NOT_MET;
 
-        if (hasValidBid && reserveMet) {
-            auction.setStatus(AuctionStatus.ENDED);
-            auction.setWinnerId(winningBid.getBidderId());
-            auction.setFinalPrice(winningBid.getAmount());
-            auction.setClosedAt(now);
+        if (hasLeader && reserveMet) {
+            auction.closeAsEnded(now);
             auctionRepository.save(auction);
-
-            winningBid.setStatus(BidStatus.WON);
-            bidRepository.save(winningBid);
 
             Product product = productRepository.findByIdForUpdate(auction.getProductId())
                     .or(() -> productRepository.findById(auction.getProductId()))
                     .orElse(null);
             if (product != null) {
-                product.setStatus(ProductStatus.RESERVED);
+                product.reserve();
                 productRepository.save(product);
             }
 
             Order order = orderService.createFromAuction(auction);
 
-            // N-02 / UT-SCH-10: Thông báo AUCTION_WON cho người thắng
             notificationService.notify(
-                    winningBid.getBidderId(),
-                    NotificationType.AUCTION_WON,
+                    auction.getWinnerId(),
+                    NotificationType.AUCTION_RESULT,
                     NotificationTemplates.auctionWonTitle(),
-                    NotificationTemplates.auctionWonContent(auction.getId(), winningBid.getAmount()),
+                    NotificationTemplates.auctionWonContent(auction.getId(), auction.getFinalPrice()),
                     "AUCTION",
                     auction.getId()
             );
 
-            // N-03 / UT-SCH-10: Thông báo ORDER_CREATED cho người thắng
-            Long orderId = order != null ? order.getId() : null;
-            LocalDateTime deadline = order != null ? order.getPaymentDeadline() : null;
-            notificationService.notify(
-                    winningBid.getBidderId(),
-                    NotificationType.ORDER_CREATED,
-                    NotificationTemplates.orderCreatedTitle(orderId, deadline),
-                    NotificationTemplates.orderCreatedContent(orderId, auction.getId(), deadline),
-                    "ORDER",
-                    orderId
-            );
-
-            // N-04 / UT-SCH-10: Thông báo AUCTION_ENDED cho seller
             notificationService.notify(
                     auction.getSellerId(),
-                    NotificationType.AUCTION_ENDED,
+                    NotificationType.AUCTION_RESULT,
                     NotificationTemplates.auctionEndedSellerTitle(),
-                    NotificationTemplates.auctionEndedSellerContent(auction.getId(), winningBid.getAmount()),
+                    NotificationTemplates.auctionEndedSellerContent(auction.getId(), auction.getFinalPrice()),
                     "AUCTION",
                     auction.getId()
             );
 
-            log.info("Auction {} ENDED successfully, winner={}, price={}",
-                    auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
+            log.info("Auction {} ENDED successfully, winner={}, price={}, orderId={}",
+                    auction.getId(), auction.getWinnerId(), auction.getFinalPrice(), order != null ? order.getId() : null);
         } else {
-            auction.setStatus(AuctionStatus.UNSOLD);
-            auction.setClosedAt(now);
+            auction.closeAsUnsold(now);
             auctionRepository.save(auction);
-
-            if (winningBid != null) {
-                winningBid.setStatus(BidStatus.NOT_WON);
-                bidRepository.save(winningBid);
-            }
 
             Product product = productRepository.findByIdForUpdate(auction.getProductId())
                     .or(() -> productRepository.findById(auction.getProductId()))
                     .orElse(null);
-            if (product != null && product.getStatus() != ProductStatus.HIDDEN && product.getStatus() != ProductStatus.REMOVED) {
-                product.setStatus(ProductStatus.AVAILABLE);
+            if (product != null) {
+                product.release();
                 productRepository.save(product);
             }
 
-            // N-04: Thông báo AUCTION_ENDED cho seller khi không bán được
             notificationService.notify(
                     auction.getSellerId(),
-                    NotificationType.AUCTION_ENDED,
+                    NotificationType.AUCTION_RESULT,
                     NotificationTemplates.auctionUnsoldSellerTitle(),
                     NotificationTemplates.auctionUnsoldSellerContent(auction.getId()),
                     "AUCTION",
                     auction.getId()
             );
 
-            log.info("Auction {} UNSOLD (hasValidBid={}, reserveMet={})", auction.getId(), hasValidBid, reserveMet);
+            log.info("Auction {} UNSOLD (hasLeader={}, reserveMet={})", auction.getId(), hasLeader, reserveMet);
         }
 
         publishWsAfterCommit(auction);
     }
 
     public void startOne(Long auctionId) {
-        transactionTemplate.executeWithoutResult(status -> doStart(auctionId, LocalDateTime.now(clock)));
+        transactionTemplate.executeWithoutResult(status -> doStart(auctionId, Instant.now(clock)));
     }
 
-    public void doStart(Long auctionId, LocalDateTime now) {
+    public void doStart(Long auctionId, Instant now) {
         Auction auction = auctionRepository.findByIdForUpdate(auctionId).orElse(null);
         if (auction == null || auction.getStatus() != AuctionStatus.SCHEDULED || now.isBefore(auction.getStartTime())) {
             return;
         }
 
-        auction.setStatus(AuctionStatus.ACTIVE);
+        auction.activate(now);
         Auction updated = auctionRepository.save(auction);
         log.info("Started auction {} at {}", updated.getId(), now);
 
