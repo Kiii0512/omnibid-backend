@@ -1,16 +1,14 @@
 package com.omnibid.dto.report;
 
-import jakarta.validation.constraints.NotNull;
+import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record ReportRequest(
-        Long reportedUserId,
-
         Long reportedProductId,
-
+        Long reportedUserId,
         Long reportedOrderId,
 
-        @NotNull(message = "reason is required")
-        @Size(min = 10, max = 2000, message = "reason must be between 10 and 2000 characters")
+        @NotBlank(message = "Lý do báo cáo không được để trống")
+        @Size(max = 1000, message = "Lý do báo cáo tối đa 1000 ký tự")
         String reason
 ) {}

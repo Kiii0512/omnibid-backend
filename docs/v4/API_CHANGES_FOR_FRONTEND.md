@@ -72,5 +72,13 @@ Danh sách khởi tạo từ phân tích chênh lệch; agent bổ sung chi ti�
   - `GET /api/v1/admin/categories`: trả `Page<AdminCategory>` (`{ id, name, slug, icon, productCount }`), hỗ trợ `keyword`, phân trang và sắp xếp.
   - `POST /api/v1/admin/categories` (201) và `PUT /api/v1/admin/categories/{id}` (200): nhận `{ name, slug?, icon? }` (`icon` ≤ 50 ký tự, `^[a-z0-9-]+$`), trả `AdminCategory`; slug trùng → 400 `VALIDATION_ERROR` kèm `details.fields.slug`.
   - `DELETE /api/v1/admin/categories/{id}`: trả 200 `data: null`; còn sản phẩm → 409 `CATEGORY_IN_USE`.
-- Báo cáo: `reportedOrderId` thay `orderId`; không còn `reportType`.
-- Thông báo chỉ 5 loại: OUTBID, AUCTION_RESULT, AUCTION_CANCELLED, ORDER_UPDATE, REPORT_RESOLVED.
+- **Thông báo (Phase 7)**:
+  - Chỉ còn 5 loại `NotificationType`: `OUTBID`, `AUCTION_RESULT`, `AUCTION_CANCELLED`, `ORDER_UPDATE`, `REPORT_RESOLVED`. Tiền trong nội dung định dạng `520.000 ₫`, thời gian theo `+07:00`. Không gửi cho ADMIN.
+  - `GET /api/v1/notifications`: chỉ `USER`, lọc `isRead`, `type`, phân trang (`size` mặc định 10, `sort` mặc định `createdAt,desc`, whitelist `createdAt`/`id`), trả `Page<Notification>` (`{ id, type, title, content, refType, refId, isRead, createdAt }`, không còn `unreadCount`).
+  - `POST /api/v1/notifications/{id}/read` (đổi từ `PATCH`): chỉ người nhận (khác → 403 `FORBIDDEN`; đã đọc → vẫn 200 idempotent), trả `Notification`.
+  - Đã xóa `GET /api/v1/notifications/unread-count` và `PATCH /api/v1/notifications/read-all`.
+- **Báo cáo vi phạm (Phase 7)**:
+  - `POST /api/v1/reports` (201, `USER`): body `{ reportedProductId?, reportedUserId?, reportedOrderId?, reason }` (bắt buộc ≥ 1 đối tượng, `reason` `@NotBlank` ≤ 1000 ký tự; báo cáo đơn chỉ cho bên tham gia → khác 403 `FORBIDDEN`; tự báo cáo bản thân/sản phẩm của mình → 400 `VALIDATION_ERROR`); trả tối giản `{ id, status: "PENDING", createdAt }`. Không còn `reportType`.
+  - `GET /api/v1/admin/reports` (`ADMIN`): lọc `status` (không còn mặc định `PENDING`), `targetType` (`PRODUCT`/`USER`/`ORDER`), phân trang (`size` mặc định 10, `sort` mặc định `createdAt,desc`, whitelist `createdAt`/`id`/`status`/`resolvedAt`), trả `Page<AdminReportItem>` (`{ id, reporter: UserRef, targets: ReportTargetSummary, reason, status, createdAt }`).
+  - `GET /api/v1/admin/reports/{id}` (mới, `ADMIN`): trả `AdminReportDetail` (mở rộng `AdminReportItem` thêm `adminNote, resolvedBy: UserRef | null, resolvedAt`). `targets` chỉ chứa các trường đối tượng có mặt (`product?`, `user?`, `order?`).
+  - `POST /api/v1/admin/reports/{id}/resolve` (đổi từ `PATCH`, `ADMIN`): body `{ decision: "RESOLVED" | "REJECTED", note }` (`note` `@NotBlank`), chỉ đổi trạng thái báo cáo và gửi `REPORT_RESOLVED` sau COMMIT (không khóa user/ẩn sản phẩm/hủy phiên/đổi đơn), trả `AdminReportDetail`.

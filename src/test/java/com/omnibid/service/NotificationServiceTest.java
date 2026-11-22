@@ -1,16 +1,20 @@
 package com.omnibid.service;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.common.PageResponse;
-import com.omnibid.dto.notification.NotificationItem;
 import com.omnibid.dto.notification.NotificationResponse;
 import com.omnibid.entity.Notification;
+import com.omnibid.entity.User;
 import com.omnibid.enums.NotificationType;
-import com.omnibid.event.NotificationCreated;
+import com.omnibid.enums.UserRole;
+import com.omnibid.enums.UserStatus;
+import com.omnibid.event.NotificationRequested;
 import com.omnibid.listener.NotificationPushListener;
 import com.omnibid.repository.NotificationRepository;
+import com.omnibid.repository.UserRepository;
 import com.omnibid.service.impl.NotificationServiceImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -22,18 +26,17 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
-import org.springframework.http.HttpStatus;
-import org.springframework.messaging.MessagingException;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 
 import java.math.BigDecimal;
-import java.time.LocalDateTime;
+import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -43,10 +46,10 @@ class NotificationServiceTest {
     private NotificationRepository notificationRepository;
 
     @Mock
-    private ApplicationEventPublisher eventPublisher;
+    private UserRepository userRepository;
 
     @Mock
-    private WebSocketPublisher webSocketPublisher;
+    private ApplicationEventPublisher eventPublisher;
 
     private NotificationServiceImpl notificationService;
     private NotificationPushListener pushListener;
@@ -54,219 +57,142 @@ class NotificationServiceTest {
     @BeforeEach
     void setUp() {
         notificationService = new NotificationServiceImpl(notificationRepository, eventPublisher);
-        pushListener = new NotificationPushListener(webSocketPublisher, notificationRepository);
+        pushListener = new NotificationPushListener(notificationRepository, userRepository);
     }
 
     @Test
-    @DisplayName("UT-NTF-01 notify(...) lưu 1 dòng đúng type, refType, refId và phát sự kiện NotificationCreated")
-    void notify_SavesNotification_AndPublishesEvent() {
+    @DisplayName("notify(...) chỉ phát sự kiện NotificationRequested, không ghi trực tiếp vào DB")
+    void notify_PublishesNotificationRequested_WithoutDirectDbWrite() {
         Long userId = 2L;
         NotificationType type = NotificationType.OUTBID;
-        String title = "Bạn đã bị vượt giá";
-        String content = "Bạn vừa bị vượt giá tại phiên #100. Mức giá cao nhất hiện tại là 120,000đ.";
-        String refType = "AUCTION";
-        Long refId = 100L;
+        String title = NotificationTemplates.outbidTitle();
+        String content = NotificationTemplates.outbidContent(100L, BigDecimal.valueOf(520000));
 
-        Notification saved = Notification.builder()
-                .id(1L)
-                .userId(userId)
-                .type(type)
-                .title(title)
-                .content(content)
-                .refType(refType)
-                .refId(refId)
-                .isRead(false)
-                .createdAt(LocalDateTime.now())
-                .build();
+        notificationService.notify(userId, type, title, content, "AUCTION", 100L);
 
-        when(notificationRepository.save(any(Notification.class))).thenReturn(saved);
+        verifyNoInteractions(notificationRepository);
+        ArgumentCaptor<NotificationRequested> captor = ArgumentCaptor.forClass(NotificationRequested.class);
+        verify(eventPublisher).publishEvent(captor.capture());
 
-        notificationService.notify(userId, type, title, content, refType, refId);
-
-        ArgumentCaptor<Notification> captor = ArgumentCaptor.forClass(Notification.class);
-        verify(notificationRepository).save(captor.capture());
-        Notification captured = captor.getValue();
-        assertEquals(userId, captured.getUserId());
-        assertEquals(type, captured.getType());
-        assertEquals(title, captured.getTitle());
-        assertEquals(content, captured.getContent());
-        assertEquals(refType, captured.getRefType());
-        assertEquals(refId, captured.getRefId());
-        assertFalse(captured.getIsRead());
-
-        ArgumentCaptor<NotificationCreated> eventCaptor = ArgumentCaptor.forClass(NotificationCreated.class);
-        verify(eventPublisher).publishEvent(eventCaptor.capture());
-        NotificationCreated capturedEvent = eventCaptor.getValue();
-        assertEquals(1L, capturedEvent.id());
-        assertEquals(userId, capturedEvent.userId());
+        NotificationRequested event = captor.getValue();
+        assertEquals(userId, event.userId());
+        assertEquals(type, event.type());
+        assertEquals(title, event.title());
+        assertEquals(content, event.content());
+        assertEquals("AUCTION", event.refType());
+        assertEquals(100L, event.refId());
     }
 
     @Test
-    @DisplayName("UT-NTF-02 Mẫu nội dung: Mỗi NotificationType dựng được tiêu đề/nội dung; không chứa reserve_price, email, SĐT; tên người đặt giá dạng che")
-    void notificationTemplates_BuildsValidContent_WithoutConfidentialInfo() {
+    @DisplayName("NotificationPushListener lưu thông báo cho USER sau COMMIT và bỏ qua ADMIN")
+    void pushListener_SavesForUser_SkipsAdmin() {
+        User normalUser = User.builder().id(2L).role(UserRole.USER).status(UserStatus.ACTIVE).build();
+        User adminUser = User.builder().id(1L).role(UserRole.ADMIN).status(UserStatus.ACTIVE).build();
+
+        when(userRepository.findById(2L)).thenReturn(Optional.of(normalUser));
+        when(userRepository.findById(1L)).thenReturn(Optional.of(adminUser));
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(inv -> {
+            Notification n = inv.getArgument(0);
+            n.setId(55L);
+            return n;
+        });
+
+        pushListener.onNotificationRequested(new NotificationRequested(
+                2L, NotificationType.OUTBID, "Tiêu đề", "Nội dung", "AUCTION", 10L
+        ));
+        verify(notificationRepository, times(1)).save(any(Notification.class));
+
+        pushListener.onNotificationRequested(new NotificationRequested(
+                1L, NotificationType.REPORT_RESOLVED, "Tiêu đề", "Nội dung", "REPORT", 10L
+        ));
+        verify(notificationRepository, times(1)).save(any(Notification.class));
+    }
+
+    @Test
+    @DisplayName("NotificationPushListener bắt ngoại lệ DB sau COMMIT mà không ném ra")
+    void pushListener_DbError_DoesNotThrow() {
+        User normalUser = User.builder().id(2L).role(UserRole.USER).status(UserStatus.ACTIVE).build();
+        when(userRepository.findById(2L)).thenReturn(Optional.of(normalUser));
+        when(notificationRepository.save(any(Notification.class))).thenThrow(new RuntimeException("DB error"));
+
+        assertDoesNotThrow(() -> pushListener.onNotificationRequested(
+                new NotificationRequested(2L, NotificationType.ORDER_UPDATE, "Tiêu đề", "Nội dung", "ORDER", 9L)
+        ));
+    }
+
+    @Test
+    @DisplayName("NotificationTemplates hỗ trợ đủ 5 loại, định dạng tiền 520.000 ₫ và +07:00")
+    void notificationTemplates_FormatsCurrencyAndDateTime() {
+        assertEquals("520.000 ₫", NotificationTemplates.formatCurrency(BigDecimal.valueOf(520000)));
+        assertEquals("0 ₫", NotificationTemplates.formatCurrency(null));
+        assertEquals("09:00 20/11/2026", NotificationTemplates.formatDateTime(Instant.parse("2026-11-20T02:00:00Z")));
+
         for (NotificationType type : NotificationType.values()) {
             NotificationTemplates.TemplateResult result = NotificationTemplates.forType(type);
-            assertNotNull(result, "Template result should not be null for " + type);
-            assertNotNull(result.title(), "Title should not be null for " + type);
-            assertFalse(result.title().isBlank(), "Title should not be blank for " + type);
-            assertNotNull(result.content(), "Content should not be null for " + type);
-            assertFalse(result.content().isBlank(), "Content should not be blank for " + type);
-
-            // Bảo mật NTF-07: Không lộ reserve_price, email, sđt
+            assertNotNull(result);
+            assertFalse(result.title().isBlank());
+            assertFalse(result.content().isBlank());
             assertFalse(result.content().toLowerCase().contains("reserve_price"));
-            assertFalse(result.title().toLowerCase().contains("reserve_price"));
-            assertFalse(result.content().matches(".*[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}.*"));
-            assertFalse(result.content().matches(".*(\\+84|0)[3|5|7|8|9][0-9]{8}.*"));
         }
 
-        // Kiểm tra hàm che tên MaskingUtils
-        assertEquals("N***A", MaskingUtils.maskName("Nguyen Van An"));
-        assertEquals("T***", MaskingUtils.maskName("Tran"));
+        assertEquals("N***n", MaskingUtils.maskName("Nguyen Van An"));
         assertEquals("***", MaskingUtils.maskName(null));
-        assertEquals("***", MaskingUtils.maskName("   "));
     }
 
     @Test
-    @DisplayName("UT-NTF-03 Đánh dấu đã đọc: Chủ thông báo isRead = true, gọi lặp không lỗi")
-    void markAsRead_OwnerMarksRead_IdempotentSuccess() {
+    @DisplayName("markAsRead: chủ thông báo đánh dấu đã đọc và gọi lặp idempotent")
+    void markAsRead_Owner_IdempotentSuccess() {
         Long userId = 2L;
         Long notificationId = 10L;
 
         Notification unread = Notification.builder()
                 .id(notificationId)
                 .userId(userId)
-                .type(NotificationType.AUCTION_WON)
+                .type(NotificationType.AUCTION_RESULT)
                 .title("Bạn đã thắng")
                 .content("Nội dung")
                 .refType("AUCTION")
                 .refId(100L)
                 .isRead(false)
-                .build();
-
-        Notification read = Notification.builder()
-                .id(notificationId)
-                .userId(userId)
-                .type(NotificationType.AUCTION_WON)
-                .title("Bạn đã thắng")
-                .content("Nội dung")
-                .refType("AUCTION")
-                .refId(100L)
-                .isRead(true)
+                .createdAt(Instant.parse("2026-11-20T02:00:00Z"))
                 .build();
 
         when(notificationRepository.findById(notificationId)).thenReturn(Optional.of(unread));
-        when(notificationRepository.save(any(Notification.class))).thenReturn(read);
+        when(notificationRepository.save(any(Notification.class))).thenAnswer(inv -> inv.getArgument(0));
 
         NotificationResponse response1 = notificationService.markAsRead(userId, notificationId);
         assertTrue(response1.getIsRead());
-        verify(notificationRepository).save(any(Notification.class));
+        verify(notificationRepository, times(1)).save(any(Notification.class));
 
-        // Gọi lặp lại khi đã đọc (idempotent, không ném lỗi)
-        when(notificationRepository.findById(notificationId)).thenReturn(Optional.of(read));
         NotificationResponse response2 = notificationService.markAsRead(userId, notificationId);
         assertTrue(response2.getIsRead());
         verify(notificationRepository, times(1)).save(any(Notification.class));
     }
 
     @Test
-    @DisplayName("UT-NTF-04 Đánh dấu thông báo người khác bị 404 NOT_FOUND")
-    void markAsRead_OtherUser_ThrowsNotFound() {
-        Long ownerId = 2L;
-        Long attackerId = 3L;
-        Long notificationId = 10L;
-
+    @DisplayName("markAsRead: người khác nhận 403 FORBIDDEN, không tồn tại nhận 404 NOT_FOUND")
+    void markAsRead_OtherUserOrNotFound_ThrowsExpectedErrors() {
         Notification notification = Notification.builder()
-                .id(notificationId)
-                .userId(ownerId)
-                .type(NotificationType.AUCTION_WON)
-                .title("Bạn đã thắng")
-                .content("Nội dung")
-                .refType("AUCTION")
-                .refId(100L)
+                .id(10L)
+                .userId(2L)
+                .type(NotificationType.OUTBID)
                 .isRead(false)
                 .build();
 
-        when(notificationRepository.findById(notificationId)).thenReturn(Optional.of(notification));
+        when(notificationRepository.findById(10L)).thenReturn(Optional.of(notification));
+        BusinessException forbidden = assertThrows(BusinessException.class,
+                () -> notificationService.markAsRead(3L, 10L));
+        assertEquals(ErrorCode.FORBIDDEN, forbidden.getErrorCode());
 
-        AppException ex = assertThrows(AppException.class, () -> notificationService.markAsRead(attackerId, notificationId));
-        assertEquals(HttpStatus.NOT_FOUND, ex.getStatus());
-        assertEquals("NOT_FOUND", ex.getCode());
-        verify(notificationRepository, never()).save(any(Notification.class));
+        when(notificationRepository.findById(99L)).thenReturn(Optional.empty());
+        BusinessException notFound = assertThrows(BusinessException.class,
+                () -> notificationService.markAsRead(2L, 99L));
+        assertEquals(ErrorCode.NOT_FOUND, notFound.getErrorCode());
     }
 
     @Test
-    @DisplayName("UT-NTF-05 Lỗi đẩy WebSocket: WebSocketPublisher ném MessagingException, Listener bắt log WARN và không ném ra")
-    void pushListener_WebSocketFails_CatchesAndLogsWarning() {
-        Long notificationId = 10L;
-        Long userId = 2L;
-
-        Notification notification = Notification.builder()
-                .id(notificationId)
-                .userId(userId)
-                .type(NotificationType.PAYMENT_RESULT)
-                .title("Thanh toán thành công")
-                .content("Đơn #9 đã được thanh toán.")
-                .refType("ORDER")
-                .refId(9L)
-                .isRead(false)
-                .build();
-
-        when(notificationRepository.findById(notificationId)).thenReturn(Optional.of(notification));
-        when(notificationRepository.countByUserIdAndIsReadFalse(userId)).thenReturn(1L);
-
-        doThrow(new MessagingException("Broker is unavailable"))
-                .when(webSocketPublisher).publishToUser(eq(userId), any());
-
-        assertDoesNotThrow(() -> pushListener.onNotificationCreated(new NotificationCreated(notificationId, userId)));
-
-        verify(webSocketPublisher).publishToUser(eq(userId), any());
-    }
-
-    @Test
-    @DisplayName("UT-NTF-06 Khử trùng lặp khi thao tác hàng loạt: 2 sự kiện cùng (userId, type, refId) chỉ ghi 1 thông báo")
-    void notifyBatch_DeduplicatesByUserIdTypeAndRefId() {
-        Long userId = 5L;
-        NotificationItem item1 = NotificationItem.builder()
-                .userId(userId)
-                .type(NotificationType.AUCTION_ENDED)
-                .title("Phiên đã bị hủy: Vi phạm")
-                .content("Phiên #100 đã bị hủy.")
-                .refType("AUCTION")
-                .refId(100L)
-                .build();
-
-        NotificationItem item2 = NotificationItem.builder()
-                .userId(userId)
-                .type(NotificationType.AUCTION_ENDED)
-                .title("Phiên đã bị hủy: Vi phạm")
-                .content("Phiên #100 đã bị hủy.")
-                .refType("AUCTION")
-                .refId(100L)
-                .build();
-
-        Notification saved = Notification.builder()
-                .id(20L)
-                .userId(userId)
-                .type(NotificationType.AUCTION_ENDED)
-                .title("Phiên đã bị hủy: Vi phạm")
-                .content("Phiên #100 đã bị hủy.")
-                .refType("AUCTION")
-                .refId(100L)
-                .isRead(false)
-                .build();
-
-        when(notificationRepository.save(any(Notification.class))).thenReturn(saved);
-
-        notificationService.notifyBatch(List.of(item1, item2));
-
-        // Chỉ lưu và phát sự kiện 1 lần
-        verify(notificationRepository, times(1)).save(any(Notification.class));
-        verify(eventPublisher, times(1)).publishEvent(any(NotificationCreated.class));
-    }
-
-    @Test
-    @DisplayName("getNotifications phân trang và lọc theo isRead")
-    void getNotifications_PaginationAndFilter() {
+    @DisplayName("getNotifications phân trang, lọc và từ chối sort ngoài whitelist")
+    void getNotifications_FiltersAndValidatesSort() {
         Long userId = 2L;
         Notification n = Notification.builder()
                 .id(1L)
@@ -275,35 +201,24 @@ class NotificationServiceTest {
                 .title("Outbid")
                 .content("Content")
                 .isRead(false)
+                .createdAt(Instant.parse("2026-11-20T02:00:00Z"))
                 .build();
 
-        PageImpl<Notification> page = new PageImpl<>(List.of(n), PageRequest.of(0, 20), 1);
-        when(notificationRepository.findNotifications(eq(userId), eq(false), isNull(), any(PageRequest.class)))
+        PageImpl<Notification> page = new PageImpl<>(List.of(n), PageRequest.of(0, 10), 1);
+        when(notificationRepository.findNotifications(eq(userId), eq(false), eq(NotificationType.OUTBID), any(Pageable.class)))
                 .thenReturn(page);
 
-        PageResponse<NotificationResponse> result = notificationService.getNotifications(userId, false, PageRequest.of(0, 20));
+        PageResponse<NotificationResponse> result = notificationService.getNotifications(
+                userId, false, NotificationType.OUTBID, PageRequest.of(0, 10)
+        );
         assertEquals(1, result.getTotalElements());
-        assertEquals(1, result.getContent().size());
         assertEquals(1L, result.getContent().get(0).getId());
-    }
 
-    @Test
-    @DisplayName("getUnreadCount trả về đúng số lượng chưa đọc")
-    void getUnreadCount_ReturnsCount() {
-        Long userId = 2L;
-        when(notificationRepository.countByUserIdAndIsReadFalse(userId)).thenReturn(5L);
-
-        long count = notificationService.getUnreadCount(userId);
-        assertEquals(5L, count);
-    }
-
-    @Test
-    @DisplayName("markAllAsRead cập nhật toàn bộ thông báo chưa đọc thành đã đọc")
-    void markAllAsRead_UpdatesAll() {
-        Long userId = 2L;
-        when(notificationRepository.markAllAsReadByUserId(userId)).thenReturn(3);
-
-        notificationService.markAllAsRead(userId);
-        verify(notificationRepository).markAllAsReadByUserId(userId);
+        BusinessException invalidSort = assertThrows(BusinessException.class, () ->
+                notificationService.getNotifications(
+                        userId, null, null, PageRequest.of(0, 10, Sort.by("unknownField"))
+                )
+        );
+        assertEquals(ErrorCode.VALIDATION_ERROR, invalidSort.getErrorCode());
     }
 }

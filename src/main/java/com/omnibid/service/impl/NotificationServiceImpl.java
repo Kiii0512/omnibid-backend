@@ -3,83 +3,49 @@ package com.omnibid.service.impl;
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
 import com.omnibid.common.PageResponse;
-import com.omnibid.dto.notification.NotificationItem;
+import com.omnibid.common.SortWhitelist;
 import com.omnibid.dto.notification.NotificationResponse;
 import com.omnibid.entity.Notification;
 import com.omnibid.enums.NotificationType;
-import com.omnibid.event.NotificationCreated;
+import com.omnibid.event.NotificationRequested;
 import com.omnibid.repository.NotificationRepository;
 import com.omnibid.service.NotificationService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
-import org.springframework.http.HttpStatus;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class NotificationServiceImpl implements NotificationService {
 
+    private static final Set<String> ALLOWED_SORT_PROPERTIES = Set.of("createdAt", "id");
+
     private final NotificationRepository notificationRepository;
     private final ApplicationEventPublisher eventPublisher;
 
     @Override
-    @Transactional(propagation = Propagation.MANDATORY)
     public void notify(Long userId, NotificationType type, String title, String content, String refType, Long refId) {
-        Notification notification = Notification.builder()
-                .userId(userId)
-                .type(type)
-                .title(title)
-                .content(content)
-                .refType(refType)
-                .refId(refId)
-                .isRead(false)
-                .build();
-
-        Notification saved = notificationRepository.save(notification);
-        eventPublisher.publishEvent(new NotificationCreated(saved.getId(), userId));
-        log.info("Saved notification id={} type={} for user={}", saved.getId(), type, userId);
-    }
-
-    @Override
-    @Transactional(propagation = Propagation.MANDATORY)
-    public void notifyBatch(List<NotificationItem> items) {
-        if (items == null || items.isEmpty()) {
+        if (userId == null) {
             return;
         }
-
-        // Khử trùng lặp theo (userId, type, refId) theo NTF-06 / UT-NTF-06
-        Map<String, NotificationItem> uniqueMap = new LinkedHashMap<>();
-        for (NotificationItem item : items) {
-            if (item.getUserId() == null) continue;
-            String key = item.getUserId() + ":" + item.getType() + ":" + item.getRefId();
-            uniqueMap.putIfAbsent(key, item);
-        }
-
-        for (NotificationItem item : uniqueMap.values()) {
-            notify(item.getUserId(), item.getType(), item.getTitle(), item.getContent(), item.getRefType(), item.getRefId());
-        }
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public PageResponse<NotificationResponse> getNotifications(Long userId, Boolean isRead, Pageable pageable) {
-        return getNotifications(userId, isRead, null, pageable);
+        eventPublisher.publishEvent(new NotificationRequested(userId, type, title, content, refType, refId));
     }
 
     @Override
     @Transactional(readOnly = true)
     public PageResponse<NotificationResponse> getNotifications(Long userId, Boolean isRead, NotificationType type, Pageable pageable) {
-        Page<Notification> page = notificationRepository.findNotifications(userId, isRead, type, pageable);
+        SortWhitelist.validate(pageable, ALLOWED_SORT_PROPERTIES);
+        Pageable effective = normalizePageable(pageable);
+        Page<Notification> page = notificationRepository.findNotifications(userId, isRead, type, effective);
         return PageResponse.from(page, NotificationResponse::from);
     }
 
@@ -87,10 +53,10 @@ public class NotificationServiceImpl implements NotificationService {
     @Transactional
     public NotificationResponse markAsRead(Long userId, Long notificationId) {
         Notification notification = notificationRepository.findById(notificationId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Notification not found with id: " + notificationId));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy thông báo #" + notificationId));
 
         if (!notification.getUserId().equals(userId)) {
-            throw new BusinessException(ErrorCode.NOT_FOUND, "Notification not found with id: " + notificationId);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền truy cập thông báo này");
         }
 
         if (Boolean.TRUE.equals(notification.getIsRead())) {
@@ -102,15 +68,12 @@ public class NotificationServiceImpl implements NotificationService {
         return NotificationResponse.from(saved);
     }
 
-    @Override
-    @Transactional(readOnly = true)
-    public long getUnreadCount(Long userId) {
-        return notificationRepository.countByUserIdAndIsReadFalse(userId);
-    }
-
-    @Override
-    @Transactional
-    public void markAllAsRead(Long userId) {
-        notificationRepository.markAllAsReadByUserId(userId);
+    private Pageable normalizePageable(Pageable pageable) {
+        int page = Math.max(0, pageable.getPageNumber());
+        int size = Math.min(Math.max(1, pageable.getPageSize()), 100);
+        Sort sort = pageable.getSort().isSorted()
+                ? pageable.getSort()
+                : Sort.by(Sort.Direction.DESC, "createdAt");
+        return PageRequest.of(page, size, sort);
     }
 }

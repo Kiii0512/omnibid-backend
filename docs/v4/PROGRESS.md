@@ -10,7 +10,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 4. Ảnh, sản phẩm, danh mục
 - [x] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [x] 6. Đơn hàng, thanh toán, giao hàng
-- [ ] 7. Thông báo, báo cáo vi phạm
+- [x] 7. Thông báo, báo cáo vi phạm
 - [ ] 8. Quản trị
 - [ ] 9. Kiểm thử, tài liệu, rà soát cuối
 
@@ -57,6 +57,10 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
   - `F2`, `F3`, `F4`, `F6`, `F8`, `F9`: Chuẩn hóa `OrderAccessPolicy` (bỏ ADMIN khỏi `requireViewer`, xóa `requireSellerOrAdmin`, thêm `requireSeller`); cập nhật `OrderController`/`OrderServiceImpl` khớp `RESPONSE_DTO_v4.md` (`OrderSummaryResponse`, `OrderDetailResponse` dùng `buyer`/`seller` dạng `UserRef`, bỏ `latestPayment`/`allowedActions`, xóa `GET /orders/summary` và `OrderUserSummaryResponse`); `PATCH /orders/{id}/shipping-info` chỉ cho phép khi `PENDING_PAYMENT`; thêm `POST /orders/{id}/ship` (`ShipOrderRequest` tùy chọn `trackingCode` ≤ 50 ký tự → `ShipOrderResponse`, gửi `ORDER_UPDATE` cho người mua); đổi `confirm-receipt` sang `POST /orders/{id}/confirm-receipt` (khóa order → product `markSold()`, giữ `HIDDEN` theo BR-16, gửi `ORDER_UPDATE` cho người bán).
   - `OrderRepository` & `OrderLifecycleSupport`: Đồng bộ mốc `now >= deadline` (`<= :now` trong truy vấn quét và `Order.isPaymentOverdue`), tự động hết hạn (`release()` trừ `HIDDEN`) và tự hoàn tất (`markSold()` trừ `HIDDEN`), gửi `ORDER_UPDATE` cho hai bên.
   - Sửa 4 unit test Phase 6 (`DefaultMockPaymentGatewayTest`, `OrderSchedulerTest`, `OrderServiceTest`, `PaymentServiceTest`) và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
+- **Phase 7** (`refactor(v4): phase 7 - notifications and reports`):
+  - `G1`, `G2`, `G5`: Chuyển `NotificationServiceImpl.notify(...)` sang chỉ phát sự kiện `NotificationRequested` (không ghi DB trong transaction nghiệp vụ); `NotificationPushListener` xử lý `@TransactionalEventListener(phase = AFTER_COMMIT)` với `@Transactional(REQUIRES_NEW)`, bỏ qua người nhận `ADMIN` và lưu `Notification`; xóa `NotificationCreated`, `NotificationItem`. Chuẩn hóa `NotificationTemplates` theo 5 loại v4 với định dạng tiền `520.000 ₫` và múi giờ `+07:00` (xóa các mẫu cũ không còn dùng). Cập nhật `NotificationResponse` khớp `RESPONSE_DTO_v4.md` (bỏ `unreadCount`, giữ `refType`/`refId` kể cả khi null). Cập nhật `NotificationController` (`GET /notifications` mặc định `size=10, createdAt,desc`, whitelist sort; đổi sang `POST /notifications/{id}/read`, người khác → 403 `FORBIDDEN`, idempotent; xóa `unread-count` và `read-all`).
+  - `G3`, `G4`: Tách endpoint quản trị báo cáo sang `AdminReportController` (`GET /admin/reports`, `GET /admin/reports/{id}`, `POST /admin/reports/{id}/resolve`), `ReportController` chỉ giữ `POST /reports` (201, `ReportResponse { id, status, createdAt }`). Chuẩn hóa `ReportRequest` (`reportedProductId, reportedUserId, reportedOrderId, reason @NotBlank ≤ 1000`), `ReportResolveRequest` (`decision, note @NotBlank`), `AdminReportItemResponse`, `AdminReportDetailResponse`, `ReportTargetSummary` khớp `RESPONSE_DTO_v4.md`; xóa `ReportDetailResponse`, `ReportResolveResponse`. `ReportServiceImpl` độc lập `AdminService`, chỉ đổi trạng thái báo cáo (RESOLVED/REJECTED) và gửi `REPORT_RESOLVED` sau COMMIT.
+  - Sửa 4 tệp test Phase 7 (`NotificationServiceTest`, `ReportServiceTest`, `NotificationControllerTest`, `ReportControllerTest`) và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
 
 ## Bảng ánh xạ mã lỗi cũ → mới (phase 1)
 | Mã cũ (`AppException`) | Mã mới (`ErrorCode`) | HTTP mới | Ghi chú |
@@ -89,11 +93,13 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - **`MaskingUtils.maskName` & `winnerName` (Phase 5)**: Thống nhất ẩn danh theo đúng ví dụ `API_SPEC_v4.md` §3 (`ký tự đầu + *** + ký tự cuối`, 1 ký tự → `ký tự đầu + ***`), áp dụng cho cả `highestBidderName`, `bidderName` và `winnerName` ở response công khai.
 - **Quyền ADMIN xem chi tiết/lịch sử đặt giá của sản phẩm `HIDDEN` (Phase 5)**: `GET /api/v1/auctions` luôn loại sản phẩm `HIDDEN`; `GET /api/v1/auctions/{id}` và `GET /api/v1/auctions/{id}/bids` trả 404 `NOT_FOUND` với mọi người gọi không phải ADMIN (cho phép ADMIN tra cứu lịch sử đặt giá vì không có `/admin/auctions/{id}/bids` riêng).
 - **Trường tùy chọn `?` trong `AuctionDetailResponse` & `AuctionEvent` (Phase 5)**: Gắn `@JsonInclude(JsonInclude.Include.NON_NULL)` riêng trên `reservePrice`, `orderId` (`AuctionDetailResponse`) và `bid` (`AuctionEvent`) để chỉ xuất hiện khi thỏa điều kiện; các trường `T | null` khác luôn có mặt trong JSON.
+- **Chặn tự báo cáo & chuẩn hóa độ dài lý do/ghi chú báo cáo (Phase 7)**: Không cho phép người dùng tự báo cáo chính mình (`reportedUserId == currentUser.id`) hoặc tự báo cáo sản phẩm của mình (`product.sellerId == currentUser.id`) → 400 `VALIDATION_ERROR`. Bỏ giới hạn tối thiểu cứng cũ (`min=10` cho `reason`, `min=5` cho `note`), dùng `@NotBlank` (và `max=1000` cho `reason`, `max=2000` cho `note`) theo v4.
+- **Ghi thông báo sau COMMIT & lọc ADMIN (Phase 7)**: `NotificationService.notify(...)` chỉ phát sự kiện `NotificationRequested`; `NotificationPushListener` ghi DB trong `REQUIRES_NEW` sau `AFTER_COMMIT` và bỏ qua nếu người nhận là `ADMIN` (phù hợp việc v4 không có kênh WebSocket cá nhân `/queue/notifications`).
 
 ## Cần người duyệt
 
 ## Việc tồn / test còn lỗi
-- Sau Phase 6: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch toàn bộ 7 endpoint đơn hàng/thanh toán/giao hàng và 0 từ khóa cấm.
-- Đã cập nhật 4 tệp unit test Phase 6 (`DefaultMockPaymentGatewayTest`, `OrderSchedulerTest`, `OrderServiceTest`, `PaymentServiceTest`) biên dịch sạch theo v4.
-- **15 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` do thuộc Phase 7–9 hoặc tham chiếu lớp/enum cũ (`NotificationControllerTest`, `OrderControllerTest`, `PaymentControllerTest`, `ReportControllerTest`, `ShipmentControllerTest`, `AuthorizationIT`, `NotificationIntegrationIT`, `PaymentIntegrationIT`, `AdminServiceTest`, `CategoryServiceTest`, `NotificationServiceTest`, `ProductServiceTest`, `ReportServiceTest`, `ShipmentServiceTest`, `Seed`) — sẽ sửa/gỡ ở Phase 9.
+- Sau Phase 7: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch toàn bộ 6 endpoint thông báo/báo cáo và 0 từ khóa cấm (chỉ còn 7 endpoint thiếu / 2 endpoint cũ của Phase 8 quản trị).
+- Đã cập nhật 4 tệp test Phase 7 (`NotificationServiceTest`, `ReportServiceTest`, `NotificationControllerTest`, `ReportControllerTest`) biên dịch sạch theo v4.
+- **11 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` do thuộc Phase 8–9 hoặc tham chiếu lớp/enum cũ (`AdminServiceTest`, `AuthorizationIT`, `CategoryServiceTest`, `NotificationIntegrationIT`, `OrderControllerTest`, `PaymentControllerTest`, `PaymentIntegrationIT`, `ProductServiceTest`, `Seed`, `ShipmentControllerTest`, `ShipmentServiceTest`) — sẽ sửa/gỡ ở Phase 8–9.
 - Đã thêm `src/test/java/com/omnibid/common/ImageValidatorTest.java` và `src/test/java/com/omnibid/config/JacksonConfigTest.java`.
