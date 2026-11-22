@@ -93,7 +93,7 @@ public class OrderServiceImpl implements OrderService {
     public Order createFromAuction(Auction auction, Instant closedAt) {
         return orderRepository.findByAuctionId(auction.getId())
                 .orElseGet(() -> {
-                    int deadlineHours = appProperties.getOrder().getPaymentDeadlineHours();
+                    Duration paymentDeadline = appProperties.getOrder().getPaymentDeadlineDuration();
                     Instant effectiveClosedAt = closedAt != null ? closedAt : Instant.now(clock);
                     Order order = Order.builder()
                             .auctionId(auction.getId())
@@ -102,7 +102,7 @@ public class OrderServiceImpl implements OrderService {
                             .buyerId(auction.getWinnerId())
                             .finalPrice(auction.getFinalPrice())
                             .status(OrderStatus.PENDING_PAYMENT)
-                            .paymentDeadline(effectiveClosedAt.plus(Duration.ofHours(deadlineHours)))
+                            .paymentDeadline(effectiveClosedAt.plus(paymentDeadline))
                             .build();
                     log.info("Creating order for auction {}: buyer={}, amount={}",
                             auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
@@ -177,9 +177,9 @@ public class OrderServiceImpl implements OrderService {
             throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng phải ở trạng thái PAID để giao hàng");
         }
 
-        int confirmWindowDays = appProperties.getOrder().getConfirmDeadlineDays();
+        Duration confirmWindow = appProperties.getOrder().getConfirmDeadlineDuration();
         Instant now = Instant.now(clock);
-        order.markShipped(request != null ? request.trackingCode() : null, now, Duration.ofDays(confirmWindowDays));
+        order.markShipped(request != null ? request.trackingCode() : null, now, confirmWindow);
         Order saved = orderRepository.save(order);
 
         Long bId = saved.getBuyerId();
@@ -260,11 +260,16 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public void expireOverdueOrders() {
-        Instant now = Instant.now(clock);
-        List<Long> ids = orderRepository.findIdsByStatusAndPaymentDeadlineLessThanEqual(OrderStatus.PENDING_PAYMENT, now);
+        expireOverdueOrders(Instant.now(clock));
+    }
+
+    @Override
+    public void expireOverdueOrders(Instant now) {
+        Instant effectiveNow = now != null ? now : Instant.now(clock);
+        List<Long> ids = orderRepository.findIdsByStatusAndPaymentDeadlineLessThanEqual(OrderStatus.PENDING_PAYMENT, effectiveNow);
         for (Long id : ids) {
             try {
-                orderLifecycleSupport.expireOne(id, now);
+                orderLifecycleSupport.expireOne(id, effectiveNow);
             } catch (Exception ex) {
                 log.error("Failed to expire order {}", id, ex);
             }
@@ -273,11 +278,16 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     public void autoCompleteOrders() {
-        Instant now = Instant.now(clock);
-        List<Long> ids = orderRepository.findIdsByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, now);
+        autoCompleteOrders(Instant.now(clock));
+    }
+
+    @Override
+    public void autoCompleteOrders(Instant now) {
+        Instant effectiveNow = now != null ? now : Instant.now(clock);
+        List<Long> ids = orderRepository.findIdsByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, effectiveNow);
         for (Long id : ids) {
             try {
-                orderLifecycleSupport.autoCompleteOne(id, now);
+                orderLifecycleSupport.autoCompleteOne(id, effectiveNow);
             } catch (Exception ex) {
                 log.error("Failed to auto-complete order id={}", id, ex);
             }

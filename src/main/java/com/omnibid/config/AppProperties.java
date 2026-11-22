@@ -57,6 +57,14 @@ public record AppProperties(
         public int getConfirmWindowDays() {
             return (int) confirmDeadlineDays.toDays();
         }
+
+        public Duration getPaymentDeadlineDuration() {
+            return paymentDeadlineHours;
+        }
+
+        public Duration getConfirmDeadlineDuration() {
+            return confirmDeadlineDays;
+        }
     }
 
     public record Auction(

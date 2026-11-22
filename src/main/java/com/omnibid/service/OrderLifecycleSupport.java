@@ -15,6 +15,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Instant;
 
 @Slf4j
@@ -25,6 +26,7 @@ public class OrderLifecycleSupport {
     private final ProductRepository productRepository;
     private final PaymentRepository paymentRepository;
     private final NotificationService notificationService;
+    private final Clock clock;
     private ReportRepository reportRepository;
     private com.omnibid.common.AfterCommitExecutor afterCommitExecutor;
 
@@ -37,10 +39,15 @@ public class OrderLifecycleSupport {
                                  ProductRepository productRepository,
                                  PaymentRepository paymentRepository,
                                  NotificationService notificationService) {
-        this.orderRepository = orderRepository;
-        this.productRepository = productRepository;
-        this.paymentRepository = paymentRepository;
-        this.notificationService = notificationService;
+        this(orderRepository, productRepository, paymentRepository, notificationService, null, Clock.systemUTC());
+    }
+
+    public OrderLifecycleSupport(OrderRepository orderRepository,
+                                 ProductRepository productRepository,
+                                 PaymentRepository paymentRepository,
+                                 NotificationService notificationService,
+                                 ReportRepository reportRepository) {
+        this(orderRepository, productRepository, paymentRepository, notificationService, reportRepository, Clock.systemUTC());
     }
 
     @Autowired
@@ -48,22 +55,29 @@ public class OrderLifecycleSupport {
                                  ProductRepository productRepository,
                                  PaymentRepository paymentRepository,
                                  NotificationService notificationService,
-                                 ReportRepository reportRepository) {
+                                 ReportRepository reportRepository,
+                                 Clock clock) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
         this.paymentRepository = paymentRepository;
         this.notificationService = notificationService;
         this.reportRepository = reportRepository;
+        this.clock = clock != null ? clock : Clock.systemUTC();
+    }
+
+    public void expireOne(Long orderId) {
+        expireOne(orderId, Instant.now(clock));
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void expireOne(Long orderId, Instant now) {
+        Instant effectiveNow = now != null ? now : Instant.now(clock);
         Order initial = orderRepository.findById(orderId).orElse(null);
         if (initial == null || initial.getStatus() != OrderStatus.PENDING_PAYMENT) {
             return;
         }
 
-        if (now.isBefore(initial.getPaymentDeadline())) {
+        if (effectiveNow.isBefore(initial.getPaymentDeadline())) {
             return;
         }
 
@@ -77,7 +91,7 @@ public class OrderLifecycleSupport {
                 ? productRepository.findByIdForUpdate(order.getProductId()).orElse(null)
                 : null;
 
-        if (now.isBefore(order.getPaymentDeadline())) {
+        if (effectiveNow.isBefore(order.getPaymentDeadline())) {
             return;
         }
 
@@ -86,7 +100,7 @@ public class OrderLifecycleSupport {
             return;
         }
 
-        order.expire(now);
+        order.expire(effectiveNow);
         orderRepository.save(order);
 
         if (product != null) {
@@ -121,14 +135,19 @@ public class OrderLifecycleSupport {
         log.info("Order {} EXPIRED at {}", order.getId(), now);
     }
 
+    public void autoCompleteOne(Long orderId) {
+        autoCompleteOne(orderId, Instant.now(clock));
+    }
+
     @Transactional(propagation = Propagation.REQUIRES_NEW)
     public void autoCompleteOne(Long orderId, Instant now) {
+        Instant effectiveNow = now != null ? now : Instant.now(clock);
         Order initial = orderRepository.findById(orderId).orElse(null);
         if (initial == null || initial.getStatus() != OrderStatus.SHIPPING) {
             return;
         }
 
-        if (initial.getConfirmDeadline() == null || now.isBefore(initial.getConfirmDeadline())) {
+        if (initial.getConfirmDeadline() == null || effectiveNow.isBefore(initial.getConfirmDeadline())) {
             return;
         }
 
@@ -141,11 +160,11 @@ public class OrderLifecycleSupport {
                 ? productRepository.findByIdForUpdate(order.getProductId()).orElse(null)
                 : null;
 
-        if (order.getConfirmDeadline() == null || now.isBefore(order.getConfirmDeadline())) {
+        if (order.getConfirmDeadline() == null || effectiveNow.isBefore(order.getConfirmDeadline())) {
             return;
         }
 
-        order.autoComplete(now);
+        order.autoComplete(effectiveNow);
         orderRepository.save(order);
 
         if (product != null) {

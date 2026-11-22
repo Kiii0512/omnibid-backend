@@ -33,5 +33,9 @@ public interface OrderService {
 
     void expireOverdueOrders();
 
+    void expireOverdueOrders(Instant now);
+
     void autoCompleteOrders();
+
+    void autoCompleteOrders(Instant now);
 }

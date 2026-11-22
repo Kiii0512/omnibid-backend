@@ -40,6 +40,8 @@ class AppPropertiesTest {
         assertThat(appProperties.order()).isNotNull();
         assertThat(appProperties.order().getPaymentDeadlineHours()).isEqualTo(48);
         assertThat(appProperties.order().getConfirmDeadlineDays()).isEqualTo(7);
+        assertThat(appProperties.order().getPaymentDeadlineDuration()).isEqualTo(Duration.ofHours(48));
+        assertThat(appProperties.order().getConfirmDeadlineDuration()).isEqualTo(Duration.ofDays(7));
 
         assertThat(appProperties.auction()).isNotNull();
         assertThat(appProperties.auction().getMinDurationMinutes()).isEqualTo(60);
@@ -59,5 +61,13 @@ class AppPropertiesTest {
 
         assertThat(appProperties.cors()).isNotNull();
         assertThat(appProperties.cors().allowedOrigins()).isEqualTo("http://localhost:3000");
+    }
+
+    @Test
+    @DisplayName("AppProperties.Order handles short duration like 3m correctly")
+    void testAppPropertiesCustomDuration() {
+        AppProperties.Order order = new AppProperties.Order(Duration.ofMinutes(3), Duration.ofMinutes(3));
+        assertThat(order.getPaymentDeadlineDuration()).isEqualTo(Duration.ofMinutes(3));
+        assertThat(order.getConfirmDeadlineDuration()).isEqualTo(Duration.ofMinutes(3));
     }
 }
