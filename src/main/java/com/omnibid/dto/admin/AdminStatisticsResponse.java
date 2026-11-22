@@ -1,24 +1,16 @@
 package com.omnibid.dto.admin;
 
+import com.omnibid.enums.AuctionStatus;
+import com.omnibid.enums.OrderStatus;
+
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.util.Map;
 
 public record AdminStatisticsResponse(
-        RangeDto range,
-        UserStats users,
-        Map<String, Long> products,
-        AuctionStats auctions,
-        BidStats bids,
-        Map<String, Long> orders,
-        RevenueStats revenue,
-        PaymentStats payments,
-        Map<String, Long> reports
-) {
-    public record RangeDto(Instant from, Instant to) {}
-    public record UserStats(long total, long active, long banned, long newInRange) {}
-    public record AuctionStats(long scheduled, long active, long ended, long unsold, long cancelled, double sellThroughRate) {}
-    public record BidStats(long total, long inRange, double avgPerAuction) {}
-    public record RevenueStats(boolean simulated, BigDecimal completedOrderTotal) {}
-    public record PaymentStats(long success, long failed, long pending, double successRate) {}
-}
+        long totalUsers,
+        long bannedUsers,
+        Map<AuctionStatus, Long> auctionsByStatus,
+        Map<OrderStatus, Long> ordersByStatus,
+        BigDecimal completedOrderValue,
+        long pendingReports
+) {}

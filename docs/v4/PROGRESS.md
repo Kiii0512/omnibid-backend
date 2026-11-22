@@ -11,7 +11,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [x] 6. Đơn hàng, thanh toán, giao hàng
 - [x] 7. Thông báo, báo cáo vi phạm
-- [ ] 8. Quản trị
+- [x] 8. Quản trị
 - [ ] 9. Kiểm thử, tài liệu, rà soát cuối
 
 ## Baseline (phase 0)
@@ -61,6 +61,14 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
   - `G1`, `G2`, `G5`: Chuyển `NotificationServiceImpl.notify(...)` sang chỉ phát sự kiện `NotificationRequested` (không ghi DB trong transaction nghiệp vụ); `NotificationPushListener` xử lý `@TransactionalEventListener(phase = AFTER_COMMIT)` với `@Transactional(REQUIRES_NEW)`, bỏ qua người nhận `ADMIN` và lưu `Notification`; xóa `NotificationCreated`, `NotificationItem`. Chuẩn hóa `NotificationTemplates` theo 5 loại v4 với định dạng tiền `520.000 ₫` và múi giờ `+07:00` (xóa các mẫu cũ không còn dùng). Cập nhật `NotificationResponse` khớp `RESPONSE_DTO_v4.md` (bỏ `unreadCount`, giữ `refType`/`refId` kể cả khi null). Cập nhật `NotificationController` (`GET /notifications` mặc định `size=10, createdAt,desc`, whitelist sort; đổi sang `POST /notifications/{id}/read`, người khác → 403 `FORBIDDEN`, idempotent; xóa `unread-count` và `read-all`).
   - `G3`, `G4`: Tách endpoint quản trị báo cáo sang `AdminReportController` (`GET /admin/reports`, `GET /admin/reports/{id}`, `POST /admin/reports/{id}/resolve`), `ReportController` chỉ giữ `POST /reports` (201, `ReportResponse { id, status, createdAt }`). Chuẩn hóa `ReportRequest` (`reportedProductId, reportedUserId, reportedOrderId, reason @NotBlank ≤ 1000`), `ReportResolveRequest` (`decision, note @NotBlank`), `AdminReportItemResponse`, `AdminReportDetailResponse`, `ReportTargetSummary` khớp `RESPONSE_DTO_v4.md`; xóa `ReportDetailResponse`, `ReportResolveResponse`. `ReportServiceImpl` độc lập `AdminService`, chỉ đổi trạng thái báo cáo (RESOLVED/REJECTED) và gửi `REPORT_RESOLVED` sau COMMIT.
   - Sửa 4 tệp test Phase 7 (`NotificationServiceTest`, `ReportServiceTest`, `NotificationControllerTest`, `ReportControllerTest`) và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
+- **Phase 8** (`refactor(v4): phase 8 - admin`):
+  - `H1`, `H2`, `H3`, `H4`, `H5`, `H6`: Tách `AdminController` thành 6 controller nhỏ dưới `controller/admin/` (`AdminUserController`, `AdminProductController`, `AdminAuctionController`, `AdminOrderController`, `AdminCategoryController`, `AdminStatisticsController`), tất cả `@PreAuthorize("hasRole('ADMIN')")`; xóa `AdminController` và các DTO cũ (`UserStatusUpdateRequest`, `UserStatusUpdateResponse`, `ProductHideRequest`, `AdminOrderSummaryResponse`, `AdminProductResponse`, `AuctionResponse`, `OrderResponse`).
+  - `banUser` (`POST /admin/users/{id}/ban`) & `unbanUser` (`POST /admin/users/{id}/unban`): cập nhật trạng thái bằng một câu `UserRepository.updateStatus(...)` không khóa `users`; kiểm tra `CANNOT_BAN_ADMIN` và `INVALID_STATUS_TRANSITION`; khóa 3 vòng đúng thứ tự `auctions → orders → products` (id tăng dần), giữ nguyên `bids` (BR-03), gửi `AUCTION_CANCELLED` cho người bán + người dẫn đầu, WebSocket `AUCTION_CANCELLED`, `ORDER_UPDATE` cho **bên còn lại** của từng đơn sau COMMIT; trả `{ id, status, cancelledAuctions, cancelledOrders }` / `{ id, status }`.
+  - `hideProduct` (`POST /admin/products/{id}/hide`): khóa `auctions → orders → product` (id tăng dần), hủy phiên mở và đơn `PENDING_PAYMENT` (giữ nguyên `PAID`/`SHIPPING`), chuyển sản phẩm sang `HIDDEN` (đã `HIDDEN`/`SOLD` → `INVALID_STATUS_TRANSITION`, không có bỏ ẩn), gửi `AUCTION_CANCELLED` + WebSocket và `ORDER_UPDATE` cho hai bên sau COMMIT.
+  - `cancelAuction` (`POST /admin/auctions/{id}/cancel`) & `cancelOrder` (`POST /admin/orders/{id}/cancel`): bắt buộc `reason` (`@NotBlank` ≤ 500); hủy phiên mở bất kể `bidCount` (`auctions → products`); hủy đơn chỉ khi `PENDING_PAYMENT` (`orders → products`); trả `AdminAuctionDetailResponse` / `AdminOrderDetailResponse`.
+  - Danh sách & chi tiết quản trị: bổ sung `GET /admin/products/{id}`, `GET /admin/auctions`, `GET /admin/auctions/{id}`, `GET /admin/orders/{id}` (kèm `payments`); chuẩn hóa bộ lọc (`keyword`, `role`, `fromDate`/`toDate`) và `SortWhitelist` (mặc định `size=10, createdAt,desc`); tất cả DTO khớp `RESPONSE_DTO_v4.md` §7.
+  - `GET /admin/statistics`: bỏ `from`/`to`, trả số liệu tích lũy `{ totalUsers, bannedUsers, auctionsByStatus, ordersByStatus, completedOrderValue, pendingReports }` dùng `COUNT ... GROUP BY`, luôn đủ khóa mọi trạng thái kể cả 0.
+  - Viết lại `AdminServiceTest` theo v4 và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
 
 ## Bảng ánh xạ mã lỗi cũ → mới (phase 1)
 | Mã cũ (`AppException`) | Mã mới (`ErrorCode`) | HTTP mới | Ghi chú |
@@ -95,11 +103,13 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - **Trường tùy chọn `?` trong `AuctionDetailResponse` & `AuctionEvent` (Phase 5)**: Gắn `@JsonInclude(JsonInclude.Include.NON_NULL)` riêng trên `reservePrice`, `orderId` (`AuctionDetailResponse`) và `bid` (`AuctionEvent`) để chỉ xuất hiện khi thỏa điều kiện; các trường `T | null` khác luôn có mặt trong JSON.
 - **Chặn tự báo cáo & chuẩn hóa độ dài lý do/ghi chú báo cáo (Phase 7)**: Không cho phép người dùng tự báo cáo chính mình (`reportedUserId == currentUser.id`) hoặc tự báo cáo sản phẩm của mình (`product.sellerId == currentUser.id`) → 400 `VALIDATION_ERROR`. Bỏ giới hạn tối thiểu cứng cũ (`min=10` cho `reason`, `min=5` cho `note`), dùng `@NotBlank` (và `max=1000` cho `reason`, `max=2000` cho `note`) theo v4.
 - **Ghi thông báo sau COMMIT & lọc ADMIN (Phase 7)**: `NotificationService.notify(...)` chỉ phát sự kiện `NotificationRequested`; `NotificationPushListener` ghi DB trong `REQUIRES_NEW` sau `AFTER_COMMIT` và bỏ qua nếu người nhận là `ADMIN` (phù hợp việc v4 không có kênh WebSocket cá nhân `/queue/notifications`).
+- **Mở khóa tài khoản không đổi `token_version` (Phase 8)**: `POST /admin/users/{id}/unban` chỉ đổi `users.status` từ `BANNED` sang `ACTIVE`, giữ nguyên `token_version` (JWT còn hạn trước đó dùng lại được vì tài khoản không còn `BANNED`).
+- **Xóa các DTO cũ không còn sử dụng (Phase 8)**: Đã xóa `AdminController`, `UserStatusUpdateRequest`, `UserStatusUpdateResponse`, `ProductHideRequest`, `AdminOrderSummaryResponse`, `AdminProductResponse`, `AuctionResponse`, `OrderResponse` sau khi toàn bộ endpoint chuyển sang DTO chuẩn `RESPONSE_DTO_v4.md`.
 
 ## Cần người duyệt
 
 ## Việc tồn / test còn lỗi
-- Sau Phase 7: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch toàn bộ 6 endpoint thông báo/báo cáo và 0 từ khóa cấm (chỉ còn 7 endpoint thiếu / 2 endpoint cũ của Phase 8 quản trị).
-- Đã cập nhật 4 tệp test Phase 7 (`NotificationServiceTest`, `ReportServiceTest`, `NotificationControllerTest`, `ReportControllerTest`) biên dịch sạch theo v4.
-- **11 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` do thuộc Phase 8–9 hoặc tham chiếu lớp/enum cũ (`AdminServiceTest`, `AuthorizationIT`, `CategoryServiceTest`, `NotificationIntegrationIT`, `OrderControllerTest`, `PaymentControllerTest`, `PaymentIntegrationIT`, `ProductServiceTest`, `Seed`, `ShipmentControllerTest`, `ShipmentServiceTest`) — sẽ sửa/gỡ ở Phase 8–9.
+- Sau Phase 8: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` đạt **ALL v4 CHECKS PASSED** (đủ đúng **54 endpoint REST v4**, 10 bảng, 24 mã lỗi, 0 từ khóa cấm).
+- Đã viết lại `AdminServiceTest` biên dịch sạch theo v4.
+- **11 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` (`AdminControllerTest`, `OrderControllerTest`, `PaymentControllerTest`, `ShipmentControllerTest`, `AuthorizationIT`, `NotificationIntegrationIT`, `PaymentIntegrationIT`, `CategoryServiceTest`, `ProductServiceTest`, `ShipmentServiceTest`, `Seed`) — sẽ sửa/gỡ ở Phase 9.
 - Đã thêm `src/test/java/com/omnibid/common/ImageValidatorTest.java` và `src/test/java/com/omnibid/config/JacksonConfigTest.java`.

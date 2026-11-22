@@ -4,7 +4,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 
 public record AdminCancelAuctionRequest(
-        @NotBlank(message = "reason is required")
-        @Size(min = 5, message = "reason must be at least 5 characters")
+        @NotBlank(message = "Lý do hủy phiên không được để trống")
+        @Size(max = 500, message = "Lý do hủy tối đa 500 ký tự")
         String reason
 ) {}

@@ -5,9 +5,13 @@ import com.omnibid.common.ErrorCode;
 import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.common.PageResponse;
+import com.omnibid.common.SortWhitelist;
 import com.omnibid.dto.admin.*;
-import com.omnibid.dto.auction.AuctionResponse;
-import com.omnibid.dto.order.OrderResponse;
+import com.omnibid.dto.order.OrderSummaryResponse;
+import com.omnibid.dto.payment.PaymentHistoryResponse;
+import com.omnibid.dto.product.ProductImageResponse;
+import com.omnibid.dto.user.UserRef;
+import com.omnibid.dto.user.UserSummary;
 import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.entity.*;
 import com.omnibid.enums.*;
@@ -24,128 +28,119 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Clock;
 import java.time.Instant;
-import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class AdminServiceImpl implements AdminService {
 
+    private static final List<AuctionStatus> OPEN_AUCTION_STATUSES =
+            List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE);
+
+    private static final Set<String> USER_SORT_FIELDS = Set.of("createdAt", "id", "fullName", "email");
+    private static final Set<String> PRODUCT_SORT_FIELDS = Set.of("createdAt", "id", "title");
+    private static final Set<String> AUCTION_SORT_FIELDS = Set.of("createdAt", "id", "startTime", "endTime", "currentPrice");
+    private static final Set<String> ORDER_SORT_FIELDS = Set.of("createdAt", "id", "finalPrice", "paymentDeadline");
+
     private final ProductRepository productRepository;
+    private final ProductImageRepository productImageRepository;
     private final OrderRepository orderRepository;
     private final PaymentRepository paymentRepository;
     private final AuctionRepository auctionRepository;
     private final UserRepository userRepository;
-    private final BidRepository bidRepository;
     private final ReportRepository reportRepository;
     private final CategoryRepository categoryRepository;
     private final NotificationService notificationService;
     private final WebSocketPublisher webSocketPublisher;
     private final Clock clock;
 
-    @Override
-    @Transactional
-    public UserStatusUpdateResponse updateUserStatus(CurrentUser admin, Long userId, UserStatusUpdateRequest request) {
-        requireAdmin(admin);
-
-        if (request.status() == UserStatus.BANNED) {
-            Map<String, Object> effects = banUserInternal(userId, request.reason(), admin.id());
-            return new UserStatusUpdateResponse(userId, UserStatus.BANNED, effects);
-        } else if (request.status() == UserStatus.ACTIVE) {
-            unbanUserInternal(userId, request.reason(), admin.id());
-            return new UserStatusUpdateResponse(userId, UserStatus.ACTIVE, Map.of());
-        } else {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Unsupported user status: " + request.status());
-        }
-    }
+    // -------------------------------------------------------------------------
+    // Users
+    // -------------------------------------------------------------------------
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<AdminUserResponse> getUsers(CurrentUser admin, UserStatus status, String q, Pageable pageable) {
+    public PageResponse<AdminUserResponse> getUsers(CurrentUser admin, String keyword, UserStatus status, UserRole role, Pageable pageable) {
         requireAdmin(admin);
+        SortWhitelist.validate(pageable, USER_SORT_FIELDS);
 
-        String searchQuery = (q != null && !q.trim().isEmpty()) ? q.trim() : null;
-        Page<User> page = userRepository.findAdminUsers(status, searchQuery, pageable);
-
+        Page<User> page = userRepository.findAdminUsers(normalizeKeyword(keyword), status, role, pageable);
         return PageResponse.from(page, u -> new AdminUserResponse(
                 u.getId(),
                 u.getFullName(),
                 u.getEmail(),
-                u.getPhoneNumber(),
-                u.getAvatarUrl(),
                 u.getRole(),
                 u.getStatus(),
+                u.getAvatarUrl(),
+                u.getPhoneNumber(),
                 u.getCreatedAt()
         ));
     }
 
-    private void unbanUserInternal(Long userId, String reason, Long adminId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found"));
-        user.unban();
-        userRepository.save(user);
-        log.info("Admin {} action=USER_UNBAN target=USER:{} reason={}", adminId, userId, reason);
-    }
+    @Override
+    @Transactional
+    public AdminBanUserResponse banUser(CurrentUser admin, Long userId, String reason) {
+        requireAdmin(admin);
 
-    private Map<String, Object> banUserInternal(Long userId, String reason, Long adminId) {
-        // TODO v4-phase-8: refine BR-17 locking and notifications per BUSINESS_RULES §5.9
-        if (userId.equals(adminId)) {
-            throw new BusinessException(ErrorCode.CANNOT_BAN_ADMIN, "Cannot ban yourself");
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy người dùng"));
+        if (user.getRole() == UserRole.ADMIN) {
+            throw new BusinessException(ErrorCode.CANNOT_BAN_ADMIN, "Không thể khóa tài khoản quản trị viên");
+        }
+        if (user.getStatus() != UserStatus.ACTIVE) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Tài khoản đã bị khóa");
         }
 
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found"));
-        user.ban();
-        userRepository.save(user);
+        // Single UPDATE without pessimistic lock on users (BUSINESS_RULES §5.9)
+        userRepository.updateStatus(userId, UserStatus.BANNED);
 
         Instant now = Instant.now(clock);
-        List<Long> sellerAuctionIds = auctionRepository.findBySellerIdAndStatusIn(
-                userId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
-        ).stream().map(Auction::getId).sorted().toList();
+        String auctionCancelReason = "Tài khoản người bán bị khóa";
 
-        List<Long> unpaidOrderIds = orderRepository.findUnpaidOrdersByUser(userId)
-                .stream().map(Order::getId).sorted().toList();
-
-        List<Long> cancelledAuctionIds = new ArrayList<>();
+        // Round 1: Lock open auctions where user is seller (id asc)
+        List<Long> sellerAuctionIds = auctionRepository.findIdsBySellerIdAndStatusInOrderByIdAsc(userId, OPEN_AUCTION_STATUSES);
+        List<Auction> cancelledAuctions = new ArrayList<>();
         SortedSet<Long> productIdsToRelease = new TreeSet<>();
 
-        // Lock order: auctions -> orders -> products
         if (!sellerAuctionIds.isEmpty()) {
             for (Auction auc : auctionRepository.findAllByIdInForUpdateOrderByIdAsc(sellerAuctionIds)) {
                 if (auc.isOpen()) {
-                    auc.cancel("ACCOUNT_BANNED");
+                    auc.cancel(auctionCancelReason);
                     auc.setClosedAt(now);
                     auctionRepository.save(auc);
-                    cancelledAuctionIds.add(auc.getId());
+                    cancelledAuctions.add(auc);
                     productIdsToRelease.add(auc.getProductId());
-                    broadcastAuctionUpdate(auc);
                 }
             }
         }
 
-        List<Long> cancelledOrderIds = new ArrayList<>();
+        // Round 2: Lock PENDING_PAYMENT orders where user is buyer or seller (id asc)
+        List<Long> unpaidOrderIds = orderRepository.findUnpaidOrderIdsByUserOrderByIdAsc(userId);
+        List<CancelledOrderNotice> cancelledOrders = new ArrayList<>();
+
         if (!unpaidOrderIds.isEmpty()) {
             for (Order o : orderRepository.findAllByIdInForUpdateOrderByIdAsc(unpaidOrderIds)) {
                 if (o.getStatus() == OrderStatus.PENDING_PAYMENT) {
-                    o.cancel("ACCOUNT_BANNED", now);
+                    boolean userIsBuyer = o.getBuyerId().equals(userId);
+                    String orderCancelReason = userIsBuyer ? "Tài khoản người mua bị khóa" : "Tài khoản người bán bị khóa";
+                    o.cancel(orderCancelReason, now);
                     orderRepository.save(o);
-                    cancelledOrderIds.add(o.getId());
+                    Long otherPartyId = userIsBuyer ? o.getSellerId() : o.getBuyerId();
+                    cancelledOrders.add(new CancelledOrderNotice(o.getId(), otherPartyId, orderCancelReason));
                     if (o.getProductId() != null) {
                         productIdsToRelease.add(o.getProductId());
                     }
-
-                    Long otherPartyId = o.getBuyerId().equals(userId) ? o.getSellerId() : o.getBuyerId();
-                    notificationService.notify(otherPartyId, NotificationType.ORDER_UPDATE,
-                            NotificationTemplates.orderCancelledTitle(o.getId(), "ACCOUNT_BANNED"),
-                            NotificationTemplates.orderCancelledContent(o.getId(), "ACCOUNT_BANNED"),
-                            "ORDER", o.getId());
                 }
             }
         }
 
+        // Round 3: Lock related products (id asc) and release (except HIDDEN)
         if (!productIdsToRelease.isEmpty()) {
             for (Product prod : productRepository.findAllByIdInForUpdateOrderByIdAsc(new ArrayList<>(productIdsToRelease))) {
                 if (prod.getStatus() == ProductStatus.IN_AUCTION || prod.getStatus() == ProductStatus.RESERVED) {
@@ -155,395 +150,587 @@ public class AdminServiceImpl implements AdminService {
             }
         }
 
-        log.info("Admin {} action=USER_BAN target=USER:{} reason={} cancelledAuctions={} cancelledOrders={}",
-                adminId, userId, reason, cancelledAuctionIds, cancelledOrderIds);
+        // Notifications & WebSocket (all emitted AFTER_COMMIT)
+        for (Auction auc : cancelledAuctions) {
+            notifyAuctionCancelled(auc, auctionCancelReason);
+            broadcastAuctionCancelled(auc, now);
+        }
+        for (CancelledOrderNotice notice : cancelledOrders) {
+            notificationService.notify(
+                    notice.recipientId(),
+                    NotificationType.ORDER_UPDATE,
+                    NotificationTemplates.orderCancelledTitle(notice.orderId(), notice.reason()),
+                    NotificationTemplates.orderCancelledContent(notice.orderId(), notice.reason()),
+                    "ORDER",
+                    notice.orderId()
+            );
+        }
 
-        return Map.of(
-                "cancelledAuctionIds", cancelledAuctionIds,
-                "cancelledOrderIds", cancelledOrderIds
+        log.info("Admin {} action=USER_BAN target=USER:{} reason={} cancelledAuctions={} cancelledOrders={}",
+                admin.id(), userId, reason, cancelledAuctions.size(), cancelledOrders.size());
+
+        return new AdminBanUserResponse(userId, UserStatus.BANNED, cancelledAuctions.size(), cancelledOrders.size());
+    }
+
+    @Override
+    @Transactional
+    public AdminUnbanUserResponse unbanUser(CurrentUser admin, Long userId, String reason) {
+        requireAdmin(admin);
+
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy người dùng"));
+        if (user.getStatus() != UserStatus.BANNED) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Tài khoản không ở trạng thái bị khóa");
+        }
+
+        userRepository.updateStatus(userId, UserStatus.ACTIVE);
+        log.info("Admin {} action=USER_UNBAN target=USER:{} reason={}", admin.id(), userId, reason);
+
+        return new AdminUnbanUserResponse(userId, UserStatus.ACTIVE);
+    }
+
+    // -------------------------------------------------------------------------
+    // Products
+    // -------------------------------------------------------------------------
+
+    @Override
+    @Transactional(readOnly = true)
+    public PageResponse<AdminProductItemResponse> getProducts(CurrentUser admin, String keyword, Long categoryId, ProductStatus status, Pageable pageable) {
+        requireAdmin(admin);
+        SortWhitelist.validate(pageable, PRODUCT_SORT_FIELDS);
+
+        Page<Product> page = productRepository.findAdminProducts(normalizeKeyword(keyword), categoryId, status, pageable);
+        List<Product> products = page.getContent();
+        if (products.isEmpty()) {
+            return PageResponse.from(page, p -> null);
+        }
+
+        List<Long> productIds = products.stream().map(Product::getId).toList();
+        Set<Long> categoryIds = products.stream().map(Product::getCategoryId).collect(Collectors.toSet());
+        Set<Long> sellerIds = products.stream().map(Product::getSellerId).collect(Collectors.toSet());
+
+        Map<Long, String> categoryNames = categoryRepository.findAllById(categoryIds).stream()
+                .collect(Collectors.toMap(Category::getId, Category::getName));
+        Map<Long, User> sellers = userRepository.findAllById(sellerIds).stream()
+                .collect(Collectors.toMap(User::getId, Function.identity()));
+        Map<Long, List<ProductImage>> imagesByProduct = productImageRepository.findByProductIdInOrderByIdAsc(productIds).stream()
+                .collect(Collectors.groupingBy(ProductImage::getProductId));
+        Map<Long, Long> activeAuctionByProduct = auctionRepository.findByProductIdInAndStatusIn(productIds, OPEN_AUCTION_STATUSES).stream()
+                .collect(Collectors.toMap(Auction::getProductId, Auction::getId, (a, b) -> a));
+        Set<Long> everAuctionedIds = auctionRepository.findProductIdsWithAnyAuction(productIds);
+
+        return PageResponse.from(page, p -> {
+            List<ProductImage> images = imagesByProduct.getOrDefault(p.getId(), List.of());
+            User seller = sellers.get(p.getSellerId());
+            return new AdminProductItemResponse(
+                    p.getId(),
+                    p.getTitle(),
+                    p.getCategoryId(),
+                    categoryNames.get(p.getCategoryId()),
+                    p.getCondition(),
+                    p.getStatus(),
+                    resolvePrimaryImageUrl(images),
+                    images.size(),
+                    activeAuctionByProduct.get(p.getId()),
+                    everAuctionedIds.contains(p.getId()),
+                    p.getCreatedAt(),
+                    toUserRef(seller, p.getSellerId())
+            );
+        });
+    }
+
+    @Override
+    @Transactional(readOnly = true)
+    public AdminProductDetailResponse getProductById(CurrentUser admin, Long productId) {
+        requireAdmin(admin);
+
+        Product product = productRepository.findById(productId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy sản phẩm"));
+        String categoryName = categoryRepository.findById(product.getCategoryId())
+                .map(Category::getName)
+                .orElse(null);
+        User seller = userRepository.findById(product.getSellerId()).orElse(null);
+        List<ProductImage> images = productImageRepository.findByProductIdOrderByIdAsc(productId);
+        Long activeAuctionId = auctionRepository.findFirstByProductIdAndStatusIn(productId, OPEN_AUCTION_STATUSES)
+                .map(Auction::getId)
+                .orElse(null);
+        boolean everAuctioned = auctionRepository.existsByProductId(productId);
+
+        List<ProductImageResponse> imageDtos = images.stream()
+                .map(img -> new ProductImageResponse(img.getId(), img.getImageUrl(), Boolean.TRUE.equals(img.getIsPrimary())))
+                .toList();
+
+        return new AdminProductDetailResponse(
+                product.getId(),
+                product.getTitle(),
+                product.getDescription(),
+                product.getCategoryId(),
+                categoryName,
+                product.getCondition(),
+                product.getStatus(),
+                resolvePrimaryImageUrl(images),
+                images.size(),
+                activeAuctionId,
+                everAuctioned,
+                imageDtos,
+                product.getCreatedAt(),
+                product.getUpdatedAt(),
+                toUserSummary(seller)
         );
     }
 
     @Override
     @Transactional
-    public Map<String, Object> banUser(Long userId, String reason, Long adminId) {
-        return banUserInternal(userId, reason, adminId);
-    }
-
-    @Override
-    @Transactional
-    public ProductHideResponse hideProduct(CurrentUser admin, Long productId, ProductHideRequest request) {
-        requireAdmin(admin);
-        // TODO v4-phase-8: remove unhide branch, HIDDEN is terminal per BR-16
-        if (request.status() == ProductStatus.HIDDEN) {
-            Map<String, Object> effects = hideProductInternal(productId, request.reason(), admin.id());
-            @SuppressWarnings("unchecked")
-            List<Long> cancelledAuctionIds = (List<Long>) effects.getOrDefault("cancelledAuctionIds", List.of());
-            @SuppressWarnings("unchecked")
-            List<Long> cancelledOrderIds = (List<Long>) effects.getOrDefault("cancelledOrderIds", List.of());
-            return new ProductHideResponse(productId, ProductStatus.HIDDEN, cancelledAuctionIds, cancelledOrderIds);
-        }
-        throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Only HIDDEN status is supported: " + request.status());
-    }
-
-    @Override
-    @Transactional(readOnly = true)
-    public PageResponse<AdminProductResponse> getProducts(CurrentUser admin, ProductStatus status, Long sellerId, Long categoryId, Pageable pageable) {
+    public ProductHideResponse hideProduct(CurrentUser admin, Long productId, String reason) {
         requireAdmin(admin);
 
-        Page<Product> page = productRepository.findAdminProducts(status, sellerId, categoryId, pageable);
-
-        return PageResponse.from(page, p -> {
-            String sellerName = userRepository.findById(p.getSellerId()).map(User::getFullName).orElse(null);
-            String categoryName = categoryRepository.findById(p.getCategoryId()).map(Category::getName).orElse(null);
-            return new AdminProductResponse(
-                    p.getId(),
-                    p.getSellerId(),
-                    sellerName,
-                    p.getCategoryId(),
-                    categoryName,
-                    p.getTitle(),
-                    p.getDescription(),
-                    p.getCondition(),
-                    p.getStatus(),
-                    p.getCreatedAt()
-            );
-        });
-    }
-
-    private Map<String, Object> hideProductInternal(Long productId, String reason, Long adminId) {
-        // Lock order: auctions -> orders -> products
-        List<Long> openAuctionIds = auctionRepository.findByProductIdAndStatusIn(
-                productId, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
-        ).stream().map(Auction::getId).sorted().toList();
-
-        List<Long> productOrderIds = orderRepository.findByProductIdAndStatusIn(
-                productId, List.of(OrderStatus.PENDING_PAYMENT)
-        ).stream().map(Order::getId).sorted().toList();
+        // Lock order: auctions -> orders -> products (BUSINESS_RULES §5.8)
+        List<Long> openAuctionIds = auctionRepository.findIdsByProductIdAndStatusInOrderByIdAsc(productId, OPEN_AUCTION_STATUSES);
+        List<Long> pendingOrderIds = orderRepository.findIdsByProductIdAndStatusInOrderByIdAsc(productId, List.of(OrderStatus.PENDING_PAYMENT));
 
         Instant now = Instant.now(clock);
-        List<Long> cancelledAuctionIds = new ArrayList<>();
+        String hideReason = "Sản phẩm bị ẩn";
+
+        List<Auction> cancelledAuctions = new ArrayList<>();
         if (!openAuctionIds.isEmpty()) {
             for (Auction auc : auctionRepository.findAllByIdInForUpdateOrderByIdAsc(openAuctionIds)) {
                 if (auc.isOpen()) {
-                    auc.cancel("PRODUCT_HIDDEN");
+                    auc.cancel(hideReason);
                     auc.setClosedAt(now);
                     auctionRepository.save(auc);
-                    cancelledAuctionIds.add(auc.getId());
-                    broadcastAuctionUpdate(auc);
+                    cancelledAuctions.add(auc);
                 }
             }
         }
 
-        List<Long> cancelledOrderIds = new ArrayList<>();
-        if (!productOrderIds.isEmpty()) {
-            for (Order ord : orderRepository.findAllByIdInForUpdateOrderByIdAsc(productOrderIds)) {
+        List<Order> cancelledOrders = new ArrayList<>();
+        if (!pendingOrderIds.isEmpty()) {
+            for (Order ord : orderRepository.findAllByIdInForUpdateOrderByIdAsc(pendingOrderIds)) {
                 if (ord.getStatus() == OrderStatus.PENDING_PAYMENT) {
-                    ord.cancel("PRODUCT_HIDDEN", now);
+                    ord.cancel(hideReason, now);
                     orderRepository.save(ord);
-                    cancelledOrderIds.add(ord.getId());
-
-                    notificationService.notify(ord.getBuyerId(), NotificationType.ORDER_UPDATE,
-                            NotificationTemplates.orderCancelledTitle(ord.getId(), "PRODUCT_HIDDEN"),
-                            NotificationTemplates.orderCancelledContent(ord.getId(), "PRODUCT_HIDDEN"),
-                            "ORDER", ord.getId());
-                    notificationService.notify(ord.getSellerId(), NotificationType.ORDER_UPDATE,
-                            NotificationTemplates.orderCancelledTitle(ord.getId(), "PRODUCT_HIDDEN"),
-                            NotificationTemplates.orderCancelledContent(ord.getId(), "PRODUCT_HIDDEN"),
-                            "ORDER", ord.getId());
+                    cancelledOrders.add(ord);
                 }
             }
         }
 
         Product product = productRepository.findByIdForUpdate(productId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy sản phẩm"));
         product.hide();
         productRepository.save(product);
 
+        // Notifications & WebSocket (emitted AFTER_COMMIT; rolled back if product.hide() threw)
+        for (Auction auc : cancelledAuctions) {
+            notifyAuctionCancelled(auc, hideReason);
+            broadcastAuctionCancelled(auc, now);
+        }
+        for (Order ord : cancelledOrders) {
+            notifyOrderCancelledBoth(ord, hideReason);
+        }
+
         log.info("Admin {} action=PRODUCT_HIDE target=PRODUCT:{} reason={} cancelledAuctions={} cancelledOrders={}",
-                adminId, productId, reason, cancelledAuctionIds, cancelledOrderIds);
+                admin.id(), productId, reason, cancelledAuctions.size(), cancelledOrders.size());
 
-        return Map.of(
-                "productId", productId,
-                "productStatus", "HIDDEN",
-                "cancelledAuctionIds", cancelledAuctionIds,
-                "cancelledOrderIds", cancelledOrderIds
-        );
+        return new ProductHideResponse(productId, ProductStatus.HIDDEN, cancelledAuctions.size(), cancelledOrders.size());
     }
 
-    @Override
-    @Transactional
-    public Map<String, Object> hideProduct(Long productId, String reason, Long adminId) {
-        return hideProductInternal(productId, reason, adminId);
-    }
+    // -------------------------------------------------------------------------
+    // Auctions
+    // -------------------------------------------------------------------------
 
     @Override
-    @Transactional
-    public AuctionResponse cancelAuction(CurrentUser admin, Long auctionId, AdminCancelAuctionRequest request) {
+    @Transactional(readOnly = true)
+    public PageResponse<AdminAuctionItemResponse> getAuctions(CurrentUser admin, String keyword, AuctionStatus status, Long sellerId, Pageable pageable) {
         requireAdmin(admin);
-        Auction auction = cancelAuctionInternal(auctionId, request.reason(), admin.id());
-        return mapToAuctionResponse(auction);
+        SortWhitelist.validate(pageable, AUCTION_SORT_FIELDS);
+
+        Page<Auction> page = auctionRepository.findAdminAuctions(normalizeKeyword(keyword), status, sellerId, pageable);
+        List<Auction> auctions = page.getContent();
+        if (auctions.isEmpty()) {
+            return PageResponse.from(page, a -> null);
+        }
+
+        Set<Long> productIds = auctions.stream().map(Auction::getProductId).collect(Collectors.toSet());
+        Set<Long> sellerIds = auctions.stream().map(Auction::getSellerId).collect(Collectors.toSet());
+
+        Map<Long, Product> products = productRepository.findAllById(productIds).stream()
+                .collect(Collectors.toMap(Product::getId, Function.identity()));
+        Set<Long> categoryIds = products.values().stream().map(Product::getCategoryId).collect(Collectors.toSet());
+        Map<Long, String> categoryNames = categoryRepository.findAllById(categoryIds).stream()
+                .collect(Collectors.toMap(Category::getId, Category::getName));
+        Map<Long, User> sellers = userRepository.findAllById(sellerIds).stream()
+                .collect(Collectors.toMap(User::getId, Function.identity()));
+        Map<Long, List<ProductImage>> imagesByProduct = productImageRepository.findByProductIdInOrderByIdAsc(productIds).stream()
+                .collect(Collectors.groupingBy(ProductImage::getProductId));
+
+        return PageResponse.from(page, a -> {
+            Product product = products.get(a.getProductId());
+            Long catId = product != null ? product.getCategoryId() : null;
+            List<ProductImage> images = imagesByProduct.getOrDefault(a.getProductId(), List.of());
+            return new AdminAuctionItemResponse(
+                    a.getId(),
+                    a.getProductId(),
+                    product != null ? product.getTitle() : null,
+                    resolvePrimaryImageUrl(images),
+                    catId,
+                    catId != null ? categoryNames.get(catId) : null,
+                    a.getStatus(),
+                    a.getStartPrice(),
+                    a.getCurrentPrice(),
+                    a.minNextBid(),
+                    a.getBidCount() != null ? a.getBidCount() : 0,
+                    a.reserveStatus(),
+                    a.getStartTime(),
+                    a.getEndTime(),
+                    a.getCreatedAt(),
+                    toUserRef(sellers.get(a.getSellerId()), a.getSellerId()),
+                    a.getReservePrice()
+            );
+        });
     }
 
-    private Auction cancelAuctionInternal(Long auctionId, String reason, Long adminId) {
+    @Override
+    @Transactional(readOnly = true)
+    public AdminAuctionDetailResponse getAuctionById(CurrentUser admin, Long auctionId) {
+        requireAdmin(admin);
+
+        Auction auction = auctionRepository.findById(auctionId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy phiên đấu giá"));
+        return buildAdminAuctionDetail(auction);
+    }
+
+    @Override
+    @Transactional
+    public AdminAuctionDetailResponse cancelAuction(CurrentUser admin, Long auctionId, AdminCancelAuctionRequest request) {
+        requireAdmin(admin);
+
         // Lock order: auctions -> products
         Auction auction = auctionRepository.findByIdForUpdate(auctionId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy phiên đấu giá"));
 
-        Product product = productRepository.findByIdForUpdate(auction.getProductId())
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
-
+        String reason = request.reason().trim();
         Instant now = Instant.now(clock);
         auction.cancel(reason);
         auction.setClosedAt(now);
         auctionRepository.save(auction);
 
-        product.release();
-        productRepository.save(product);
-
-        log.info("Admin {} action=AUCTION_CANCEL target=AUCTION:{} reason={}", adminId, auctionId, reason);
-
-        notificationService.notify(auction.getSellerId(), NotificationType.AUCTION_CANCELLED,
-                NotificationTemplates.auctionCancelledTitle(reason),
-                NotificationTemplates.auctionCancelledContent(auction.getId(), reason),
-                "AUCTION", auction.getId());
-
-        if (auction.getHighestBidderId() != null) {
-            notificationService.notify(auction.getHighestBidderId(), NotificationType.AUCTION_CANCELLED,
-                    NotificationTemplates.auctionCancelledTitle(reason),
-                    NotificationTemplates.auctionCancelledContent(auction.getId(), reason),
-                    "AUCTION", auction.getId());
+        Product product = productRepository.findByIdForUpdate(auction.getProductId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy sản phẩm"));
+        if (product.getStatus() == ProductStatus.IN_AUCTION || product.getStatus() == ProductStatus.RESERVED) {
+            product.release();
+            productRepository.save(product);
         }
 
-        broadcastAuctionUpdate(auction);
-        return auction;
+        notifyAuctionCancelled(auction, reason);
+        broadcastAuctionCancelled(auction, now);
+
+        log.info("Admin {} action=AUCTION_CANCEL target=AUCTION:{} reason={}", admin.id(), auctionId, reason);
+        return buildAdminAuctionDetail(auction);
     }
 
-    @Override
-    @Transactional
-    public Map<String, Object> cancelAuction(Long auctionId, String reason, Long adminId) {
-        cancelAuctionInternal(auctionId, reason, adminId);
-        return Map.of("auctionId", auctionId, "auctionStatus", "CANCELLED");
-    }
+    // -------------------------------------------------------------------------
+    // Orders
+    // -------------------------------------------------------------------------
 
     @Override
-    @Transactional
-    public OrderResponse cancelOrder(CurrentUser admin, Long orderId, AdminCancelOrderRequest request) {
+    @Transactional(readOnly = true)
+    public PageResponse<OrderSummaryResponse> getOrders(CurrentUser admin, OrderStatus status, Long buyerId, Long sellerId, Instant fromDate, Instant toDate, Pageable pageable) {
         requireAdmin(admin);
-        Order order = cancelOrderInternal(orderId, request.reason(), admin.id());
-        return mapToOrderResponse(order);
+        SortWhitelist.validate(pageable, ORDER_SORT_FIELDS);
+
+        Page<Order> page = orderRepository.findAdminOrders(status, buyerId, sellerId, fromDate, toDate, pageable);
+        List<Order> orders = page.getContent();
+        if (orders.isEmpty()) {
+            return PageResponse.from(page, o -> null);
+        }
+
+        Set<Long> productIds = orders.stream().map(Order::getProductId).collect(Collectors.toSet());
+        Set<Long> userIds = new HashSet<>();
+        for (Order o : orders) {
+            userIds.add(o.getBuyerId());
+            userIds.add(o.getSellerId());
+        }
+
+        Map<Long, Product> products = productRepository.findAllById(productIds).stream()
+                .collect(Collectors.toMap(Product::getId, Function.identity()));
+        Map<Long, User> users = userRepository.findAllById(userIds).stream()
+                .collect(Collectors.toMap(User::getId, Function.identity()));
+        Map<Long, List<ProductImage>> imagesByProduct = productImageRepository.findByProductIdInOrderByIdAsc(productIds).stream()
+                .collect(Collectors.groupingBy(ProductImage::getProductId));
+
+        return PageResponse.from(page, o -> {
+            Product product = products.get(o.getProductId());
+            List<ProductImage> images = imagesByProduct.getOrDefault(o.getProductId(), List.of());
+            return OrderSummaryResponse.builder()
+                    .id(o.getId())
+                    .auctionId(o.getAuctionId())
+                    .productId(o.getProductId())
+                    .title(product != null ? product.getTitle() : null)
+                    .primaryImageUrl(resolvePrimaryImageUrl(images))
+                    .finalPrice(o.getFinalPrice())
+                    .status(o.getStatus())
+                    .buyer(toUserRef(users.get(o.getBuyerId()), o.getBuyerId()))
+                    .seller(toUserRef(users.get(o.getSellerId()), o.getSellerId()))
+                    .paymentDeadline(o.getPaymentDeadline())
+                    .confirmDeadline(o.getConfirmDeadline())
+                    .createdAt(o.getCreatedAt())
+                    .build();
+        });
     }
 
     @Override
     @Transactional(readOnly = true)
-    public PageResponse<AdminOrderSummaryResponse> getOrders(CurrentUser admin, OrderStatus status, Long buyerId, Long sellerId, Instant from, Instant to, Pageable pageable) {
+    public AdminOrderDetailResponse getOrderById(CurrentUser admin, Long orderId) {
         requireAdmin(admin);
 
-        Page<Order> page = orderRepository.findAdminOrders(status, buyerId, sellerId, from, to, pageable);
-
-        return PageResponse.from(page, o -> {
-            String buyerName = userRepository.findById(o.getBuyerId()).map(User::getFullName).orElse(null);
-            String sellerName = userRepository.findById(o.getSellerId()).map(User::getFullName).orElse(null);
-            String productTitle = productRepository.findById(o.getProductId()).map(Product::getTitle).orElse(null);
-            String paymentStatus = paymentRepository.findByOrderIdOrderByAttemptNoDesc(o.getId())
-                    .stream().findFirst().map(p -> p.getStatus().name()).orElse(null);
-
-            return new AdminOrderSummaryResponse(
-                    o.getId(),
-                    o.getAuctionId(),
-                    o.getProductId(),
-                    productTitle,
-                    o.getBuyerId(),
-                    buyerName,
-                    o.getSellerId(),
-                    sellerName,
-                    o.getFinalPrice(),
-                    o.getStatus(),
-                    paymentStatus,
-                    o.getCreatedAt()
-            );
-        });
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng"));
+        return buildAdminOrderDetail(order);
     }
 
-    private Order cancelOrderInternal(Long orderId, String reason, Long adminId) {
+    @Override
+    @Transactional
+    public AdminOrderDetailResponse cancelOrder(CurrentUser admin, Long orderId, AdminCancelOrderRequest request) {
+        requireAdmin(admin);
+
         // Lock order: orders -> products
         Order order = orderRepository.findByIdForUpdate(orderId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found"));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng"));
 
-        Product product = productRepository.findByIdForUpdate(order.getProductId())
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
-
+        String reason = request.reason().trim();
         Instant now = Instant.now(clock);
         order.cancel(reason, now);
         orderRepository.save(order);
 
-        product.release();
-        productRepository.save(product);
+        Product product = productRepository.findByIdForUpdate(order.getProductId())
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy sản phẩm"));
+        if (product.getStatus() == ProductStatus.IN_AUCTION || product.getStatus() == ProductStatus.RESERVED) {
+            product.release();
+            productRepository.save(product);
+        }
 
-        log.info("Admin {} action=ORDER_CANCEL target=ORDER:{} reason={}", adminId, order.getId(), reason);
+        notifyOrderCancelledBoth(order, reason);
 
-        notificationService.notify(order.getBuyerId(), NotificationType.ORDER_UPDATE,
-                NotificationTemplates.orderCancelledTitle(order.getId(), reason),
-                NotificationTemplates.orderCancelledContent(order.getId(), reason),
-                "ORDER", order.getId());
-
-        notificationService.notify(order.getSellerId(), NotificationType.ORDER_UPDATE,
-                NotificationTemplates.orderCancelledTitle(order.getId(), reason),
-                NotificationTemplates.orderCancelledContent(order.getId(), reason),
-                "ORDER", order.getId());
-
-        return order;
+        log.info("Admin {} action=ORDER_CANCEL target=ORDER:{} reason={}", admin.id(), orderId, reason);
+        return buildAdminOrderDetail(order);
     }
 
-    @Override
-    @Transactional
-    public Map<String, Object> cancelOrder(Long orderId, String reason, Long adminId) {
-        Order order = cancelOrderInternal(orderId, reason, adminId);
-        Product product = productRepository.findById(order.getProductId()).orElse(null);
-        String prodStatus = product != null ? product.getStatus().name() : "AVAILABLE";
-        return Map.of("orderStatus", "CANCELLED", "productStatus", prodStatus);
-    }
+    // -------------------------------------------------------------------------
+    // Statistics
+    // -------------------------------------------------------------------------
 
     @Override
     @Transactional(readOnly = true)
-    public AdminStatisticsResponse getStatistics(CurrentUser admin, Instant from, Instant to) {
-        // TODO v4-phase-8: rewrite cumulative statistics per FR-20
+    public AdminStatisticsResponse getStatistics(CurrentUser admin) {
         requireAdmin(admin);
 
-        Instant effectiveTo = to != null ? to : Instant.now(clock);
-        Instant effectiveFrom = from != null ? from : effectiveTo.minus(30, ChronoUnit.DAYS);
-
         long totalUsers = userRepository.count();
-        long activeUsers = userRepository.countByStatus(UserStatus.ACTIVE);
         long bannedUsers = userRepository.countByStatus(UserStatus.BANNED);
-        long newUsersInRange = userRepository.countByCreatedAtBetween(effectiveFrom, effectiveTo);
-        AdminStatisticsResponse.UserStats userStats = new AdminStatisticsResponse.UserStats(totalUsers, activeUsers, bannedUsers, newUsersInRange);
 
-        Map<String, Long> productStats = new LinkedHashMap<>();
-        for (ProductStatus ps : ProductStatus.values()) {
-            productStats.put(ps.name(), productRepository.countByStatus(ps));
+        Map<AuctionStatus, Long> auctionsByStatus = new LinkedHashMap<>();
+        for (AuctionStatus st : AuctionStatus.values()) {
+            auctionsByStatus.put(st, 0L);
+        }
+        for (Object[] row : auctionRepository.countGroupedByStatus()) {
+            auctionsByStatus.put((AuctionStatus) row[0], ((Number) row[1]).longValue());
         }
 
-        long scheduledAuctions = auctionRepository.countByStatus(AuctionStatus.SCHEDULED);
-        long activeAuctions = auctionRepository.countByStatus(AuctionStatus.ACTIVE);
-        long endedAuctions = auctionRepository.countByStatus(AuctionStatus.ENDED);
-        long unsoldAuctions = auctionRepository.countByStatus(AuctionStatus.UNSOLD);
-        long cancelledAuctions = auctionRepository.countByStatus(AuctionStatus.CANCELLED);
-        long closedAuctionsTotal = endedAuctions + unsoldAuctions;
-        double sellThroughRate = closedAuctionsTotal > 0
-                ? Math.round(((double) endedAuctions / closedAuctionsTotal) * 100.0) / 100.0
-                : 0.0;
-        AdminStatisticsResponse.AuctionStats auctionStats = new AdminStatisticsResponse.AuctionStats(
-                scheduledAuctions, activeAuctions, endedAuctions, unsoldAuctions, cancelledAuctions, sellThroughRate
-        );
-
-        long totalBids = bidRepository.count();
-        long bidsInRange = bidRepository.countByCreatedAtBetween(effectiveFrom, effectiveTo);
-        long totalAuctions = scheduledAuctions + activeAuctions + endedAuctions + unsoldAuctions + cancelledAuctions;
-        double avgPerAuction = totalAuctions > 0
-                ? Math.round(((double) totalBids / totalAuctions) * 10.0) / 10.0
-                : 0.0;
-        AdminStatisticsResponse.BidStats bidStats = new AdminStatisticsResponse.BidStats(totalBids, bidsInRange, avgPerAuction);
-
-        Map<String, Long> orderStats = new LinkedHashMap<>();
-        for (OrderStatus os : OrderStatus.values()) {
-            orderStats.put(os.name(), orderRepository.countByStatus(os));
+        Map<OrderStatus, Long> ordersByStatus = new LinkedHashMap<>();
+        for (OrderStatus st : OrderStatus.values()) {
+            ordersByStatus.put(st, 0L);
+        }
+        for (Object[] row : orderRepository.countGroupedByStatus()) {
+            ordersByStatus.put((OrderStatus) row[0], ((Number) row[1]).longValue());
         }
 
-        BigDecimal completedTotal = orderRepository.sumCompletedRevenue(effectiveFrom, effectiveTo);
-        AdminStatisticsResponse.RevenueStats revenueStats = new AdminStatisticsResponse.RevenueStats(true, completedTotal);
+        BigDecimal completedValue = orderRepository.sumCompletedOrderValue();
+        BigDecimal completedOrderValue = completedValue != null
+                ? completedValue.setScale(0, RoundingMode.UNNECESSARY)
+                : BigDecimal.ZERO;
 
-        long successPayments = paymentRepository.countByStatus(PaymentStatus.SUCCESS);
-        long failedPayments = paymentRepository.countByStatus(PaymentStatus.FAILED);
-        long resolvedPaymentsTotal = successPayments + failedPayments;
-        double successRate = resolvedPaymentsTotal > 0
-                ? Math.round(((double) successPayments / resolvedPaymentsTotal) * 100.0) / 100.0
-                : 0.0;
-        AdminStatisticsResponse.PaymentStats paymentStats = new AdminStatisticsResponse.PaymentStats(
-                successPayments, failedPayments, 0L, successRate
-        );
-
-        Map<String, Long> reportStats = new LinkedHashMap<>();
-        for (ReportStatus rs : ReportStatus.values()) {
-            reportStats.put(rs.name(), reportRepository.countByStatus(rs));
-        }
+        long pendingReports = reportRepository.countByStatus(ReportStatus.PENDING);
 
         return new AdminStatisticsResponse(
-                new AdminStatisticsResponse.RangeDto(effectiveFrom, effectiveTo),
-                userStats,
-                productStats,
-                auctionStats,
-                bidStats,
-                orderStats,
-                revenueStats,
-                paymentStats,
-                reportStats
+                totalUsers,
+                bannedUsers,
+                auctionsByStatus,
+                ordersByStatus,
+                completedOrderValue,
+                pendingReports
         );
     }
 
+    // -------------------------------------------------------------------------
+    // Helpers
+    // -------------------------------------------------------------------------
+
     private void requireAdmin(CurrentUser admin) {
-        if (!admin.isAdmin()) {
-            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin required");
+        if (admin == null || !admin.isAdmin()) {
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Yêu cầu quyền quản trị viên");
         }
     }
 
-    private void broadcastAuctionUpdate(Auction auction) {
-        try {
-            String maskedLeaderName = auction.getHighestBidderId() != null
-                    ? userRepository.findById(auction.getHighestBidderId())
-                            .map(User::getFullName)
-                            .map(MaskingUtils::maskName)
-                            .orElse(null)
-                    : null;
-            webSocketPublisher.publishAuctionEvent(
-                    AuctionEvent.of(AuctionEventType.AUCTION_CANCELLED, auction, maskedLeaderName, null, Instant.now(clock))
-            );
-        } catch (Exception e) {
-            log.warn("Failed to broadcast WebSocket update for auction {}: {}", auction.getId(), e.getMessage());
+    private String normalizeKeyword(String keyword) {
+        if (keyword == null || keyword.isBlank()) {
+            return null;
         }
+        return keyword.trim();
     }
 
-    private AuctionResponse mapToAuctionResponse(Auction auction) {
-        String sellerName = userRepository.findById(auction.getSellerId()).map(User::getFullName).orElse(null);
-        String productTitle = productRepository.findById(auction.getProductId()).map(Product::getTitle).orElse(null);
-        String highestBidderName = auction.getHighestBidderId() != null
-                ? userRepository.findById(auction.getHighestBidderId()).map(User::getFullName).orElse(null)
+    private String resolvePrimaryImageUrl(List<ProductImage> images) {
+        if (images == null || images.isEmpty()) {
+            return null;
+        }
+        return images.stream()
+                .filter(img -> Boolean.TRUE.equals(img.getIsPrimary()))
+                .findFirst()
+                .orElse(images.get(0))
+                .getImageUrl();
+    }
+
+    private UserRef toUserRef(User user, Long fallbackId) {
+        if (user == null) {
+            return new UserRef(fallbackId, null);
+        }
+        return new UserRef(user.getId(), user.getFullName());
+    }
+
+    private UserSummary toUserSummary(User user) {
+        if (user == null) {
+            return null;
+        }
+        return new UserSummary(
+                user.getId(),
+                user.getFullName(),
+                user.getEmail(),
+                user.getRole(),
+                user.getStatus(),
+                user.getAvatarUrl()
+        );
+    }
+
+    private AdminAuctionDetailResponse buildAdminAuctionDetail(Auction auction) {
+        Product product = productRepository.findById(auction.getProductId()).orElse(null);
+        String categoryName = product != null
+                ? categoryRepository.findById(product.getCategoryId()).map(Category::getName).orElse(null)
                 : null;
+        List<ProductImage> images = productImageRepository.findByProductIdOrderByIdAsc(auction.getProductId());
+        List<ProductImageResponse> imageDtos = images.stream()
+                .map(img -> new ProductImageResponse(img.getId(), img.getImageUrl(), Boolean.TRUE.equals(img.getIsPrimary())))
+                .toList();
 
-        return AuctionResponse.builder()
-                .id(auction.getId())
-                .productId(auction.getProductId())
-                .productTitle(productTitle)
-                .sellerId(auction.getSellerId())
-                .sellerName(sellerName)
-                .startPrice(auction.getStartPrice())
-                .bidIncrement(auction.getBidIncrement())
-                .currentPrice(auction.getCurrentPrice())
-                .highestBidderId(auction.getHighestBidderId())
-                .highestBidderName(highestBidderName)
-                .bidCount(auction.getBidCount())
-                .startTime(auction.getStartTime())
-                .endTime(auction.getEndTime())
-                .status(auction.getStatus())
-                .winnerId(auction.getWinnerId())
-                .finalPrice(auction.getFinalPrice())
-                .closedAt(auction.getClosedAt())
-                .cancelReason(auction.getCancelReason())
-                .createdAt(auction.getCreatedAt())
-                .build();
+        User seller = userRepository.findById(auction.getSellerId()).orElse(null);
+        User highestBidder = auction.getHighestBidderId() != null
+                ? userRepository.findById(auction.getHighestBidderId()).orElse(null)
+                : null;
+        User winner = auction.getWinnerId() != null
+                ? userRepository.findById(auction.getWinnerId()).orElse(null)
+                : null;
+        Long orderId = orderRepository.findByAuctionId(auction.getId()).map(Order::getId).orElse(null);
+
+        return new AdminAuctionDetailResponse(
+                auction.getId(),
+                auction.getProductId(),
+                product != null ? product.getTitle() : null,
+                resolvePrimaryImageUrl(images),
+                product != null ? product.getCategoryId() : null,
+                categoryName,
+                auction.getStatus(),
+                auction.getStartPrice(),
+                auction.getCurrentPrice(),
+                auction.minNextBid(),
+                auction.getBidCount() != null ? auction.getBidCount() : 0,
+                auction.reserveStatus(),
+                auction.getStartTime(),
+                auction.getEndTime(),
+                auction.getCreatedAt(),
+                product != null ? product.getDescription() : null,
+                product != null ? product.getCondition() : null,
+                imageDtos,
+                auction.getBidIncrement(),
+                auction.getReservePrice(),
+                toUserSummary(seller),
+                toUserSummary(highestBidder),
+                toUserSummary(winner),
+                auction.getFinalPrice(),
+                auction.getClosedAt(),
+                auction.getCancelReason(),
+                product != null ? product.getStatus() : null,
+                orderId
+        );
     }
 
-    private OrderResponse mapToOrderResponse(Order order) {
-        String productTitle = productRepository.findById(order.getProductId()).map(Product::getTitle).orElse(null);
-        return OrderResponse.builder()
-                .id(order.getId())
-                .auctionId(order.getAuctionId())
-                .productId(order.getProductId())
-                .productTitle(productTitle)
-                .finalPrice(order.getFinalPrice())
-                .status(order.getStatus())
-                .paymentDeadline(order.getPaymentDeadline())
-                .createdAt(order.getCreatedAt())
-                .build();
+    private AdminOrderDetailResponse buildAdminOrderDetail(Order order) {
+        Product product = productRepository.findById(order.getProductId()).orElse(null);
+        List<ProductImage> images = productImageRepository.findByProductIdOrderByIdAsc(order.getProductId());
+        User buyer = userRepository.findById(order.getBuyerId()).orElse(null);
+        User seller = userRepository.findById(order.getSellerId()).orElse(null);
+        List<PaymentHistoryResponse> payments = paymentRepository.findByOrderIdOrderByAttemptNoDesc(order.getId()).stream()
+                .map(p -> PaymentHistoryResponse.builder()
+                        .id(p.getId())
+                        .attemptNo(p.getAttemptNo())
+                        .amount(p.getAmount())
+                        .method(p.getMethod())
+                        .status(p.getStatus())
+                        .failureReason(p.getFailureReason())
+                        .createdAt(p.getCreatedAt())
+                        .paidAt(p.getPaidAt())
+                        .build())
+                .toList();
+
+        return new AdminOrderDetailResponse(
+                order.getId(),
+                order.getAuctionId(),
+                order.getProductId(),
+                product != null ? product.getTitle() : null,
+                resolvePrimaryImageUrl(images),
+                order.getFinalPrice(),
+                order.getStatus(),
+                toUserSummary(buyer),
+                toUserSummary(seller),
+                order.getPaymentDeadline(),
+                order.getConfirmDeadline(),
+                order.getCreatedAt(),
+                order.getShippingAddress(),
+                order.getPhoneNumber(),
+                order.getTrackingCode(),
+                order.getPaidAt(),
+                order.getShippedAt(),
+                order.getCompletedAt(),
+                order.getCancelledAt(),
+                order.getCancelReason(),
+                product != null ? product.getStatus() : null,
+                payments
+        );
     }
+
+    private void notifyAuctionCancelled(Auction auction, String reason) {
+        String title = NotificationTemplates.auctionCancelledTitle(reason);
+        String content = NotificationTemplates.auctionCancelledContent(auction.getId(), reason);
+        notificationService.notify(auction.getSellerId(), NotificationType.AUCTION_CANCELLED, title, content, "AUCTION", auction.getId());
+        if (auction.getHighestBidderId() != null) {
+            notificationService.notify(auction.getHighestBidderId(), NotificationType.AUCTION_CANCELLED, title, content, "AUCTION", auction.getId());
+        }
+    }
+
+    private void notifyOrderCancelledBoth(Order order, String reason) {
+        String title = NotificationTemplates.orderCancelledTitle(order.getId(), reason);
+        String content = NotificationTemplates.orderCancelledContent(order.getId(), reason);
+        notificationService.notify(order.getBuyerId(), NotificationType.ORDER_UPDATE, title, content, "ORDER", order.getId());
+        notificationService.notify(order.getSellerId(), NotificationType.ORDER_UPDATE, title, content, "ORDER", order.getId());
+    }
+
+    private void broadcastAuctionCancelled(Auction auction, Instant now) {
+        String maskedLeaderName = auction.getHighestBidderId() != null
+                ? userRepository.findById(auction.getHighestBidderId())
+                        .map(User::getFullName)
+                        .map(MaskingUtils::maskName)
+                        .orElse(null)
+                : null;
+        webSocketPublisher.publishAuctionEvent(
+                AuctionEvent.of(AuctionEventType.AUCTION_CANCELLED, auction, maskedLeaderName, null, now)
+        );
+    }
+
+    private record CancelledOrderNotice(Long orderId, Long recipientId, String reason) {}
 }

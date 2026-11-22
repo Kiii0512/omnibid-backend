@@ -9,9 +9,9 @@ public record AdminUserResponse(
         Long id,
         String fullName,
         String email,
-        String phoneNumber,
-        String avatarUrl,
         UserRole role,
         UserStatus status,
+        String avatarUrl,
+        String phoneNumber,
         Instant createdAt
 ) {}

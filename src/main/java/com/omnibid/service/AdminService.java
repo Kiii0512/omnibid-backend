@@ -2,40 +2,42 @@ package com.omnibid.service;
 
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.admin.*;
-import com.omnibid.dto.auction.AuctionResponse;
-import com.omnibid.dto.order.OrderResponse;
+import com.omnibid.dto.order.OrderSummaryResponse;
+import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.ProductStatus;
+import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.security.CurrentUser;
 import org.springframework.data.domain.Pageable;
 
 import java.time.Instant;
-import java.util.Map;
 
 public interface AdminService {
 
-    UserStatusUpdateResponse updateUserStatus(CurrentUser admin, Long userId, UserStatusUpdateRequest request);
+    PageResponse<AdminUserResponse> getUsers(CurrentUser admin, String keyword, UserStatus status, UserRole role, Pageable pageable);
 
-    PageResponse<AdminUserResponse> getUsers(CurrentUser admin, UserStatus status, String q, Pageable pageable);
+    AdminBanUserResponse banUser(CurrentUser admin, Long userId, String reason);
 
-    ProductHideResponse hideProduct(CurrentUser admin, Long productId, ProductHideRequest request);
+    AdminUnbanUserResponse unbanUser(CurrentUser admin, Long userId, String reason);
 
-    PageResponse<AdminProductResponse> getProducts(CurrentUser admin, ProductStatus status, Long sellerId, Long categoryId, Pageable pageable);
+    PageResponse<AdminProductItemResponse> getProducts(CurrentUser admin, String keyword, Long categoryId, ProductStatus status, Pageable pageable);
 
-    AuctionResponse cancelAuction(CurrentUser admin, Long auctionId, AdminCancelAuctionRequest request);
+    AdminProductDetailResponse getProductById(CurrentUser admin, Long productId);
 
-    OrderResponse cancelOrder(CurrentUser admin, Long orderId, AdminCancelOrderRequest request);
+    ProductHideResponse hideProduct(CurrentUser admin, Long productId, String reason);
 
-    PageResponse<AdminOrderSummaryResponse> getOrders(CurrentUser admin, OrderStatus status, Long buyerId, Long sellerId, Instant from, Instant to, Pageable pageable);
+    PageResponse<AdminAuctionItemResponse> getAuctions(CurrentUser admin, String keyword, AuctionStatus status, Long sellerId, Pageable pageable);
 
-    Map<String, Object> banUser(Long userId, String reason, Long adminId);
+    AdminAuctionDetailResponse getAuctionById(CurrentUser admin, Long auctionId);
 
-    Map<String, Object> hideProduct(Long productId, String reason, Long adminId);
+    AdminAuctionDetailResponse cancelAuction(CurrentUser admin, Long auctionId, AdminCancelAuctionRequest request);
 
-    Map<String, Object> cancelAuction(Long auctionId, String reason, Long adminId);
+    PageResponse<OrderSummaryResponse> getOrders(CurrentUser admin, OrderStatus status, Long buyerId, Long sellerId, Instant fromDate, Instant toDate, Pageable pageable);
 
-    Map<String, Object> cancelOrder(Long orderId, String reason, Long adminId);
+    AdminOrderDetailResponse getOrderById(CurrentUser admin, Long orderId);
 
-    AdminStatisticsResponse getStatistics(CurrentUser admin, Instant from, Instant to);
+    AdminOrderDetailResponse cancelOrder(CurrentUser admin, Long orderId, AdminCancelOrderRequest request);
+
+    AdminStatisticsResponse getStatistics(CurrentUser admin);
 }

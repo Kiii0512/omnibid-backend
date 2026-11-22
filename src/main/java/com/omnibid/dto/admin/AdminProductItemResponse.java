@@ -1,19 +1,22 @@
 package com.omnibid.dto.admin;
 
+import com.omnibid.dto.user.UserRef;
 import com.omnibid.enums.ProductCondition;
 import com.omnibid.enums.ProductStatus;
 
 import java.time.Instant;
 
-public record AdminProductResponse(
+public record AdminProductItemResponse(
         Long id,
-        Long sellerId,
-        String sellerName,
+        String title,
         Long categoryId,
         String categoryName,
-        String title,
-        String description,
         ProductCondition condition,
         ProductStatus status,
-        Instant createdAt
+        String primaryImageUrl,
+        int imageCount,
+        Long activeAuctionId,
+        boolean everAuctioned,
+        Instant createdAt,
+        UserRef seller
 ) {}

@@ -65,6 +65,19 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     long countByStatus(OrderStatus status);
 
+    @Query("SELECT o.id FROM Order o WHERE o.status = com.omnibid.enums.OrderStatus.PENDING_PAYMENT AND (o.buyerId = :userId OR o.sellerId = :userId) ORDER BY o.id ASC")
+    List<Long> findUnpaidOrderIdsByUserOrderByIdAsc(@Param("userId") Long userId);
+
+    @Query("SELECT o.id FROM Order o WHERE o.productId = :productId AND o.status IN :statuses ORDER BY o.id ASC")
+    List<Long> findIdsByProductIdAndStatusInOrderByIdAsc(@Param("productId") Long productId,
+                                                         @Param("statuses") Collection<OrderStatus> statuses);
+
+    @Query("SELECT o.status, COUNT(o) FROM Order o GROUP BY o.status")
+    List<Object[]> countGroupedByStatus();
+
+    @Query("SELECT COALESCE(SUM(o.finalPrice), 0) FROM Order o WHERE o.status = com.omnibid.enums.OrderStatus.COMPLETED")
+    BigDecimal sumCompletedOrderValue();
+
     @Query("SELECT COALESCE(SUM(o.finalPrice), 0) FROM Order o WHERE o.status = com.omnibid.enums.OrderStatus.COMPLETED AND o.completedAt >= :from AND o.completedAt <= :to")
     BigDecimal sumCompletedRevenue(@Param("from") Instant from, @Param("to") Instant to);
 
