@@ -12,11 +12,12 @@ import com.omnibid.service.StorageService;
 import com.omnibid.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
+
+import java.util.Map;
 
 @Slf4j
 @Service
@@ -48,14 +49,12 @@ public class UserServiceImpl implements UserService {
         if (request.address() != null) {
             user.setAddress(request.address().isBlank() ? null : request.address().trim());
         }
-        if (request.avatarUrl() != null) {
-            user.setAvatarUrl(request.avatarUrl().isBlank() ? null : request.avatarUrl().trim());
-        }
 
         User updated = userRepository.save(user);
         return mapToProfile(updated);
     }
 
+    // TODO v4-phase-4: move to Cloudinary ImageStorageService, save avatarPublicId, delete old avatar after commit, return { avatarUrl }
     @Override
     @Transactional
     public UserProfileResponse updateAvatar(Long userId, MultipartFile file) {
@@ -73,20 +72,37 @@ public class UserServiceImpl implements UserService {
         User user = getUser(userId);
 
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Mật khẩu hiện tại không chính xác");
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Mật khẩu hiện tại không chính xác",
+                    Map.of("fields", Map.of("currentPassword", "Mật khẩu hiện tại không chính xác"))
+            );
+        }
+
+        if (!request.newPassword().equals(request.confirmPassword())) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Mật khẩu xác nhận không khớp",
+                    Map.of("fields", Map.of("confirmPassword", "Mật khẩu xác nhận không khớp"))
+            );
         }
 
         if (request.currentPassword().equals(request.newPassword())) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Mật khẩu mới không được trùng với mật khẩu cũ");
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Mật khẩu mới không được trùng với mật khẩu hiện tại",
+                    Map.of("fields", Map.of("newPassword", "Mật khẩu mới không được trùng với mật khẩu hiện tại"))
+            );
         }
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
+        user.increaseTokenVersion();
         userRepository.save(user);
     }
 
     private User getUser(Long userId) {
         return userRepository.findById(userId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found with id: " + userId));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy người dùng"));
     }
 
     private UserProfileResponse mapToProfile(User user) {
@@ -103,4 +119,3 @@ public class UserServiceImpl implements UserService {
         );
     }
 }
-

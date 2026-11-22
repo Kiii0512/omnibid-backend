@@ -95,6 +95,7 @@ public class AuctionController {
     }
 
     @PostMapping("/{id}/cancel")
+    @PreAuthorize("hasRole('USER')")
     public ApiResponse<AuctionResponse> cancelAuction(
             @PathVariable Long id,
             @AuthenticationPrincipal CustomUserDetails userDetails,

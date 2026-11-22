@@ -1,6 +1,7 @@
 package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
+import com.omnibid.common.MessageResponse;
 import com.omnibid.dto.user.ChangePasswordRequest;
 import com.omnibid.dto.user.UpdateProfileRequest;
 import com.omnibid.dto.user.UserProfileResponse;
@@ -17,7 +18,7 @@ import org.springframework.web.multipart.MultipartFile;
 @RestController
 @RequestMapping("/api/v1/users")
 @RequiredArgsConstructor
-@PreAuthorize("isAuthenticated()")
+@PreAuthorize("hasAnyRole('USER', 'ADMIN')")
 public class UserController {
 
     private final UserService userService;
@@ -27,8 +28,7 @@ public class UserController {
             @AuthenticationPrincipal CustomUserDetails userDetails
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        UserProfileResponse response = userService.getProfile(currentUser.id());
-        return ApiResponse.success(response);
+        return ApiResponse.ok(userService.getProfile(currentUser.id()));
     }
 
     @PatchMapping("/me")
@@ -37,38 +37,26 @@ public class UserController {
             @Valid @RequestBody UpdateProfileRequest request
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        UserProfileResponse response = userService.updateProfile(currentUser.id(), request);
-        return ApiResponse.success("Profile updated successfully", response);
+        return ApiResponse.ok(userService.updateProfile(currentUser.id(), request));
     }
 
+    // TODO v4-phase-4: return AvatarResponse { avatarUrl }
     @PostMapping("/me/avatar")
-    public ApiResponse<UserProfileResponse> uploadAvatarPost(
+    public ApiResponse<UserProfileResponse> uploadAvatar(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam("file") MultipartFile file
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        UserProfileResponse response = userService.updateAvatar(currentUser.id(), file);
-        return ApiResponse.success("Avatar updated successfully", response);
-    }
-
-    @PatchMapping("/me/avatar")
-    public ApiResponse<UserProfileResponse> uploadAvatarPatch(
-            @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestParam("file") MultipartFile file
-    ) {
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        UserProfileResponse response = userService.updateAvatar(currentUser.id(), file);
-        return ApiResponse.success("Avatar updated successfully", response);
+        return ApiResponse.ok(userService.updateAvatar(currentUser.id(), file));
     }
 
     @PatchMapping("/me/password")
-    public ApiResponse<Void> changePassword(
+    public ApiResponse<MessageResponse> changePassword(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @Valid @RequestBody ChangePasswordRequest request
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         userService.changePassword(currentUser.id(), request);
-        return ApiResponse.success("Password changed successfully", null);
+        return ApiResponse.ok(new MessageResponse("Đổi mật khẩu thành công, vui lòng đăng nhập lại"));
     }
 }
-

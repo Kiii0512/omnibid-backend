@@ -19,6 +19,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
@@ -29,6 +30,7 @@ public class ReportController {
     private final ReportService reportService;
 
     @PostMapping("/api/v1/reports")
+    @PreAuthorize("hasRole('USER')")
     public ResponseEntity<ApiResponse<ReportResponse>> createReport(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @Valid @RequestBody ReportRequest request) {
@@ -40,6 +42,7 @@ public class ReportController {
     }
 
     @GetMapping("/api/v1/admin/reports")
+    @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<PageResponse<ReportDetailResponse>>> getAdminReports(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false, defaultValue = "PENDING") ReportStatus status,

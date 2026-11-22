@@ -6,7 +6,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 0. Chuẩn bị
 - [x] 1. Nền tảng (Flyway, cấu hình, UTC/JSON, ApiResponse/ErrorCode)
 - [x] 2. Mô hình miền (entity, enum, repository, gỡ tính năng thừa)
-- [ ] 3. Bảo mật, xác thực
+- [x] 3. Bảo mật, xác thực
 - [ ] 4. Ảnh, sản phẩm, danh mục
 - [ ] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [ ] 6. Đơn hàng, thanh toán, giao hàng
@@ -32,6 +32,15 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
   - **Entity (`A2`, `A3`, `D5`, `E1`, `E6`)**: Chuyển toàn bộ `LocalDateTime` → `Instant` và tiền sang `DECIMAL(15,0)` trên cả 10 bảng v4; cập nhật `User` (`avatarPublicId`, `tokenVersion`, `ban`/`unban`/`increaseTokenVersion`/`isBanned`), `Category` (`icon` 50), `Product` (`item_condition`, `markInAuction`/`reserve`/`release`/`markSold`/`hide`/`isEditable`), `ProductImage` (`publicId` NOT NULL), `Auction` (bỏ `version`, thêm `updatedAt`, `activate`/`placeBid`/`minNextBid`/`reserveStatus`/`closeAsEnded`/`closeAsUnsold`/`cancel`/`isOpen`), `Bid` (không trạng thái), `Order` (bỏ `deliveredAt`/reminder, thêm `trackingCode`/`shippedAt`, `markPaid`/`markShipped`/`confirmReceived`/`autoComplete`/`expire`/`cancel`/`isPaymentOverdue`), `Payment` (bỏ `transactionRef`), `Report` (`reportedOrderId`, `resolve`/`reject`).
   - **Repository**: Gỡ `UserRepository.findByIdForUpdate`/`checkCurrentStatus`, truy vấn `BidStatus`, `transactionRef`, `reminder_*`; bổ sung `PESSIMISTIC_WRITE` + `jakarta.persistence.lock.timeout=5000` (`findByIdForUpdate`, `findAllByIdInForUpdateOrderByIdAsc`) cho `Auction`/`Order`/`Product`, các truy vấn quét trả ID (`findIdsByStatusAnd...`), `BidRepository` và `PaymentRepository` theo v4.
   - **Biên dịch cơ học phần còn lại**: Cập nhật DTO, `AuctionMapper`, `NotificationTemplates`, `MockPaymentGateway`/`DefaultMockPaymentGateway`, `OrderScheduler` và các Service/Controller còn lại (đánh dấu `// TODO v4-phase-N` tại phần logic sẽ viết lại ở phase 5–8).
+- **Phase 3** (`refactor(v4): phase 3 - security`):
+  - `C1`: Cập nhật `JwtTokenProvider` (`sub=userId`, claim `role`, `ver`, dùng `Clock`, thêm `JwtClaims`, `JwtValidationException`, `issueToken`/`generateToken`); cập nhật `CustomUserDetails` + `UserDetailsServiceImpl.loadUserById`.
+  - `C2`, `C3`, `C10`: Thêm `POST /api/v1/auth/logout` và `AuthService.logout` tăng `tokenVersion`; cập nhật `ChangePasswordRequest` (`confirmPassword`, regex mật khẩu v4), `UserServiceImpl.changePassword` tăng `tokenVersion`, trả `MessageResponse`; cập nhật `UpdateProfileRequest` (bỏ `avatarUrl`) và xóa `PATCH /api/v1/users/me/avatar`.
+  - `C4`: Thêm `LoginAttemptLimiter` (bộ nhớ `ConcurrentHashMap`, `Clock`, key `(email lowercase, remoteAddr)`, 5 lần/15 phút → 429 `TOO_MANY_REQUESTS` + `retryAfterSeconds`).
+  - `C5`: Thêm `PublicEndpointMatcher` dùng chung giữa `SecurityConfig` và `JwtAuthenticationFilter`; token sai/hết hạn/`ver` khác bị bỏ qua ở Public và trả 401 `UNAUTHORIZED` ở endpoint bảo vệ; user `BANNED` luôn nhận 403 `ACCOUNT_BANNED` ở mọi endpoint kể cả Public.
+  - `C6`: Thay `AuthResponse` bằng `LoginResponse` + `UserSummary`; `POST /auth/register` (bỏ `address`, thêm regex mật khẩu) trả 201 `UserProfileResponse` không kèm token, email trùng → 400 `VALIDATION_ERROR` với `details.fields.email`; sai mật khẩu → 401 `UNAUTHORIZED`.
+  - `C7`, `C8`: Cập nhật `SecurityConfig` (permit 5 nhóm Public + `/ws/**`, đặt `/api/v1/auctions/mine` trước matcher Public, bỏ `/uploads/**`, `/api/v1/products/**`, `/ws-auction/**`, CORS `allowCredentials=false`); đồng bộ `@PreAuthorize("hasRole('USER')")` / `hasAnyRole('USER','ADMIN')` trên các controller.
+  - `C9`: Cập nhật `WebSocketConfig` (`/ws` thuần, bỏ SockJS, origins từ `app.cors.allowed-origins`, broker `/topic`, interceptor kiểm tra CONNECT JWT `ver`/BANNED, SUBSCRIBE chỉ `/topic/auctions/{id}`, chặn mọi SEND) và đổi topic trong `WebSocketPublisherImpl` sang `/topic/auctions/{id}`.
+  - Cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`, `JwtTokenProviderTest`, `AuthServiceTest` và thêm `LoginAttemptLimiterTest`.
 
 ## Bảng ánh xạ mã lỗi cũ → mới (phase 1)
 | Mã cũ (`AppException`) | Mã mới (`ErrorCode`) | HTTP mới | Ghi chú |
@@ -65,6 +74,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 ## Cần người duyệt
 
 ## Việc tồn / test còn lỗi
-- Sau Phase 2: `.\mvnw.cmd -q compile` đạt **0 lỗi** (cổng bắt buộc phase 1–8); `verify-v4.ps1` đạt mục `10 entity tables match`, `no YAML config`, `V1/V2 matches reference`, `ErrorCode has all 24 codes`, và không còn từ khóa cấm nào thuộc Phase 2 (`LocalDateTime`, `BidStatus`, `Shipment`, `Watchlist`, `AuditLog`, `iconUrl`, `precision=12`, `PENDING`, `SimulatedOutcome`, `REMOVED`, `USED`, `reminder`, `deliveredAt`, ...).
+- Sau Phase 3: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch mọi mục thuộc Phase 3 (đã có `POST /api/v1/auth/logout`, đã bỏ `PATCH /api/v1/users/me/avatar`, không còn `/ws-auction` hay `/topic/auction/`).
+- Đã cập nhật `JwtTokenProviderTest`, `AuthServiceTest` và thêm `LoginAttemptLimiterTest` theo chuẩn v4 (các tệp test khác thuộc Phase 4–8 tiếp tục sửa ở Phase 9).
 - **21 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` do tham chiếu lớp/enum/kiểu cũ (`NotificationControllerTest`, `OrderControllerTest`, `PaymentControllerTest`, `ReportControllerTest`, `ShipmentControllerTest`, `DefaultMockPaymentGatewayTest`, `AuthorizationIT`, `NotificationIntegrationIT`, `AdminServiceTest`, `AuctionCloserTest`, `AuctionServiceTest`, `AuthServiceTest`, `BidServiceTest`, `CategoryServiceTest`, `NotificationServiceTest`, `OrderServiceTest`, `PaymentServiceTest`, `ProductServiceTest`, `ReportServiceTest`, `ShipmentServiceTest`, `Seed`) — sẽ sửa/gỡ ở Phase 9.
 - Đã thêm `src/test/java/com/omnibid/config/JacksonConfigTest.java` kiểm tra serialize `+07:00`, deserialize `Z`/`+07:00` và `SortWhitelist`.

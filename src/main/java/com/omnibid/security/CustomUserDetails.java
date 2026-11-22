@@ -1,6 +1,7 @@
 package com.omnibid.security;
 
 import com.omnibid.entity.User;
+import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import lombok.Getter;
 import org.springframework.security.core.GrantedAuthority;
@@ -31,9 +32,25 @@ public class CustomUserDetails implements UserDetails {
         return user.getFullName();
     }
 
+    public UserRole getRole() {
+        return user.getRole();
+    }
+
+    public UserStatus getStatus() {
+        return user.getStatus();
+    }
+
+    public int getTokenVersion() {
+        return user.getTokenVersion();
+    }
+
+    public boolean isBanned() {
+        return user.isBanned();
+    }
+
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
-        String roleName = user.getRole() != null ? user.getRole().name() : "USER";
+        String roleName = user.getRole() != null ? user.getRole().name() : UserRole.USER.name();
         return Collections.singletonList(
                 new SimpleGrantedAuthority("ROLE_" + roleName)
         );
@@ -56,7 +73,7 @@ public class CustomUserDetails implements UserDetails {
 
     @Override
     public boolean isAccountNonLocked() {
-        return user.getStatus() != UserStatus.BANNED;
+        return !user.isBanned();
     }
 
     @Override
@@ -69,4 +86,3 @@ public class CustomUserDetails implements UserDetails {
         return user.getStatus() == UserStatus.ACTIVE;
     }
 }
-

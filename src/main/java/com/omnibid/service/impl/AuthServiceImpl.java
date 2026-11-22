@@ -2,83 +2,129 @@ package com.omnibid.service.impl;
 
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
-import com.omnibid.dto.auth.AuthResponse;
 import com.omnibid.dto.auth.LoginRequest;
+import com.omnibid.dto.auth.LoginResponse;
 import com.omnibid.dto.auth.RegisterRequest;
+import com.omnibid.dto.user.UserProfileResponse;
+import com.omnibid.dto.user.UserSummary;
 import com.omnibid.entity.User;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.security.JwtTokenProvider;
+import com.omnibid.security.LoginAttemptLimiter;
 import com.omnibid.service.AuthService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.http.HttpStatus;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import java.util.Locale;
+import java.util.Map;
 
 @Service
 @RequiredArgsConstructor
 public class AuthServiceImpl implements AuthService {
 
+    private static final String INVALID_CREDENTIALS_MESSAGE = "Email hoặc mật khẩu không đúng";
+
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
     private final JwtTokenProvider jwtTokenProvider;
+    private final LoginAttemptLimiter loginAttemptLimiter;
 
     @Override
     @Transactional
-    public AuthResponse register(RegisterRequest request) {
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Email is already registered");
+    public UserProfileResponse register(RegisterRequest request) {
+        String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
+        if (userRepository.existsByEmail(normalizedEmail)) {
+            throw new BusinessException(
+                    ErrorCode.VALIDATION_ERROR,
+                    "Email đã được đăng ký",
+                    Map.of("fields", Map.of("email", "Email đã được đăng ký"))
+            );
+        }
+
+        String phoneNumber = request.getPhoneNumber();
+        if (phoneNumber != null) {
+            phoneNumber = phoneNumber.isBlank() ? null : phoneNumber.trim();
         }
 
         User user = User.builder()
-                .fullName(request.getFullName())
-                .email(request.getEmail())
+                .fullName(request.getFullName().trim())
+                .email(normalizedEmail)
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
-                .phoneNumber(request.getPhoneNumber())
-                .address(request.getAddress())
+                .phoneNumber(phoneNumber)
                 .role(UserRole.USER)
                 .status(UserStatus.ACTIVE)
+                .tokenVersion(0)
                 .build();
 
         User savedUser = userRepository.save(user);
 
-        String token = jwtTokenProvider.generateToken(savedUser.getEmail(), savedUser.getRole().name());
-
-        return AuthResponse.builder()
-                .accessToken(token)
-                .tokenType("Bearer")
-                .userId(savedUser.getId())
-                .email(savedUser.getEmail())
-                .fullName(savedUser.getFullName())
-                .role(savedUser.getRole().name())
-                .build();
+        return new UserProfileResponse(
+                savedUser.getId(),
+                savedUser.getFullName(),
+                savedUser.getEmail(),
+                savedUser.getPhoneNumber(),
+                savedUser.getAvatarUrl(),
+                savedUser.getAddress(),
+                savedUser.getRole(),
+                savedUser.getStatus(),
+                savedUser.getCreatedAt()
+        );
     }
 
     @Override
     @Transactional(readOnly = true)
-    public AuthResponse login(LoginRequest request) {
-        User user = userRepository.findByEmail(request.getEmail())
-                .orElseThrow(() -> new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password"));
+    public LoginResponse login(LoginRequest request, String clientIp) {
+        String normalizedEmail = request.getEmail().trim().toLowerCase(Locale.ROOT);
 
-        if (!passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
-            throw new BusinessException(ErrorCode.UNAUTHORIZED, "Invalid email or password");
+        loginAttemptLimiter.checkAllowed(normalizedEmail, clientIp);
+
+        User user = userRepository.findByEmail(normalizedEmail).orElse(null);
+        if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
+            loginAttemptLimiter.recordFailure(normalizedEmail, clientIp);
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, INVALID_CREDENTIALS_MESSAGE);
         }
 
-        if (user.getStatus() == UserStatus.BANNED) {
-            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "User account is banned");
+        if (user.isBanned()) {
+            throw new BusinessException(ErrorCode.ACCOUNT_BANNED);
         }
 
-        String token = jwtTokenProvider.generateToken(user.getEmail(), user.getRole().name());
+        loginAttemptLimiter.recordSuccess(normalizedEmail, clientIp);
 
-        return AuthResponse.builder()
-                .accessToken(token)
-                .tokenType("Bearer")
-                .userId(user.getId())
-                .email(user.getEmail())
-                .fullName(user.getFullName())
-                .role(user.getRole().name())
-                .build();
+        JwtTokenProvider.IssuedToken issuedToken = jwtTokenProvider.issueToken(
+                user.getId(),
+                user.getRole(),
+                user.getTokenVersion()
+        );
+
+        UserSummary summary = new UserSummary(
+                user.getId(),
+                user.getFullName(),
+                user.getEmail(),
+                user.getRole(),
+                user.getStatus(),
+                user.getAvatarUrl()
+        );
+
+        return new LoginResponse(
+                issuedToken.accessToken(),
+                "Bearer",
+                issuedToken.expiresInSeconds(),
+                issuedToken.expiresAt(),
+                user.getRole(),
+                summary
+        );
+    }
+
+    @Override
+    @Transactional
+    public void logout(Long userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy người dùng"));
+        user.increaseTokenVersion();
+        userRepository.save(user);
     }
 }

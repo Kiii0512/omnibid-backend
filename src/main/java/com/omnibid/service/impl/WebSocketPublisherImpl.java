@@ -22,7 +22,7 @@ public class WebSocketPublisherImpl implements WebSocketPublisher {
     @Override
     public void publishAuctionUpdate(Long auctionId, Object payload) {
         AuctionWebSocketMessage wrapped = wrapAuctionMessage(auctionId, payload);
-        String destination = "/topic/auction/" + auctionId;
+        String destination = "/topic/auctions/" + auctionId;
 
         Runnable sendTask = () -> {
             try {

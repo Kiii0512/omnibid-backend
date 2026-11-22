@@ -29,9 +29,13 @@ Danh sách khởi tạo từ phân tích chênh lệch; agent bổ sung chi ti�
 `GET /orders/summary`, `GET /notifications/unread-count`, `PATCH /notifications/read-all`, `GET /admin/audit-logs`, toàn bộ `/watchlist/**`.
 
 ## Hành vi đổi
-- Đăng ký không trả token (chuyển tới trang đăng nhập). Đăng nhập trả `{accessToken, tokenType, expiresIn, expiresAt, role, user{…}}`.
-- Đăng xuất/đổi mật khẩu vô hiệu mọi token của tài khoản → Frontend xóa token và về trang đăng nhập.
-- Đăng nhập sai 5 lần/15 phút → 429 `TOO_MANY_REQUESTS`.
+- Đăng ký (`POST /api/v1/auth/register`): không nhận `address`, bắt buộc mật khẩu ≥8 ký tự gồm chữ hoa + chữ thường + chữ số; trả 201 `UserProfile` (`{ id, fullName, email, phoneNumber, avatarUrl, address, role, status, createdAt }`) và **không cấp token** (Frontend chuyển tới trang đăng nhập). Email trùng → 400 `VALIDATION_ERROR` kèm `error.details.fields.email`.
+- Đăng nhập (`POST /api/v1/auth/login`): trả 200 `{ accessToken, tokenType: "Bearer", expiresIn: 86400, expiresAt: "...+07:00", role, user: { id, fullName, email, role, status, avatarUrl } }`. Sai email/mật khẩu → 401 `UNAUTHORIZED`; tài khoản bị khóa → 403 `ACCOUNT_BANNED`.
+- Đăng xuất (`POST /api/v1/auth/logout`) và đổi mật khẩu (`PATCH /api/v1/users/me/password`, bổ sung bắt buộc `confirmPassword`, trả `{ message }`): tăng `token_version`, vô hiệu toàn bộ JWT đã cấp của tài khoản → Frontend xóa token và về trang đăng nhập.
+- Hồ sơ (`PATCH /api/v1/users/me`): chỉ nhận `{ fullName, phoneNumber, address }` (bỏ `avatarUrl`). Bỏ `PATCH /api/v1/users/me/avatar` (chỉ giữ `POST /api/v1/users/me/avatar`).
+- Đăng nhập sai 5 lần/15 phút theo `(email, IP)` → 429 `TOO_MANY_REQUESTS` kèm header `Retry-After` và `error.details.retryAfterSeconds`.
+- JWT của tài khoản `BANNED` luôn nhận 403 `ACCOUNT_BANNED` ở mọi endpoint (kể cả Public); JWT hỏng/hết hạn/`ver` sai bị bỏ qua ở endpoint Public và trả 401 `UNAUTHORIZED` ở endpoint cần đăng nhập.
+- WebSocket: đổi endpoint sang `/ws` (WebSocket thuần, bỏ SockJS và `/ws-auction`), kênh `/topic/auctions/{id}`, chỉ đọc (mọi khung `SEND` và `SUBSCRIBE` ngoài `/topic/auctions/{id}` bị từ chối); CORS `allowCredentials=false`.
 - `SELF_BID_NOT_ALLOWED` trả 409. Lịch sử đặt giá công khai không còn `bidderId`, `status`.
 - Thanh toán đồng bộ: kết quả SUCCESS/FAILED ngay trong response; không còn trạng thái PENDING/polling.
 - Admin không gọi được `/orders/{id}` và `/orders/{id}/payments` (dùng `/admin/orders/{id}`).
