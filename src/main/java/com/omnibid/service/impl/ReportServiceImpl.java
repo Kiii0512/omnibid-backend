@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.report.*;
@@ -46,7 +47,7 @@ public class ReportServiceImpl implements ReportService {
     @Transactional
     public ReportResponse createReport(CurrentUser currentUser, ReportRequest request) {
         if (request.reason() == null || request.reason().trim().length() < 10) {
-            throw new AppException("VALIDATION_ERROR", "Reason must be at least 10 characters", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Reason must be at least 10 characters");
         }
 
         if (request.reportType() == ReportType.COMPLAINT) {
@@ -54,48 +55,48 @@ public class ReportServiceImpl implements ReportService {
         }
 
         User reporter = userRepository.findById(currentUser.id())
-                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found"));
         if (reporter.getStatus() == UserStatus.BANNED) {
-            throw new AppException("ACCOUNT_BANNED", "Account is banned", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Account is banned");
         }
 
         if (request.reportType() == ReportType.VIOLATION) {
             return createViolationReport(currentUser, request);
         } else {
-            throw new AppException("VALIDATION_ERROR", "Unsupported report type: " + request.reportType(), HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Unsupported report type: " + request.reportType());
         }
     }
 
     private ReportResponse createViolationReport(CurrentUser currentUser, ReportRequest request) {
         if (request.reportedUserId() == null && request.reportedProductId() == null) {
-            throw new AppException("VALIDATION_ERROR", "Either reportedUserId or reportedProductId is required", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Either reportedUserId or reportedProductId is required");
         }
 
         if (request.reportedUserId() != null) {
             if (request.reportedUserId().equals(currentUser.id())) {
-                throw new AppException("VALIDATION_ERROR", "Cannot report self", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Cannot report self");
             }
             if (!userRepository.existsById(request.reportedUserId())) {
-                throw new AppException("NOT_FOUND", "Reported user not found", HttpStatus.NOT_FOUND);
+                throw new BusinessException(ErrorCode.NOT_FOUND, "Reported user not found");
             }
         }
 
         if (request.reportedProductId() != null) {
             Product product = productRepository.findById(request.reportedProductId())
-                    .orElseThrow(() -> new AppException("NOT_FOUND", "Reported product not found", HttpStatus.NOT_FOUND));
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Reported product not found"));
             if (product.getSellerId().equals(currentUser.id())) {
-                throw new AppException("VALIDATION_ERROR", "Cannot report own product", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Cannot report own product");
             }
         }
 
         if (request.reportedProductId() != null
                 && reportRepository.existsByReporterIdAndReportedProductIdAndStatus(currentUser.id(), request.reportedProductId(), ReportStatus.PENDING)) {
-            throw new AppException("DUPLICATE_PENDING_REPORT", "A pending report already exists for this product", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CONFLICT, "A pending report already exists for this product");
         }
 
         if (request.reportedUserId() != null
                 && reportRepository.existsByReporterIdAndReportedUserIdAndStatus(currentUser.id(), request.reportedUserId(), ReportStatus.PENDING)) {
-            throw new AppException("DUPLICATE_PENDING_REPORT", "A pending report already exists for this user", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CONFLICT, "A pending report already exists for this user");
         }
 
         Report report = Report.builder()
@@ -123,35 +124,34 @@ public class ReportServiceImpl implements ReportService {
 
     private ReportResponse createComplaintReport(CurrentUser currentUser, ReportRequest request) {
         if (request.orderId() == null) {
-            throw new AppException("VALIDATION_ERROR", "orderId is required for complaint", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "orderId is required for complaint");
         }
 
         // Lock hierarchy: L4 Order - lock Order first before non-locking reads to preserve REPEATABLE READ snapshot
         Order order = orderRepository.findByIdForUpdate(request.orderId())
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found"));
 
         User reporter = userRepository.findById(currentUser.id())
-                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found"));
         if (reporter.getStatus() == UserStatus.BANNED) {
-            throw new AppException("ACCOUNT_BANNED", "Account is banned", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Account is banned");
         }
 
         if (!order.getBuyerId().equals(currentUser.id())) {
-            throw new AppException("FORBIDDEN", "Only buyer can file complaint", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Only buyer can file complaint");
         }
 
         if (order.getStatus() != OrderStatus.PAID && order.getStatus() != OrderStatus.SHIPPING) {
-            throw new AppException("COMPLAINT_WINDOW_CLOSED",
-                    "Complaint window is closed for order in status: " + order.getStatus(), HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Complaint window is closed for order in status: " + order.getStatus());
         }
 
         LocalDateTime now = LocalDateTime.now(clock);
         if (order.getConfirmDeadline() != null && !order.getConfirmDeadline().isAfter(now)) {
-            throw new AppException("COMPLAINT_WINDOW_CLOSED", "Complaint deadline has expired", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Complaint deadline has expired");
         }
 
         if (reportRepository.existsByReporterIdAndOrderIdAndStatus(currentUser.id(), order.getId(), ReportStatus.PENDING)) {
-            throw new AppException("DUPLICATE_PENDING_REPORT", "A pending complaint already exists for this order", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CONFLICT, "A pending complaint already exists for this order");
         }
 
         Report report = Report.builder()
@@ -186,7 +186,7 @@ public class ReportServiceImpl implements ReportService {
     @Transactional(readOnly = true)
     public PageResponse<ReportDetailResponse> getAdminReports(CurrentUser admin, ReportStatus status, ReportType reportType, Pageable pageable) {
         if (!admin.isAdmin()) {
-            throw new AppException("FORBIDDEN", "Admin required", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin required");
         }
 
         Page<Report> page = reportRepository.findAdminReports(status, reportType, pageable);
@@ -253,20 +253,19 @@ public class ReportServiceImpl implements ReportService {
     @Transactional
     public ReportResolveResponse resolveReport(CurrentUser admin, Long reportId, ReportResolveRequest request) {
         if (!admin.isAdmin()) {
-            throw new AppException("FORBIDDEN", "Admin required", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin required");
         }
 
         // Lock hierarchy: L0 Report
         Report report = reportRepository.findByIdForUpdate(reportId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Report not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Report not found"));
 
         if (report.getStatus() != ReportStatus.PENDING) {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Report has already been resolved or rejected", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Report has already been resolved or rejected");
         }
 
         if (request.note() == null || request.note().trim().length() < 5) {
-            throw new AppException("VALIDATION_ERROR", "Note must be at least 5 characters", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Note must be at least 5 characters");
         }
 
         String note = request.note().trim();
@@ -294,31 +293,31 @@ public class ReportServiceImpl implements ReportService {
         // Validate action suitability before execution
         if (report.getReportType() == ReportType.VIOLATION) {
             if (action != ReportAction.BAN_USER && action != ReportAction.HIDE_PRODUCT && action != ReportAction.CANCEL_AUCTION) {
-                throw new AppException("VALIDATION_ERROR", "Invalid action for VIOLATION: " + action, HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Invalid action for VIOLATION: " + action);
             }
             if (action == ReportAction.BAN_USER && report.getReportedUserId() == null) {
-                throw new AppException("VALIDATION_ERROR", "Reported user is required for BAN_USER", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Reported user is required for BAN_USER");
             }
             if (action == ReportAction.HIDE_PRODUCT && report.getReportedProductId() == null) {
-                throw new AppException("VALIDATION_ERROR", "Reported product is required for HIDE_PRODUCT", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Reported product is required for HIDE_PRODUCT");
             }
             if (action == ReportAction.CANCEL_AUCTION) {
                 if (report.getReportedProductId() == null) {
-                    throw new AppException("VALIDATION_ERROR", "Reported product is required for CANCEL_AUCTION", HttpStatus.BAD_REQUEST);
+                    throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Reported product is required for CANCEL_AUCTION");
                 }
                 boolean hasOpenAuction = auctionRepository.findFirstByProductIdAndStatusIn(
                         report.getReportedProductId(), List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
                 ).isPresent();
                 if (!hasOpenAuction) {
-                    throw new AppException("INVALID_STATUS_TRANSITION", "Product has no open auction to cancel", HttpStatus.CONFLICT);
+                    throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Product has no open auction to cancel");
                 }
             }
         } else if (report.getReportType() == ReportType.COMPLAINT) {
             if (action != ReportAction.COMPLETE_ORDER && action != ReportAction.CANCEL_ORDER) {
-                throw new AppException("VALIDATION_ERROR", "Invalid action for COMPLAINT: " + action, HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Invalid action for COMPLAINT: " + action);
             }
             if (report.getOrderId() == null) {
-                throw new AppException("VALIDATION_ERROR", "Order is required for COMPLAINT", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Order is required for COMPLAINT");
             }
         }
 
@@ -329,12 +328,12 @@ public class ReportServiceImpl implements ReportService {
             case CANCEL_AUCTION -> {
                 Auction openAuction = auctionRepository.findFirstByProductIdAndStatusIn(
                         report.getReportedProductId(), List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE)
-                ).orElseThrow(() -> new AppException("INVALID_STATUS_TRANSITION", "Product has no open auction to cancel", HttpStatus.CONFLICT));
+                ).orElseThrow(() -> new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Product has no open auction to cancel"));
                 yield adminService.cancelAuction(openAuction.getId(), note, admin.id());
             }
             case COMPLETE_ORDER -> adminService.completeOrder(report.getOrderId(), note, admin.id());
             case CANCEL_ORDER -> adminService.cancelOrder(report.getOrderId(), note, admin.id());
-            default -> throw new AppException("VALIDATION_ERROR", "Unsupported action: " + action, HttpStatus.BAD_REQUEST);
+            default -> throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Unsupported action: " + action);
         };
 
         // Update Report state after sub-action succeeds

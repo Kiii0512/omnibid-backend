@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.dto.storage.StorageUploadResult;
 import com.omnibid.dto.user.ChangePasswordRequest;
 import com.omnibid.dto.user.UpdateProfileRequest;
@@ -72,11 +73,11 @@ public class UserServiceImpl implements UserService {
         User user = getUser(userId);
 
         if (!passwordEncoder.matches(request.currentPassword(), user.getPasswordHash())) {
-            throw new AppException("INVALID_PASSWORD", "Mật khẩu hiện tại không chính xác", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Mật khẩu hiện tại không chính xác");
         }
 
         if (request.currentPassword().equals(request.newPassword())) {
-            throw new AppException("VALIDATION_ERROR", "Mật khẩu mới không được trùng với mật khẩu cũ", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Mật khẩu mới không được trùng với mật khẩu cũ");
         }
 
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
@@ -85,7 +86,7 @@ public class UserServiceImpl implements UserService {
 
     private User getUser(Long userId) {
         return userRepository.findById(userId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found with id: " + userId, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found with id: " + userId));
     }
 
     private UserProfileResponse mapToProfile(User user) {

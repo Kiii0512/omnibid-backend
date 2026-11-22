@@ -1,18 +1,23 @@
 package com.omnibid.security;
 
+import com.omnibid.common.ApiResponse;
+import com.omnibid.common.ErrorCode;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.springframework.http.HttpStatus;
+import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.web.AuthenticationEntryPoint;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
-import java.time.LocalDateTime;
 
 @Component
+@RequiredArgsConstructor
 public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
+
+    private final JsonMapper jsonMapper;
 
     @Override
     public void commence(HttpServletRequest request, HttpServletResponse response, AuthenticationException authException)
@@ -20,23 +25,14 @@ public class JwtAuthenticationEntryPoint implements AuthenticationEntryPoint {
         response.setContentType(MediaType.APPLICATION_JSON_VALUE);
         response.setCharacterEncoding("UTF-8");
 
-        String errorCode;
-        String message;
-
+        ErrorCode errorCode;
         if (Boolean.TRUE.equals(request.getAttribute("ACCOUNT_BANNED"))) {
-            response.setStatus(HttpStatus.FORBIDDEN.value());
-            errorCode = "ACCOUNT_BANNED";
-            message = "Tài khoản của bạn đã bị khóa";
+            errorCode = ErrorCode.ACCOUNT_BANNED;
         } else {
-            response.setStatus(HttpStatus.UNAUTHORIZED.value());
-            errorCode = "UNAUTHORIZED";
-            message = "Yêu cầu chưa xác thực hoặc token không hợp lệ";
+            errorCode = ErrorCode.UNAUTHORIZED;
         }
 
-        String json = String.format(
-                "{\"success\":false,\"errorCode\":\"%s\",\"message\":\"%s\",\"timestamp\":\"%s\"}",
-                errorCode, message, LocalDateTime.now()
-        );
-        response.getWriter().write(json);
+        response.setStatus(errorCode.getStatus().value());
+        jsonMapper.writeValue(response.getWriter(), ApiResponse.error(errorCode));
     }
 }

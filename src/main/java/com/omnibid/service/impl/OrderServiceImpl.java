@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.PageResponse;
 import com.omnibid.config.AppProperties;
@@ -99,7 +100,7 @@ public class OrderServiceImpl implements OrderService {
     public Order createFromAuction(Auction auction) {
         return orderRepository.findByAuctionId(auction.getId())
                 .orElseGet(() -> {
-                    int deadlineHours = appProperties.getOrder().getPaymentDeadlineHours();
+                    java.time.Duration deadline = appProperties.getOrder().getPaymentDeadlineHours();
                     LocalDateTime closedAt = auction.getClosedAt() != null ? auction.getClosedAt() : LocalDateTime.now(clock);
                     Order order = Order.builder()
                             .auctionId(auction.getId())
@@ -108,7 +109,7 @@ public class OrderServiceImpl implements OrderService {
                             .buyerId(auction.getWinnerId())
                             .finalPrice(auction.getFinalPrice())
                             .status(OrderStatus.PENDING_PAYMENT)
-                            .paymentDeadline(closedAt.plusHours(deadlineHours))
+                            .paymentDeadline(closedAt.plus(deadline))
                             .build();
                     log.info("Creating order for auction {}: buyer={}, amount={}",
                             auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
@@ -138,7 +139,7 @@ public class OrderServiceImpl implements OrderService {
     public OrderDetailResponse getOrderById(CurrentUser currentUser, Long id) {
         // Thứ tự kiểm tra: tồn tại -> quyền -> trạng thái
         Order order = orderRepository.findById(id)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found with id: " + id, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
 
         orderAccessPolicy.requireViewer(order, currentUser);
 
@@ -150,14 +151,14 @@ public class OrderServiceImpl implements OrderService {
     public OrderDetailResponse updateShippingInfo(CurrentUser currentUser, Long id, ShippingInfoRequest request) {
         // Bước 1: Khóa Order bằng findByIdForUpdate là lệnh đầu tiên trong transaction
         Order order = orderRepository.findByIdForUpdate(id)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found with id: " + id, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found with id: " + id));
 
         // Bước 2: Kiểm tra quyền (chỉ buyer)
         orderAccessPolicy.requireBuyer(order, currentUser);
 
         // Bước 3: Kiểm tra trạng thái
         if (order.getStatus() == OrderStatus.CANCELLED) {
-            throw new AppException("ORDER_CANCELLED", "Order has been cancelled", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Order has been cancelled");
         }
 
         if (order.getStatus() == OrderStatus.PENDING_PAYMENT) {
@@ -166,12 +167,10 @@ public class OrderServiceImpl implements OrderService {
             // Chỉ cho phép khi Shipment chưa PICKED_UP (D-04)
             Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElse(null);
             if (shipment != null && shipment.getStatus() != ShipmentStatus.CREATED) {
-                throw new AppException("INVALID_STATUS_TRANSITION",
-                        "Cannot update shipping info after shipment is picked up", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot update shipping info after shipment is picked up");
             }
         } else {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Cannot update shipping info when order is " + order.getStatus(), HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot update shipping info when order is " + order.getStatus());
         }
 
         order.setShippingAddress(request.getShippingAddress());
@@ -371,32 +370,32 @@ public class OrderServiceImpl implements OrderService {
         // REPEATABLE READ snapshot isolation: Phải khóa Order (SELECT ... FOR UPDATE)
         // là lệnh đầu tiên trong transaction để không tạo snapshot cũ trước khi khóa.
         Order order = orderRepository.findByIdForUpdate(id).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
         );
 
         if (!order.getBuyerId().equals(currentUser.id())) {
-            throw new AppException("FORBIDDEN", "Chỉ người mua mới được phép xác nhận nhận hàng", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Chỉ người mua mới được phép xác nhận nhận hàng");
         }
 
         if (order.getStatus() == OrderStatus.CANCELLED) {
-            throw new AppException("ORDER_CANCELLED", "Đơn hàng đã bị hủy", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Đơn hàng đã bị hủy");
         }
 
         if (order.getStatus() == OrderStatus.COMPLETED) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "Đơn hàng đã hoàn tất", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng đã hoàn tất");
         }
 
         if (order.getStatus() != OrderStatus.SHIPPING) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "Đơn hàng chưa ở trạng thái đang giao hàng", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng chưa ở trạng thái đang giao hàng");
         }
 
         Shipment shipment = shipmentRepository.findByOrderId(order.getId()).orElse(null);
         if (shipment == null || shipment.getStatus() != ShipmentStatus.DELIVERED) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "Vận đơn chưa ở trạng thái DELIVERED", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Vận đơn chưa ở trạng thái DELIVERED");
         }
 
         if (reportRepository.existsByOrderIdAndReportTypeAndStatus(order.getId(), ReportType.COMPLAINT, ReportStatus.PENDING)) {
-            throw new AppException("COMPLAINT_PENDING", "Đơn hàng đang có khiếu nại chờ xử lý", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng đang có khiếu nại chờ xử lý");
         }
 
         LocalDateTime now = LocalDateTime.now(clock);

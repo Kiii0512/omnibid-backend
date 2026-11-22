@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.admin.*;
@@ -65,7 +66,7 @@ public class AdminServiceImpl implements AdminService {
             unbanUserInternal(userId, request.reason(), admin.id());
             return new UserStatusUpdateResponse(userId, UserStatus.ACTIVE, Map.of());
         } else {
-            throw new AppException("VALIDATION_ERROR", "Unsupported user status: " + request.status(), HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Unsupported user status: " + request.status());
         }
     }
 
@@ -91,10 +92,10 @@ public class AdminServiceImpl implements AdminService {
 
     private void unbanUserInternal(Long userId, String reason, Long adminId) {
         User user = userRepository.findByIdForUpdate(userId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found"));
 
         if (user.getStatus() != UserStatus.BANNED) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "User is not banned", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "User is not banned");
         }
 
         user.setStatus(UserStatus.ACTIVE);
@@ -105,7 +106,7 @@ public class AdminServiceImpl implements AdminService {
 
     private Map<String, Object> banUserInternal(Long userId, String reason, Long adminId) {
         if (userId.equals(adminId)) {
-            throw new AppException("CANNOT_BAN_ADMIN", "Cannot ban yourself", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CANNOT_BAN_ADMIN, "Cannot ban yourself");
         }
 
         // Đọc thường danh sách ID liên quan trước khi khóa
@@ -264,14 +265,14 @@ public class AdminServiceImpl implements AdminService {
 
         // Lock hierarchy: L6 User CUỐI, kiểm tra lại toàn bộ điều kiện
         User user = userRepository.findByIdForUpdate(userId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "User not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "User not found"));
 
         if (user.getRole() == UserRole.ADMIN || userId.equals(adminId)) {
-            throw new AppException("CANNOT_BAN_ADMIN", "Cannot ban an admin user", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CANNOT_BAN_ADMIN, "Cannot ban an admin user");
         }
 
         if (user.getStatus() == UserStatus.BANNED) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "User is already banned", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "User is already banned");
         }
 
         user.setStatus(UserStatus.BANNED);
@@ -342,10 +343,10 @@ public class AdminServiceImpl implements AdminService {
         if (request.status() == ProductStatus.AVAILABLE) {
             Product product = productRepository.findByIdForUpdate(productId)
                     .or(() -> productRepository.findById(productId))
-                    .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
 
             if (product.getStatus() != ProductStatus.HIDDEN) {
-                throw new AppException("INVALID_STATUS_TRANSITION", "Only HIDDEN products can be unhidden", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Only HIDDEN products can be unhidden");
             }
 
             product.setStatus(ProductStatus.AVAILABLE);
@@ -366,7 +367,7 @@ public class AdminServiceImpl implements AdminService {
             return new ProductHideResponse(productId, ProductStatus.HIDDEN, cancelledAuctionIds, cancelledOrderIds);
         }
 
-        throw new AppException("INVALID_STATUS_TRANSITION", "Only HIDDEN or AVAILABLE status is supported: " + request.status(), HttpStatus.CONFLICT);
+        throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Only HIDDEN or AVAILABLE status is supported: " + request.status());
     }
 
     @Override
@@ -431,13 +432,12 @@ public class AdminServiceImpl implements AdminService {
 
         // 3. Khóa L2 Product
         Product product = productRepository.findByIdForUpdate(productId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
 
         if (product.getStatus() == ProductStatus.HIDDEN
                 || product.getStatus() == ProductStatus.REMOVED
                 || product.getStatus() == ProductStatus.SOLD) {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Cannot hide product in status: " + product.getStatus(), HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot hide product in status: " + product.getStatus());
         }
 
         product.setStatus(ProductStatus.HIDDEN);
@@ -502,15 +502,14 @@ public class AdminServiceImpl implements AdminService {
     private Auction cancelAuctionInternal(Long auctionId, String reason, Long adminId) {
         // Lock hierarchy: L2 Auction -> L3 Product
         Auction auction = auctionRepository.findByIdForUpdate(auctionId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Auction not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Auction not found"));
 
         if (auction.getStatus() != AuctionStatus.SCHEDULED && auction.getStatus() != AuctionStatus.ACTIVE) {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Cannot cancel auction in status: " + auction.getStatus(), HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot cancel auction in status: " + auction.getStatus());
         }
 
         Product product = productRepository.findByIdForUpdate(auction.getProductId())
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
 
         LocalDateTime now = LocalDateTime.now(clock);
         auction.setStatus(AuctionStatus.CANCELLED);
@@ -606,18 +605,17 @@ public class AdminServiceImpl implements AdminService {
         Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
 
         Order order = orderRepository.findByIdForUpdate(orderId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found"));
 
         if (product == null) {
             product = productRepository.findByIdForUpdate(order.getProductId())
-                    .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
         }
 
         if (order.getStatus() == OrderStatus.COMPLETED
                 || order.getStatus() == OrderStatus.CANCELLED
                 || order.getStatus() == OrderStatus.EXPIRED) {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Cannot cancel order in status: " + order.getStatus(), HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot cancel order in status: " + order.getStatus());
         }
 
         // Cancel pending payments (L4)
@@ -673,16 +671,15 @@ public class AdminServiceImpl implements AdminService {
         Product product = productId != null ? productRepository.findByIdForUpdate(productId).orElse(null) : null;
 
         Order order = orderRepository.findByIdForUpdate(orderId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Order not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Order not found"));
 
         if (product == null) {
             product = productRepository.findByIdForUpdate(order.getProductId())
-                    .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found", HttpStatus.NOT_FOUND));
+                    .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found"));
         }
 
         if (order.getStatus() != OrderStatus.PAID && order.getStatus() != OrderStatus.SHIPPING) {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Cannot complete order in status: " + order.getStatus(), HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot complete order in status: " + order.getStatus());
         }
 
         LocalDateTime now = LocalDateTime.now(clock);
@@ -824,7 +821,7 @@ public class AdminServiceImpl implements AdminService {
 
     private void requireAdmin(CurrentUser admin) {
         if (!admin.isAdmin()) {
-            throw new AppException("FORBIDDEN", "Admin required", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin required");
         }
     }
 

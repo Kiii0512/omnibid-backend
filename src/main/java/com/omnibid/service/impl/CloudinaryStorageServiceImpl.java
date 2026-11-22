@@ -2,7 +2,8 @@ package com.omnibid.service.impl;
 
 import com.cloudinary.Cloudinary;
 import com.cloudinary.utils.ObjectUtils;
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.dto.storage.StorageUploadResult;
 import com.omnibid.service.StorageService;
 import lombok.extern.slf4j.Slf4j;
@@ -24,7 +25,7 @@ public class CloudinaryStorageServiceImpl implements StorageService {
     @Override
     public StorageUploadResult upload(MultipartFile file, String folder) {
         if (file == null || file.isEmpty()) {
-            throw new AppException("FILE_EMPTY", "File cannot be empty", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.INVALID_IMAGE, "File cannot be empty");
         }
 
         try {
@@ -39,7 +40,7 @@ public class CloudinaryStorageServiceImpl implements StorageService {
             return new StorageUploadResult(url, publicId);
         } catch (IOException e) {
             log.error("Failed to upload file to Cloudinary", e);
-            throw new AppException("UPLOAD_FAILED", "Failed to upload file to Cloudinary", HttpStatus.INTERNAL_SERVER_ERROR);
+            throw new BusinessException(ErrorCode.IMAGE_UPLOAD_FAILED, "Failed to upload file to Cloudinary");
         }
     }
 

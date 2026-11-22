@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.config.AppProperties;
 import com.omnibid.dto.payment.PaymentHistoryResponse;
@@ -52,7 +53,7 @@ public class PaymentServiceImpl implements PaymentService {
     private final ShipmentRepository shipmentRepository;
     private final NotificationService notificationService;
     private final TransactionOperations transactionOperations;
-    private final AppProperties.PaymentProperties paymentProperties;
+    private final AppProperties.Payment paymentProperties;
     private final Clock clock;
     private UserRepository userRepository;
 
@@ -85,7 +86,7 @@ public class PaymentServiceImpl implements PaymentService {
                               ShipmentService shipmentService,
                               NotificationService notificationService,
                               TransactionOperations transactionOperations,
-                              AppProperties.PaymentProperties paymentProperties,
+                              AppProperties.Payment paymentProperties,
                               Clock clock) {
         this.orderRepository = orderRepository;
         this.paymentRepository = paymentRepository;
@@ -105,7 +106,7 @@ public class PaymentServiceImpl implements PaymentService {
                               ShipmentService shipmentService,
                               NotificationService notificationService,
                               TransactionOperations transactionOperations,
-                              AppProperties.PaymentProperties paymentProperties,
+                              AppProperties.Payment paymentProperties,
                               Clock clock,
                               UserRepository userRepository) {
         this(orderRepository, paymentRepository, gateway, shipmentService, notificationService, transactionOperations, paymentProperties, clock);
@@ -119,7 +120,7 @@ public class PaymentServiceImpl implements PaymentService {
                               ShipmentRepository shipmentRepository,
                               NotificationService notificationService,
                               TransactionOperations transactionOperations,
-                              AppProperties.PaymentProperties paymentProperties,
+                              AppProperties.Payment paymentProperties,
                               Clock clock,
                               UserRepository userRepository) {
         this.orderRepository = orderRepository;
@@ -142,17 +143,17 @@ public class PaymentServiceImpl implements PaymentService {
         Tx1Result tx1 = transactionOperations.execute(status -> {
             // 1. Order exists
             Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(
-                    () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+                    () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
             );
 
             // 2. Caller is buyer
             if (!order.getBuyerId().equals(currentUser.id())) {
-                throw new AppException("FORBIDDEN", "Chỉ người mua mới được phép thanh toán", HttpStatus.FORBIDDEN);
+                throw new BusinessException(ErrorCode.FORBIDDEN, "Chỉ người mua mới được phép thanh toán");
             }
 
             // 3. Header valid
             if (idempotencyKey == null || !idempotencyKey.matches("^[A-Za-z0-9_-]{8,64}$")) {
-                throw new AppException("VALIDATION_ERROR", "Idempotency-Key không hợp lệ", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Idempotency-Key không hợp lệ");
             }
 
             // 4. Key already exists for this order -> return old result (PAY-05)
@@ -180,54 +181,54 @@ public class PaymentServiceImpl implements PaymentService {
             if (userRepository != null) {
                 userRepository.findById(currentUser.id()).ifPresent(user -> {
                     if (user.getStatus() == UserStatus.BANNED) {
-                        throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
+                        throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
                     }
                 });
             }
 
             // 6. Order CANCELLED
             if (order.getStatus() == OrderStatus.CANCELLED) {
-                throw new AppException("ORDER_CANCELLED", "Đơn hàng đã bị hủy", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Đơn hàng đã bị hủy");
             }
 
             // 7. Order EXPIRED
             if (order.getStatus() == OrderStatus.EXPIRED) {
-                throw new AppException("ORDER_EXPIRED", "Đơn hàng đã hết hạn", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.ORDER_EXPIRED, "Đơn hàng đã hết hạn");
             }
 
             // 8. Order is not PENDING_PAYMENT
             if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
-                throw new AppException("INVALID_STATUS_TRANSITION", "Đơn hàng không ở trạng thái chờ thanh toán", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng không ở trạng thái chờ thanh toán");
             }
 
             // 9. now < payment_deadline
             LocalDateTime now = LocalDateTime.now(clock);
             if (order.getPaymentDeadline() != null && !now.isBefore(order.getPaymentDeadline())) {
-                throw new AppException("ORDER_EXPIRED", "Đơn hàng đã quá hạn thanh toán", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.ORDER_EXPIRED, "Đơn hàng đã quá hạn thanh toán");
             }
 
             // 10. Order has shipping_address and phone_number
             if (order.getShippingAddress() == null || order.getShippingAddress().isBlank()
                     || order.getPhoneNumber() == null || order.getPhoneNumber().isBlank()) {
-                throw new AppException("VALIDATION_ERROR", "Đơn hàng chưa có địa chỉ giao hàng hoặc số điện thoại", HttpStatus.BAD_REQUEST);
+                throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Đơn hàng chưa có địa chỉ giao hàng hoặc số điện thoại");
             }
 
             // 11. No Payment currently PENDING
             if (paymentRepository.existsByOrderIdAndStatus(order.getId(), PaymentStatus.PENDING)) {
-                throw new AppException("PAYMENT_IN_PROGRESS", "Đang có giao dịch thanh toán chờ xử lý", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.CONFLICT, "Đang có giao dịch thanh toán chờ xử lý");
             }
 
             // 12. Rate limit: count payments created within last 10 minutes < 5
+            // TODO(v4-phase-6): remove payment rate limit & PENDING flow in v4
             List<Payment> recentPayments = paymentRepository.findTop5ByOrderIdOrderByCreatedAtDesc(order.getId());
-            if (recentPayments.size() >= paymentProperties.getRateLimit().getMax()) {
+            if (recentPayments.size() >= 5) {
                 Payment oldestOf5 = recentPayments.get(recentPayments.size() - 1);
                 if (oldestOf5.getCreatedAt() != null) {
-                    LocalDateTime windowExpiry = oldestOf5.getCreatedAt().plusMinutes(paymentProperties.getRateLimit().getWindowMinutes());
+                    LocalDateTime windowExpiry = oldestOf5.getCreatedAt().plusMinutes(10);
                     if (now.isBefore(windowExpiry)) {
                         long diffSeconds = Duration.between(now, windowExpiry).getSeconds();
                         long retryAfterSeconds = Math.max(1, diffSeconds);
-                        throw new AppException("PAYMENT_RATE_LIMITED", "Vượt quá giới hạn số lần thanh toán trong 10 phút",
-                                HttpStatus.TOO_MANY_REQUESTS, Map.of("retryAfterSeconds", retryAfterSeconds));
+                        throw new BusinessException(ErrorCode.TOO_MANY_REQUESTS, "Vượt quá giới hạn số lần thanh toán trong 10 phút", Map.of("retryAfterSeconds", retryAfterSeconds));
                     }
                 }
             }
@@ -256,7 +257,7 @@ public class PaymentServiceImpl implements PaymentService {
                 return new Tx1Result(saved, null);
             } catch (DataIntegrityViolationException dive) {
                 log.warn("Data integrity violation when inserting payment for orderId={}: {}", order.getId(), dive.getMessage());
-                throw new AppException("PAYMENT_IN_PROGRESS", "Đang có giao dịch thanh toán chờ xử lý", HttpStatus.CONFLICT);
+                throw new BusinessException(ErrorCode.CONFLICT, "Đang có giao dịch thanh toán chờ xử lý");
             }
         });
 
@@ -268,7 +269,7 @@ public class PaymentServiceImpl implements PaymentService {
 
         // Call gateway outside transaction
         SimulatedOutcome hint = null;
-        if (paymentProperties.getMock().isAllowSimulateResult()) {
+        if (paymentProperties.isSimulateEnabled()) {
             hint = request.getSimulateResult();
         }
 
@@ -297,7 +298,7 @@ public class PaymentServiceImpl implements PaymentService {
 
             // Strict lock order: Lock Order first, then lock Payment
             Order order = orderRepository.findByIdForUpdate(initial.getOrderId()).orElseThrow(
-                    () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+                    () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
             );
 
             Optional<Payment> paymentOpt = paymentRepository.findByIdForUpdate(initial.getId());
@@ -408,13 +409,13 @@ public class PaymentServiceImpl implements PaymentService {
     @Override
     public List<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId) {
         Order order = orderRepository.findById(orderId).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
         );
 
         boolean isBuyer = order.getBuyerId().equals(currentUser.id());
         boolean isAdmin = currentUser.isAdmin();
         if (!isBuyer && !isAdmin) {
-            throw new AppException("FORBIDDEN", "Bạn không có quyền xem lịch sử thanh toán của đơn này", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền xem lịch sử thanh toán của đơn này");
         }
 
         List<Payment> payments = paymentRepository.findByOrderIdOrderByAttemptNoDesc(orderId);
@@ -435,7 +436,8 @@ public class PaymentServiceImpl implements PaymentService {
 
     @Override
     public void timeoutStalePayments() {
-        int timeoutMinutes = paymentProperties.getPendingTimeoutMinutes();
+        // TODO(v4-phase-6): remove timeoutStalePayments in v4
+        int timeoutMinutes = 5;
         LocalDateTime cutoff = LocalDateTime.now(clock).minusMinutes(timeoutMinutes);
         List<Payment> stalePayments = paymentRepository.findByStatusAndCreatedAtLessThanEqual(PaymentStatus.PENDING, cutoff);
 

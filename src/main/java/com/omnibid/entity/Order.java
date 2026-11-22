@@ -1,6 +1,7 @@
 package com.omnibid.entity;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.enums.OrderStatus;
 import jakarta.persistence.*;
 import lombok.*;
@@ -133,8 +134,7 @@ public class Order {
 
     private void require(boolean condition, String operation) {
         if (!condition) {
-            throw new AppException("INVALID_STATUS_TRANSITION",
-                    "Cannot " + operation + " when order is " + status, HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot " + operation + " when order is " + status);
         }
     }
 }

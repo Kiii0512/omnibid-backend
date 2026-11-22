@@ -47,8 +47,9 @@ public class DefaultMockPaymentGateway implements MockPaymentGateway {
     @Override
     public GatewayResult charge(GatewayRequest request) {
         SimulatedOutcome outcome = request.hint();
-        if (outcome == null) {
-            outcome = appProperties.getPayment().getMock().getDefaultOutcome();
+        if (outcome == null || !appProperties.getPayment().isSimulateEnabled()) {
+            // TODO(v4-phase-6): rewrite payment gateway for synchronous v4 flow
+            outcome = SimulatedOutcome.SUCCESS;
         }
 
         switch (outcome) {
@@ -65,7 +66,8 @@ public class DefaultMockPaymentGateway implements MockPaymentGateway {
     }
 
     protected void scheduleDelayedFinalization(String transactionRef) {
-        int delaySeconds = appProperties.getPayment().getMock().getProcessingDelaySeconds();
+        // TODO(v4-phase-6): remove delayed finalization in v4 synchronous payment
+        int delaySeconds = 10;
         Instant triggerTime = Instant.now().plusSeconds(delaySeconds);
         log.info("Scheduling delayed finalization for txRef={} in {}s", transactionRef, delaySeconds);
         if (taskScheduler != null) {

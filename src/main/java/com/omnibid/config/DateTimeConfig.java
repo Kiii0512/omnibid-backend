@@ -9,10 +9,10 @@ import java.time.ZoneId;
 @Configuration
 public class DateTimeConfig {
 
-    public static final ZoneId DEFAULT_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
+    public static final ZoneId DISPLAY_ZONE = ZoneId.of("Asia/Ho_Chi_Minh");
 
     @Bean
     public Clock clock() {
-        return Clock.system(DEFAULT_ZONE);
+        return Clock.systemUTC();
     }
 }

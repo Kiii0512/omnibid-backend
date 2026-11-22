@@ -3,9 +3,11 @@ package com.omnibid.config;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.boot.convert.DurationUnit;
 import org.springframework.context.annotation.Configuration;
 
-import java.util.List;
+import java.time.Duration;
+import java.time.temporal.ChronoUnit;
 
 @Getter
 @Setter
@@ -13,56 +15,67 @@ import java.util.List;
 @ConfigurationProperties(prefix = "app")
 public class AppProperties {
 
-    private OrderProperties order = new OrderProperties();
-    private PaymentProperties payment = new PaymentProperties();
-    private SchedulerProperties scheduler = new SchedulerProperties();
-    private AuctionProperties auction = new AuctionProperties();
+    private Order order = new Order();
+    private Auction auction = new Auction();
+    private Scheduler scheduler = new Scheduler();
+    private Payment payment = new Payment();
+    private Security security = new Security();
+    private Cors cors = new Cors();
 
     @Getter
     @Setter
-    public static class OrderProperties {
-        private int paymentDeadlineHours = 48;
-        private int confirmWindowDays = 7;
-        private List<Integer> reminderHours = List.of(24, 2);
+    public static class Order {
+        @DurationUnit(ChronoUnit.HOURS)
+        private Duration paymentDeadlineHours = Duration.ofHours(48);
+
+        @DurationUnit(ChronoUnit.DAYS)
+        private Duration confirmDeadlineDays = Duration.ofDays(7);
     }
 
     @Getter
     @Setter
-    public static class PaymentProperties {
-        private RateLimitProperties rateLimit = new RateLimitProperties();
-        private int pendingTimeoutMinutes = 5;
-        private MockProperties mock = new MockProperties();
+    public static class Auction {
+        @DurationUnit(ChronoUnit.MINUTES)
+        private Duration minDurationMinutes = Duration.ofMinutes(60);
 
-        public static PaymentProperties defaults() {
-            return new PaymentProperties();
-        }
+        @DurationUnit(ChronoUnit.DAYS)
+        private Duration maxDurationDays = Duration.ofDays(30);
+    }
+
+    @Getter
+    @Setter
+    public static class Scheduler {
+        @DurationUnit(ChronoUnit.SECONDS)
+        private Duration intervalSeconds = Duration.ofSeconds(10);
+    }
+
+    @Getter
+    @Setter
+    public static class Payment {
+        private boolean simulateEnabled = false;
+    }
+
+    @Getter
+    @Setter
+    public static class Security {
+        private Login login = new Login();
 
         @Getter
         @Setter
-        public static class MockProperties {
-            private boolean allowSimulateResult = true;
-            private com.omnibid.enums.SimulatedOutcome defaultOutcome = com.omnibid.enums.SimulatedOutcome.SUCCESS;
-            private int processingDelaySeconds = 10;
-        }
+        public static class Login {
+            private int maxAttempts = 5;
 
-        @Getter
-        @Setter
-        public static class RateLimitProperties {
-            private int max = 5;
-            private int windowMinutes = 10;
+            @DurationUnit(ChronoUnit.MINUTES)
+            private Duration windowMinutes = Duration.ofMinutes(15);
+
+            @DurationUnit(ChronoUnit.MINUTES)
+            private Duration blockMinutes = Duration.ofMinutes(15);
         }
     }
 
     @Getter
     @Setter
-    public static class SchedulerProperties {
-        private long fixedRateMs = 10000;
-    }
-
-    @Getter
-    @Setter
-    public static class AuctionProperties {
-        private int minDurationHours = 1;
-        private int maxDurationDays = 30;
+    public static class Cors {
+        private String allowedOrigins = "http://localhost:3000";
     }
 }

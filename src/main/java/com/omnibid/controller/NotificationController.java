@@ -1,7 +1,8 @@
 package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.notification.NotificationResponse;
 import com.omnibid.security.CustomUserDetails;
@@ -66,7 +67,7 @@ public class NotificationController {
 
     private void validateAuth(CustomUserDetails userDetails) {
         if (userDetails == null) {
-            throw new AppException("UNAUTHORIZED", "User not authenticated", HttpStatus.UNAUTHORIZED);
+            throw new BusinessException(ErrorCode.UNAUTHORIZED, "User not authenticated");
         }
     }
 }

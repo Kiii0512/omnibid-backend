@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.dto.category.CategoryRequest;
 import com.omnibid.dto.category.CategoryResponse;
 import com.omnibid.entity.Category;
@@ -58,7 +59,7 @@ public class CategoryServiceImpl implements CategoryService {
     @Transactional(readOnly = true)
     public CategoryResponse getCategoryById(Long id) {
         Category category = categoryRepository.findById(id)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Category not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Category not found"));
         long activeCount = auctionRepository.countActiveAuctionsByCategoryId(id);
         return new CategoryResponse(
                 category.getId(),
@@ -77,7 +78,7 @@ public class CategoryServiceImpl implements CategoryService {
 
         String slug = slugify(request.name());
         if (categoryRepository.existsBySlug(slug)) {
-            throw new AppException("VALIDATION_ERROR", "Category with slug '" + slug + "' already exists", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Category with slug '" + slug + "' already exists");
         }
 
         Category category = Category.builder()
@@ -98,11 +99,11 @@ public class CategoryServiceImpl implements CategoryService {
         requireAdmin(admin);
 
         Category category = categoryRepository.findById(id)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Category not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Category not found"));
 
         String slug = slugify(request.name());
         if (categoryRepository.existsBySlugAndIdNot(slug, id)) {
-            throw new AppException("VALIDATION_ERROR", "Category with slug '" + slug + "' already exists", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.VALIDATION_ERROR, "Category with slug '" + slug + "' already exists");
         }
 
         category.setName(request.name().trim());
@@ -121,10 +122,10 @@ public class CategoryServiceImpl implements CategoryService {
         requireAdmin(admin);
 
         Category category = categoryRepository.findById(id)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Category not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Category not found"));
 
         if (productRepository.existsByCategoryId(id)) {
-            throw new AppException("CATEGORY_IN_USE", "Danh mục còn sản phẩm", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.CATEGORY_IN_USE, "Danh mục còn sản phẩm");
         }
 
         categoryRepository.delete(category);
@@ -145,7 +146,7 @@ public class CategoryServiceImpl implements CategoryService {
 
     private void requireAdmin(CurrentUser admin) {
         if (!admin.isAdmin()) {
-            throw new AppException("FORBIDDEN", "Admin required", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Admin required");
         }
     }
 

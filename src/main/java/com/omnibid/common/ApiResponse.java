@@ -2,72 +2,69 @@ package com.omnibid.common;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
-import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.time.LocalDateTime;
+import java.util.Map;
 
 @Data
-@Builder
 @NoArgsConstructor
 @AllArgsConstructor
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public class ApiResponse<T> {
 
-    @Builder.Default
-    private boolean success = true;
-
-    private String errorCode;
-
-    private String message;
-
+    private boolean success;
     private T data;
+    private ApiError error;
 
-    @Builder.Default
-    private LocalDateTime timestamp = LocalDateTime.now();
+    @JsonInclude(JsonInclude.Include.NON_NULL)
+    public record ApiError(
+            String code,
+            String message,
+            Map<String, Object> details
+    ) {
+    }
 
+    public static <T> ApiResponse<T> ok(T data) {
+        return new ApiResponse<>(true, data, null);
+    }
+
+    public static ApiResponse<Void> ok() {
+        return new ApiResponse<>(true, null, null);
+    }
+
+    public static <T> ApiResponse<T> error(ErrorCode code, String message, Map<String, Object> details) {
+        return error(code.name(), message != null ? message : code.getDefaultMessage(), details);
+    }
+
+    public static <T> ApiResponse<T> error(ErrorCode code, String message) {
+        return error(code, message, null);
+    }
+
+    public static <T> ApiResponse<T> error(ErrorCode code) {
+        return error(code, code.getDefaultMessage(), null);
+    }
+
+    public static <T> ApiResponse<T> error(String code, String message, Map<String, Object> details) {
+        Map<String, Object> normalizedDetails = (details != null && !details.isEmpty()) ? details : null;
+        return new ApiResponse<>(false, null, new ApiError(code, message, normalizedDetails));
+    }
+
+    public static <T> ApiResponse<T> error(String code, String message) {
+        return error(code, message, null);
+    }
+
+    /**
+     * Alias giữ tương thích trong quá trình chuyển đổi sang v4. Không phát sinh trường message cấp ngoài.
+     */
     public static <T> ApiResponse<T> success(T data) {
-        return ApiResponse.<T>builder()
-                .success(true)
-                .data(data)
-                .timestamp(LocalDateTime.now())
-                .build();
+        return ok(data);
     }
 
-    public static <T> ApiResponse<T> success(String message, T data) {
-        return ApiResponse.<T>builder()
-                .success(true)
-                .message(message)
-                .data(data)
-                .timestamp(LocalDateTime.now())
-                .build();
-    }
-
-    public static <T> ApiResponse<T> error(String message) {
-        return ApiResponse.<T>builder()
-                .success(false)
-                .message(message)
-                .timestamp(LocalDateTime.now())
-                .build();
-    }
-
-    public static <T> ApiResponse<T> error(String errorCode, String message) {
-        return ApiResponse.<T>builder()
-                .success(false)
-                .errorCode(errorCode)
-                .message(message)
-                .timestamp(LocalDateTime.now())
-                .build();
-    }
-
-    public static <T> ApiResponse<T> error(String errorCode, String message, T data) {
-        return ApiResponse.<T>builder()
-                .success(false)
-                .errorCode(errorCode)
-                .message(message)
-                .data(data)
-                .timestamp(LocalDateTime.now())
-                .build();
+    /**
+     * Alias giữ tương thích trong quá trình chuyển đổi sang v4. Bỏ qua message cấp ngoài theo hợp đồng v4.
+     */
+    public static <T> ApiResponse<T> success(String ignoredMessage, T data) {
+        return ok(data);
     }
 }

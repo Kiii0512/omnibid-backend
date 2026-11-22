@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.config.AppProperties;
 import com.omnibid.dto.shipment.ShipmentDetailResponse;
@@ -76,7 +77,7 @@ public class ShipmentServiceImpl implements ShipmentService {
     @Transactional
     public Shipment createForPaidOrder(Order order) {
         if (order.getStatus() != OrderStatus.PAID) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "Đơn hàng chưa ở trạng thái PAID", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Đơn hàng chưa ở trạng thái PAID");
         }
 
         Optional<Shipment> existing = shipmentRepository.findByOrderId(order.getId());
@@ -107,11 +108,11 @@ public class ShipmentServiceImpl implements ShipmentService {
     @Override
     public ShipmentDetailResponse getShipmentByOrder(CurrentUser currentUser, Long orderId) {
         Order order = orderRepository.findById(orderId).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
         );
 
         if (order.getStatus() == OrderStatus.PENDING_PAYMENT) {
-            throw new AppException("NOT_FOUND", "Đơn hàng chưa thanh toán", HttpStatus.NOT_FOUND);
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Đơn hàng chưa thanh toán");
         }
 
         boolean isBuyer = order.getBuyerId().equals(currentUser.id());
@@ -119,11 +120,11 @@ public class ShipmentServiceImpl implements ShipmentService {
         boolean isAdmin = currentUser.isAdmin();
 
         if (!isBuyer && !isSeller && !isAdmin) {
-            throw new AppException("FORBIDDEN", "Bạn không có quyền xem vận đơn này", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Bạn không có quyền xem vận đơn này");
         }
 
         Shipment shipment = shipmentRepository.findByOrderId(orderId).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy vận đơn", HttpStatus.NOT_FOUND)
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy vận đơn")
         );
 
         List<ShipmentEvent> events = shipmentEventRepository.findByShipmentIdOrderByCreatedAtAsc(shipment.getId());
@@ -160,22 +161,22 @@ public class ShipmentServiceImpl implements ShipmentService {
     @Transactional
     public ShipmentStatusResponse updateShipmentStatus(CurrentUser currentUser, Long shipmentId, ShipmentStatusUpdateRequest request) {
         Long orderId = shipmentRepository.findOrderIdById(shipmentId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Không tìm thấy vận đơn", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy vận đơn"));
 
         // Lock order first, then lock shipment (SHP-07)
         Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy đơn hàng", HttpStatus.NOT_FOUND)
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
         );
 
         Shipment shipment = shipmentRepository.findByIdForUpdate(shipmentId).orElseThrow(
-                () -> new AppException("NOT_FOUND", "Không tìm thấy vận đơn", HttpStatus.NOT_FOUND)
+                () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy vận đơn")
         );
 
         // Account banned check
         if (userRepository != null) {
             userRepository.findById(currentUser.id()).ifPresent(user -> {
                 if (user.getStatus() == UserStatus.BANNED) {
-                    throw new AppException("ACCOUNT_BANNED", "Tài khoản của bạn đã bị khóa", HttpStatus.FORBIDDEN);
+                    throw new BusinessException(ErrorCode.ACCOUNT_BANNED, "Tài khoản của bạn đã bị khóa");
                 }
             });
         }
@@ -184,15 +185,15 @@ public class ShipmentServiceImpl implements ShipmentService {
         boolean isSeller = order.getSellerId().equals(currentUser.id());
         boolean isAdmin = currentUser.isAdmin();
         if (!isSeller && !isAdmin) {
-            throw new AppException("FORBIDDEN", "Chỉ người bán của đơn hoặc Quản trị viên mới được cập nhật vận đơn", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "Chỉ người bán của đơn hoặc Quản trị viên mới được cập nhật vận đơn");
         }
 
         // Order conditions
         if (order.getStatus() == OrderStatus.CANCELLED) {
-            throw new AppException("ORDER_CANCELLED", "Đơn hàng đã bị hủy", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.ORDER_CANCELLED, "Đơn hàng đã bị hủy");
         }
         if (order.getStatus() != OrderStatus.PAID && order.getStatus() != OrderStatus.SHIPPING) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "Trạng thái đơn hàng không hợp lệ để cập nhật vận đơn", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Trạng thái đơn hàng không hợp lệ để cập nhật vận đơn");
         }
 
         // Status transition sequence validation: only direct next transition
@@ -204,7 +205,7 @@ public class ShipmentServiceImpl implements ShipmentService {
                 || (current == ShipmentStatus.IN_TRANSIT && target == ShipmentStatus.DELIVERED);
 
         if (!isValidTransition) {
-            throw new AppException("INVALID_STATUS_TRANSITION", "Chuyển trạng thái vận chuyển không hợp lệ", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Chuyển trạng thái vận chuyển không hợp lệ");
         }
 
         // Update shipment status
@@ -238,8 +239,11 @@ public class ShipmentServiceImpl implements ShipmentService {
                 orderRepository.save(order);
             }
         } else if (target == ShipmentStatus.DELIVERED) {
-            int windowDays = appProperties != null ? appProperties.getOrder().getConfirmWindowDays() : 7;
-            order.markDelivered(now, now.plusDays(windowDays));
+            // TODO(v4-phase-6): ShipmentServiceImpl will be removed in v4
+            java.time.Duration confirmWindow = appProperties != null
+                    ? appProperties.getOrder().getConfirmDeadlineDays()
+                    : java.time.Duration.ofDays(7);
+            order.markDelivered(now, now.plus(confirmWindow));
             orderRepository.save(order);
         }
 

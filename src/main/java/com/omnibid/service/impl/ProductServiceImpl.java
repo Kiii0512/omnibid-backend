@@ -1,6 +1,7 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.common.AppException;
+import com.omnibid.common.BusinessException;
+import com.omnibid.common.ErrorCode;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.product.*;
 import com.omnibid.dto.storage.StorageUploadResult;
@@ -39,7 +40,7 @@ public class ProductServiceImpl implements ProductService {
     @Transactional
     public ProductResponse createProduct(Long sellerId, ProductCreateRequest request) {
         if (!categoryRepository.existsById(request.categoryId())) {
-            throw new AppException("NOT_FOUND", "Category not found", HttpStatus.NOT_FOUND);
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Category not found");
         }
 
         Product product = Product.builder()
@@ -67,7 +68,7 @@ public class ProductServiceImpl implements ProductService {
     public ProductResponse getProductById(Long id) {
         Product product = productRepository.findById(id)
                 .filter(p -> p.getStatus() != ProductStatus.REMOVED)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found with id: " + id, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found with id: " + id));
         return mapToResponse(product);
     }
 
@@ -77,11 +78,11 @@ public class ProductServiceImpl implements ProductService {
         Product product = getOwnedProduct(sellerId, id);
 
         if (product.getStatus() == ProductStatus.IN_AUCTION) {
-            throw new AppException("CANNOT_UPDATE", "Cannot update product currently in auction", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.PRODUCT_NOT_EDITABLE, "Cannot update product currently in auction");
         }
 
         if (request.categoryId() != null && !categoryRepository.existsById(request.categoryId())) {
-            throw new AppException("NOT_FOUND", "Category not found", HttpStatus.NOT_FOUND);
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Category not found");
         }
 
         if (request.title() != null && !request.title().isBlank()) {
@@ -107,7 +108,7 @@ public class ProductServiceImpl implements ProductService {
         Product product = getOwnedProduct(sellerId, id);
 
         if (product.getStatus() == ProductStatus.IN_AUCTION) {
-            throw new AppException("CANNOT_DELETE", "Cannot delete product currently in auction", HttpStatus.CONFLICT);
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Cannot delete product currently in auction");
         }
 
         if (auctionRepository.existsByProductId(id)) {
@@ -148,17 +149,17 @@ public class ProductServiceImpl implements ProductService {
     @Transactional
     public ProductImageResponse uploadProductImage(Long sellerId, Long productId, MultipartFile file) {
         if (file == null || file.isEmpty()) {
-            throw new AppException("FILE_EMPTY", "File cannot be empty", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.INVALID_IMAGE, "File cannot be empty");
         }
         String contentType = file.getContentType();
         if (contentType != null && !contentType.startsWith("image/") && !contentType.equals("application/octet-stream")) {
-            throw new AppException("INVALID_FILE_TYPE", "Only image files are allowed", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.INVALID_IMAGE, "Only image files are allowed");
         }
 
         Product product = getOwnedProduct(sellerId, productId);
         long count = productImageRepository.countByProductId(productId);
         if (count >= 5) {
-            throw new AppException("MAX_IMAGES_REACHED", "Product can have at most 5 images", HttpStatus.BAD_REQUEST);
+            throw new BusinessException(ErrorCode.INVALID_IMAGE, "Product can have at most 5 images");
         }
 
         StorageUploadResult uploadResult = storageService.upload(file, "products/" + productId);
@@ -181,7 +182,7 @@ public class ProductServiceImpl implements ProductService {
         getOwnedProduct(sellerId, productId);
         ProductImage image = productImageRepository.findById(imageId)
                 .filter(img -> img.getProductId().equals(productId))
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product image not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product image not found"));
 
         storageService.delete(image.getPublicId());
         boolean wasPrimary = Boolean.TRUE.equals(image.getIsPrimary());
@@ -205,7 +206,7 @@ public class ProductServiceImpl implements ProductService {
         ProductImage target = images.stream()
                 .filter(img -> img.getId().equals(imageId))
                 .findFirst()
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product image not found", HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product image not found"));
 
         for (ProductImage img : images) {
             boolean shouldBePrimary = img.getId().equals(imageId);
@@ -221,10 +222,10 @@ public class ProductServiceImpl implements ProductService {
 
     private Product getOwnedProduct(Long sellerId, Long productId) {
         Product product = productRepository.findById(productId)
-                .orElseThrow(() -> new AppException("NOT_FOUND", "Product not found with id: " + productId, HttpStatus.NOT_FOUND));
+                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Product not found with id: " + productId));
 
         if (!product.getSellerId().equals(sellerId)) {
-            throw new AppException("FORBIDDEN", "You do not own this product", HttpStatus.FORBIDDEN);
+            throw new BusinessException(ErrorCode.FORBIDDEN, "You do not own this product");
         }
         return product;
     }
