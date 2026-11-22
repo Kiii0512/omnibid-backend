@@ -40,7 +40,7 @@ Trước khi kết thúc bất kỳ nhiệm vụ nào, agent PHẢI chạy `test
 
 ## 3. Quy trình làm việc
 - Làm trên nhánh `refactor/v4-sync`. Mỗi phase một (hoặc vài) commit, thông điệp dạng `refactor(v4): phase N - <mô tả>`.
-- Cập nhật `docs/v4/PROGRESS.md` sau mỗi phase (đánh dấu [x], ghi quyết định, ghi việc còn tồn). Lưu ý: thư mục `docs/` bị loại khỏi Git bằng `.git/info/exclude` trên máy này, nên các tệp trong `docs/` chỉ nằm local — đó là chủ đích, không thêm `docs/` vào Git.
+- Cập nhật `docs/v4/PROGRESS.md` sau mỗi phase (đánh dấu [x], ghi quyết định, ghi việc còn tồn).
 - Không sửa thư mục `C:\Documents\Omnibid` (tài liệu gốc).
 - Không đưa bí mật (`jwt.secret` thật, khóa Cloudinary, mật khẩu DB) vào Git; chỉ ghi vào `application-local.properties` (đã nằm trong `.gitignore`) hoặc biến môi trường.
 - Được phép xóa các tệp ghi trong `DELETE_LIST.md`. Không xóa tệp khác nếu chưa ghi lý do vào PROGRESS.md.
