@@ -15,6 +15,7 @@ import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authorization.AuthorizationDeniedException;
 import org.springframework.security.core.AuthenticationException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.HttpRequestMethodNotSupportedException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.MissingRequestHeaderException;
@@ -158,6 +159,18 @@ public class GlobalExceptionHandler {
                 null
         );
         return new ResponseEntity<>(response, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(HttpMediaTypeNotSupportedException.class)
+    public ResponseEntity<ApiResponse<Void>> handleHttpMediaTypeNotSupportedException(HttpMediaTypeNotSupportedException ex) {
+        log.warn("HttpMediaTypeNotSupportedException: {}", ex.getMessage());
+        String contentType = ex.getContentType() != null ? ex.getContentType().toString() : "unknown";
+        ApiResponse<Void> response = ApiResponse.error(
+                ErrorCode.VALIDATION_ERROR.name(),
+                "Định dạng nội dung không được hỗ trợ: " + contentType,
+                Map.of("contentType", contentType)
+        );
+        return new ResponseEntity<>(response, HttpStatus.UNSUPPORTED_MEDIA_TYPE);
     }
 
     @ExceptionHandler(MaxUploadSizeExceededException.class)

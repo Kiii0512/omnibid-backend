@@ -22,6 +22,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.core.MethodParameter;
 import org.springframework.http.MediaType;
+import org.springframework.http.converter.json.MappingJackson2HttpMessageConverter;
 import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.test.web.servlet.MockMvc;
@@ -82,9 +83,18 @@ class ProductControllerTest {
             }
         };
 
+        com.omnibid.config.DateTimeConfig dateTimeConfig = new com.omnibid.config.DateTimeConfig();
+        com.fasterxml.jackson.databind.ObjectMapper mapper = dateTimeConfig.objectMapper(dateTimeConfig.instantIsoModule());
+        MappingJackson2HttpMessageConverter jacksonConverter = new MappingJackson2HttpMessageConverter(mapper);
+        List<MediaType> mediaTypes = new java.util.ArrayList<>(jacksonConverter.getSupportedMediaTypes());
+        mediaTypes.add(MediaType.TEXT_PLAIN);
+        mediaTypes.add(MediaType.APPLICATION_OCTET_STREAM);
+        jacksonConverter.setSupportedMediaTypes(mediaTypes);
+
         mockMvc = MockMvcBuilders.standaloneSetup(productController)
                 .setControllerAdvice(new GlobalExceptionHandler())
                 .setCustomArgumentResolvers(authResolver)
+                .setMessageConverters(jacksonConverter)
                 .build();
     }
 
@@ -192,6 +202,60 @@ class ProductControllerTest {
                 .andExpect(jsonPath("$.success").value(true))
                 .andExpect(jsonPath("$.data.id").value(6))
                 .andExpect(jsonPath("$.data.condition").value("GOOD"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/products with text/plain JSON part (Thunder Client format) returns 201 Created")
+    void createProduct_WithTextPlainPart_Returns201() throws Exception {
+        ProductResponse response = new ProductResponse(
+                6L,
+                2L,
+                "Seller User",
+                3L,
+                "Antiques",
+                "Đĩa gốm cổ",
+                "Mô tả đĩa",
+                ProductCondition.GOOD,
+                ProductStatus.AVAILABLE,
+                Collections.emptyList(),
+                Instant.now(),
+                Instant.now()
+        );
+
+        when(productService.createProduct(eq(2L), any(ProductCreateRequest.class), any()))
+                .thenReturn(response);
+
+        MockMultipartFile productPart = new MockMultipartFile(
+                "product",
+                "",
+                MediaType.TEXT_PLAIN_VALUE,
+                "{\"categoryId\": 3, \"title\": \"Đĩa gốm cổ\", \"description\": \"Mô tả đĩa\", \"condition\": \"GOOD\"}".getBytes(java.nio.charset.StandardCharsets.UTF_8)
+        );
+        MockMultipartFile filePart = new MockMultipartFile(
+                "files",
+                "img.jpg",
+                "image/jpeg",
+                new byte[]{(byte) 0xFF, (byte) 0xD8, (byte) 0xFF, (byte) 0xE0}
+        );
+
+        mockMvc.perform(multipart("/api/v1/products")
+                        .file(productPart)
+                        .file(filePart))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.success").value(true))
+                .andExpect(jsonPath("$.data.id").value(6))
+                .andExpect(jsonPath("$.data.condition").value("GOOD"));
+    }
+
+    @Test
+    @DisplayName("POST /api/v1/products with unsupported content type returns 415 Unsupported Media Type")
+    void createProduct_UnsupportedContentType_Returns415() throws Exception {
+        mockMvc.perform(post("/api/v1/products")
+                        .contentType(MediaType.APPLICATION_XML)
+                        .content("<xml></xml>"))
+                .andExpect(status().isUnsupportedMediaType())
+                .andExpect(jsonPath("$.success").value(false))
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
     }
 
     @Test
