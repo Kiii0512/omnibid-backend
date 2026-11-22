@@ -15,7 +15,9 @@ import com.omnibid.support.BaseIT;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.messaging.converter.ByteArrayMessageConverter;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageHeaders;
+import org.springframework.messaging.converter.MessageConverter;
 import org.springframework.messaging.simp.stomp.*;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -135,7 +137,21 @@ public class NotificationIntegrationIT extends BaseIT {
         String buyerToken = jwtTokenProvider.generateToken(buyer.getId(), buyer.getRole(), buyer.getTokenVersion());
 
         WebSocketStompClient stompClient = new WebSocketStompClient(new StandardWebSocketClient());
-        stompClient.setMessageConverter(new ByteArrayMessageConverter());
+        stompClient.setMessageConverter(new MessageConverter() {
+            @Override
+            public Object fromMessage(Message<?> message, Class<?> targetClass) {
+                Object payload = message.getPayload();
+                if (payload instanceof byte[] bytes) {
+                    return new String(bytes, StandardCharsets.UTF_8);
+                }
+                return String.valueOf(payload);
+            }
+
+            @Override
+            public Message<?> toMessage(Object payload, MessageHeaders headers) {
+                return null;
+            }
+        });
 
         StompHeaders connectHeaders = new StompHeaders();
         connectHeaders.add("Authorization", "Bearer " + buyerToken);
@@ -144,9 +160,12 @@ public class NotificationIntegrationIT extends BaseIT {
 
         CompletableFuture<JsonNode> auctionTopicFuture = new CompletableFuture<>();
 
+        WebSocketHttpHeaders handshakeHeaders = new WebSocketHttpHeaders();
+        handshakeHeaders.setOrigin("http://localhost:3000");
+
         StompSession session = stompClient.connectAsync(
                 wsUrl,
-                new WebSocketHttpHeaders(),
+                handshakeHeaders,
                 connectHeaders,
                 new StompSessionHandlerAdapter() {}
         ).get(5, TimeUnit.SECONDS);
@@ -160,14 +179,13 @@ public class NotificationIntegrationIT extends BaseIT {
         session.subscribe("/topic/auctions/" + auction.getId(), new StompFrameHandler() {
             @Override
             public Type getPayloadType(StompHeaders headers) {
-                return byte[].class;
+                return String.class;
             }
 
             @Override
             public void handleFrame(StompHeaders headers, Object payload) {
                 try {
-                    String json = new String((byte[]) payload, StandardCharsets.UTF_8);
-                    auctionTopicFuture.complete(jsonMapper.readTree(json));
+                    auctionTopicFuture.complete(jsonMapper.readTree((String) payload));
                 } catch (Exception e) {
                     auctionTopicFuture.completeExceptionally(e);
                 }
@@ -176,7 +194,8 @@ public class NotificationIntegrationIT extends BaseIT {
 
         Thread.sleep(300);
 
-        api.as(buyer).post("/auctions/" + auction.getId() + "/bids", Map.of("amount", 110000));
+        var bidRes = api.as(buyer).post("/auctions/" + auction.getId() + "/bids", Map.of("amount", 110000));
+        assertThat(bidRes.getStatusCode().value()).isEqualTo(201);
 
         JsonNode event = auctionTopicFuture.get(5, TimeUnit.SECONDS);
         assertThat(event.path("type").asText()).isEqualTo("BID_PLACED");

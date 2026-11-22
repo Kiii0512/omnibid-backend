@@ -99,7 +99,7 @@ public class AuthorizationIT extends BaseIT {
         String token2 = jsonMapper.readTree(loginRes.getBody()).path("data").path("accessToken").asText();
 
         // Đổi mật khẩu -> token2 thành 401
-        ResponseEntity<String> changePwRes = api.asToken(token2).post("/users/me/change-password", Map.of(
+        ResponseEntity<String> changePwRes = api.asToken(token2).patch("/users/me/password", Map.of(
                 "currentPassword", Seed.DEFAULT_PASSWORD,
                 "newPassword", "NewPassword456",
                 "confirmPassword", "NewPassword456"

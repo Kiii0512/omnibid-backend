@@ -112,13 +112,13 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - **Xóa các DTO cũ không còn sử dụng (Phase 8)**: Đã xóa `AdminController`, `UserStatusUpdateRequest`, `UserStatusUpdateResponse`, `ProductHideRequest`, `AdminOrderSummaryResponse`, `AdminProductResponse`, `AuctionResponse`, `OrderResponse` sau khi toàn bộ endpoint chuyển sang DTO chuẩn `RESPONSE_DTO_v4.md`.
 
 ## Cần người duyệt
-- Chạy `.\mvnw.cmd verify` trên máy đã bật **Docker Desktop** để chạy trọn bộ 10 Integration Test (Testcontainers MySQL 8.0 + Flyway V1/V2).
 - Thử khởi động ứng dụng với profile `dev,local` trên database MySQL rỗng mới và đăng nhập `admin@omnibid.local` / `Admin@123456`.
-- Review nhánh `refactor/v4-sync` và merge vào `main` sau khi xác nhận `verify` xanh.
+- Review nhánh `refactor/v4-sync` và merge vào `main`.
 
 ## Việc tồn / test còn lỗi
 - Sau Phase 9:
   - `.\mvnw.cmd test-compile`: **0 lỗi** (biên dịch sạch toàn bộ 48 tệp test).
   - `.\mvnw.cmd test`: **146/146 unit test ĐẠT** (0 failures, 0 errors, 0 skipped).
+  - `.\mvnw.cmd verify` (Docker Desktop 29.7.2, Testcontainers MySQL 8.0.46 + Flyway V1/V2): **51/51 integration test ĐẠT** (tổng **197/197 test xanh**, toàn bộ 7 bất biến DB `InvariantCheck` đạt).
   - `verify-v4.ps1`: **ALL v4 CHECKS PASSED** (10 bảng, 54 endpoint `/api/v1/**`, 24 mã lỗi, 0 từ khóa cấm).
-  - `.\mvnw.cmd verify` (Integration Tests): **Chưa chạy** do Docker Desktop không khả dụng trong môi trường sandbox (`npipe:////./pipe/docker_engine` không kết nối được) — toàn bộ 10 tệp `*IT.java` đã biên dịch sạch và sẵn sàng chạy khi bật Docker Desktop.
+  - Không còn việc tồn hay test lỗi.
