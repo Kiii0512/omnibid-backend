@@ -121,7 +121,7 @@ public class Order {
     }
 
     public boolean isPaymentOverdue(Instant now) {
-        return this.paymentDeadline != null && now.isAfter(this.paymentDeadline);
+        return this.paymentDeadline != null && !now.isBefore(this.paymentDeadline);
     }
 
     private void require(boolean condition, String operation) {

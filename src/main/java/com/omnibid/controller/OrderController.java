@@ -2,8 +2,11 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
+import com.omnibid.dto.order.OrderConfirmReceiptResponse;
 import com.omnibid.dto.order.OrderDetailResponse;
-import com.omnibid.dto.order.OrderResponse;
+import com.omnibid.dto.order.OrderSummaryResponse;
+import com.omnibid.dto.order.ShipOrderRequest;
+import com.omnibid.dto.order.ShipOrderResponse;
 import com.omnibid.dto.order.ShippingInfoRequest;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.security.CurrentUser;
@@ -11,8 +14,9 @@ import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.OrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -26,30 +30,14 @@ public class OrderController {
     private final OrderService orderService;
 
     @GetMapping
-    public ApiResponse<PageResponse<OrderResponse>> getOrders(
+    public ApiResponse<PageResponse<OrderSummaryResponse>> getOrders(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @RequestParam(required = false) String role,
             @RequestParam(required = false) OrderStatus status,
-            @RequestParam(defaultValue = "0") int page,
-            @RequestParam(defaultValue = "20") int size
+            @PageableDefault(size = 10, sort = "createdAt", direction = Sort.Direction.DESC) Pageable pageable
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        PageResponse<OrderResponse> result = orderService.getOrders(
-                currentUser,
-                role,
-                status,
-                PageRequest.of(page, Math.min(size, 100), Sort.by(Sort.Direction.DESC, "createdAt"))
-        );
-        return ApiResponse.success(result);
-    }
-
-    @GetMapping("/summary")
-    public ApiResponse<com.omnibid.dto.order.OrderUserSummaryResponse> getOrderSummary(
-            @AuthenticationPrincipal CustomUserDetails userDetails
-    ) {
-        CurrentUser currentUser = CurrentUser.of(userDetails);
-        com.omnibid.dto.order.OrderUserSummaryResponse summary = orderService.getOrderSummary(currentUser);
-        return ApiResponse.success(summary);
+        return ApiResponse.ok(orderService.getOrders(currentUser, role, status, pageable));
     }
 
     @GetMapping("/{id}")
@@ -58,8 +46,7 @@ public class OrderController {
             @PathVariable Long id
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        OrderDetailResponse result = orderService.getOrderById(currentUser, id);
-        return ApiResponse.success(result);
+        return ApiResponse.ok(orderService.getOrderById(currentUser, id));
     }
 
     @PatchMapping("/{id}/shipping-info")
@@ -69,17 +56,25 @@ public class OrderController {
             @Valid @RequestBody ShippingInfoRequest request
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        OrderDetailResponse result = orderService.updateShippingInfo(currentUser, id, request);
-        return ApiResponse.success(result);
+        return ApiResponse.ok(orderService.updateShippingInfo(currentUser, id, request));
     }
 
-    @PatchMapping("/{id}/confirm-receipt")
-    public ApiResponse<com.omnibid.dto.order.OrderConfirmReceiptResponse> confirmReceipt(
+    @PostMapping("/{id}/ship")
+    public ApiResponse<ShipOrderResponse> shipOrder(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @PathVariable Long id,
+            @Valid @RequestBody(required = false) ShipOrderRequest request
+    ) {
+        CurrentUser currentUser = CurrentUser.of(userDetails);
+        return ApiResponse.ok(orderService.shipOrder(currentUser, id, request));
+    }
+
+    @PostMapping("/{id}/confirm-receipt")
+    public ApiResponse<OrderConfirmReceiptResponse> confirmReceipt(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long id
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        com.omnibid.dto.order.OrderConfirmReceiptResponse result = orderService.confirmReceipt(currentUser, id);
-        return ApiResponse.success("Order completed", result);
+        return ApiResponse.ok(orderService.confirmReceipt(currentUser, id));
     }
 }

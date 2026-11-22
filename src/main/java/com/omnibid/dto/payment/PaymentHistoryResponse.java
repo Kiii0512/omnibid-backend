@@ -15,12 +15,12 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 public class PaymentHistoryResponse {
-    private Long paymentId;
+    private Long id;
     private Integer attemptNo;
-    private PaymentMethod method;
     private BigDecimal amount;
+    private PaymentMethod method;
     private PaymentStatus status;
     private String failureReason;
-    private Instant paidAt;
     private Instant createdAt;
+    private Instant paidAt;
 }

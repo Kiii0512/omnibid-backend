@@ -57,23 +57,13 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
     @Query("SELECT o FROM Order o WHERE (:status IS NULL OR o.status = :status)")
     Page<Order> findAllByStatus(@Param("status") OrderStatus status, Pageable pageable);
 
-    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.paymentDeadline < :now")
-    List<Long> findIdsByStatusAndPaymentDeadlineLessThan(@Param("status") OrderStatus status, @Param("now") Instant now);
+    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.paymentDeadline <= :now")
+    List<Long> findIdsByStatusAndPaymentDeadlineLessThanEqual(@Param("status") OrderStatus status, @Param("now") Instant now);
 
-    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.confirmDeadline < :now")
-    List<Long> findIdsByStatusAndConfirmDeadlineLessThan(@Param("status") OrderStatus status, @Param("now") Instant now);
-
-    List<Order> findByStatusAndPaymentDeadlineLessThanEqual(OrderStatus status, Instant now);
-
-    List<Order> findByStatusAndConfirmDeadlineLessThanEqual(OrderStatus status, Instant now);
+    @Query("SELECT o.id FROM Order o WHERE o.status = :status AND o.confirmDeadline <= :now")
+    List<Long> findIdsByStatusAndConfirmDeadlineLessThanEqual(@Param("status") OrderStatus status, @Param("now") Instant now);
 
     long countByStatus(OrderStatus status);
-
-    @Query("SELECT o.status, COUNT(o) FROM Order o WHERE o.buyerId = :buyerId GROUP BY o.status")
-    List<Object[]> countByBuyerIdGroupByStatus(@Param("buyerId") Long buyerId);
-
-    @Query("SELECT o.status, COUNT(o) FROM Order o WHERE o.sellerId = :sellerId GROUP BY o.status")
-    List<Object[]> countBySellerIdGroupByStatus(@Param("sellerId") Long sellerId);
 
     @Query("SELECT COALESCE(SUM(o.finalPrice), 0) FROM Order o WHERE o.status = com.omnibid.enums.OrderStatus.COMPLETED AND o.completedAt >= :from AND o.completedAt <= :to")
     BigDecimal sumCompletedRevenue(@Param("from") Instant from, @Param("to") Instant to);

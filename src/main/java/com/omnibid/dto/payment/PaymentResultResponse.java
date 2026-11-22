@@ -12,11 +12,12 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-@JsonInclude(JsonInclude.Include.NON_NULL)
-public class PaymentResponse {
+public class PaymentResultResponse {
     private Long paymentId;
     private Integer attemptNo;
     private PaymentStatus status;
     private OrderStatus orderStatus;
+
+    @JsonInclude(JsonInclude.Include.NON_NULL)
     private String failureReason;
 }

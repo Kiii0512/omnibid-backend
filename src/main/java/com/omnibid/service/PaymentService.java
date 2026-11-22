@@ -1,15 +1,15 @@
 package com.omnibid.service;
 
+import com.omnibid.common.PageResponse;
 import com.omnibid.dto.payment.PaymentHistoryResponse;
 import com.omnibid.dto.payment.PaymentRequest;
-import com.omnibid.dto.payment.PaymentResponse;
+import com.omnibid.dto.payment.PaymentResultResponse;
 import com.omnibid.security.CurrentUser;
-
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 
 public interface PaymentService {
 
-    PaymentResponse pay(CurrentUser currentUser, Long orderId, String idempotencyKey, PaymentRequest request);
+    PaymentResultResponse pay(CurrentUser currentUser, Long orderId, String idempotencyKey, PaymentRequest request);
 
-    List<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId);
+    PageResponse<PaymentHistoryResponse> getPaymentsByOrder(CurrentUser currentUser, Long orderId, Pageable pageable);
 }
