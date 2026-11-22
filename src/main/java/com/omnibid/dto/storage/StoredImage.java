@@ -1,7 +1,7 @@
 package com.omnibid.dto.storage;
 
-public record StorageUploadResult(
+public record StoredImage(
         String url,
         String publicId
-) {}
-
+) {
+}

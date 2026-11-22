@@ -7,7 +7,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 1. Nền tảng (Flyway, cấu hình, UTC/JSON, ApiResponse/ErrorCode)
 - [x] 2. Mô hình miền (entity, enum, repository, gỡ tính năng thừa)
 - [x] 3. Bảo mật, xác thực
-- [ ] 4. Ảnh, sản phẩm, danh mục
+- [x] 4. Ảnh, sản phẩm, danh mục
 - [ ] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [ ] 6. Đơn hàng, thanh toán, giao hàng
 - [ ] 7. Thông báo, báo cáo vi phạm
@@ -41,6 +41,12 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
   - `C7`, `C8`: Cập nhật `SecurityConfig` (permit 5 nhóm Public + `/ws/**`, đặt `/api/v1/auctions/mine` trước matcher Public, bỏ `/uploads/**`, `/api/v1/products/**`, `/ws-auction/**`, CORS `allowCredentials=false`); đồng bộ `@PreAuthorize("hasRole('USER')")` / `hasAnyRole('USER','ADMIN')` trên các controller.
   - `C9`: Cập nhật `WebSocketConfig` (`/ws` thuần, bỏ SockJS, origins từ `app.cors.allowed-origins`, broker `/topic`, interceptor kiểm tra CONNECT JWT `ver`/BANNED, SUBSCRIBE chỉ `/topic/auctions/{id}`, chặn mọi SEND) và đổi topic trong `WebSocketPublisherImpl` sang `/topic/auctions/{id}`.
   - Cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`, `JwtTokenProviderTest`, `AuthServiceTest` và thêm `LoginAttemptLimiterTest`.
+- **Phase 4** (`refactor(v4): phase 4 - images, products, categories`):
+  - `D1`, `D2`, `D4`: Thêm `ImageValidator` (magic bytes JPEG/PNG/WEBP, ≤ 5 MB, 1–5 tệp), `AfterCommitExecutor`, `StoredImage`, `ImageStorageService`, `CloudinaryImageStorageService`, `CloudinaryConfig` (thiếu cấu hình vẫn khởi động + log WARN, upload trả 502 `IMAGE_UPLOAD_FAILED`). Xóa `StorageService`, `StorageConfig`, `LocalStorageServiceImpl`, `CloudinaryStorageServiceImpl`, `StorageUploadResult`, `ProductSummaryResponse`, handler `/uploads/**` trong `WebMvcConfig` và thư mục `uploads/`.
+  - `D1`, `D2`: Viết lại `ProductController`/`ProductServiceImpl` theo quy trình 4 bước (validate → upload Cloudinary ngoài transaction → `TransactionTemplate` khóa `PESSIMISTIC_WRITE` + BR-23 → bù trừ xóa asset nếu lỗi DB; xóa ảnh/sản phẩm xóa asset sau COMMIT), bỏ `GET /products`, `GET /products/mine/summary`, `PATCH .../primary`, chuẩn hóa `ProductImageResponse`, `ProductListItemResponse`, `ProductResponse` theo `RESPONSE_DTO_v4.md` (gồm `activeAuctionId`, `everAuctioned`, `primaryImageUrl`, `imageCount`).
+  - `D3`: Cập nhật `POST /api/v1/users/me/avatar` dùng `ImageValidator` + `ImageStorageService` ngoài transaction, lưu `avatarPublicId`, xóa ảnh cũ sau COMMIT, bù trừ khi lỗi DB, trả 200 `AvatarResponse { avatarUrl }`.
+  - `D5`: Cập nhật `CategoryController`/`CategoryServiceImpl`/`AdminController` (`icon` ≤ 50 ký tự `@Pattern("^[a-z0-9-]+$")`, `slug` tùy chọn/kiểm tra trùng 400 `VALIDATION_ERROR`, `GET /categories` phân trang + `keyword` trả `Page<CategoryResponse>`, xóa `GET /categories/{id}`, `/admin/categories` trả `AdminCategoryResponse` có `productCount`, xóa khi còn sản phẩm → 409 `CATEGORY_IN_USE`).
+  - Thêm `ImageValidatorTest` và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
 
 ## Bảng ánh xạ mã lỗi cũ → mới (phase 1)
 | Mã cũ (`AppException`) | Mã mới (`ErrorCode`) | HTTP mới | Ghi chú |
@@ -74,7 +80,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 ## Cần người duyệt
 
 ## Việc tồn / test còn lỗi
-- Sau Phase 3: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch mọi mục thuộc Phase 3 (đã có `POST /api/v1/auth/logout`, đã bỏ `PATCH /api/v1/users/me/avatar`, không còn `/ws-auction` hay `/topic/auction/`).
-- Đã cập nhật `JwtTokenProviderTest`, `AuthServiceTest` và thêm `LoginAttemptLimiterTest` theo chuẩn v4 (các tệp test khác thuộc Phase 4–8 tiếp tục sửa ở Phase 9).
+- Sau Phase 4: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch mọi mục thuộc Phase 4 (không còn `LocalStorageServiceImpl`/`iconUrl`, đủ toàn bộ endpoint ảnh/sản phẩm/danh mục và đã bỏ 4 endpoint thừa).
+- Đã thêm `src/test/java/com/omnibid/common/ImageValidatorTest.java` (magic bytes JPEG/PNG/WEBP, 5 MB, rỗng, số lượng 1–5). Các tệp test cũ thuộc Phase 4–8 (gồm `ProductServiceTest`, `CategoryServiceTest`, `UserServiceTest`…) sẽ sửa đồng bộ ở Phase 9.
 - **21 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` do tham chiếu lớp/enum/kiểu cũ (`NotificationControllerTest`, `OrderControllerTest`, `PaymentControllerTest`, `ReportControllerTest`, `ShipmentControllerTest`, `DefaultMockPaymentGatewayTest`, `AuthorizationIT`, `NotificationIntegrationIT`, `AdminServiceTest`, `AuctionCloserTest`, `AuctionServiceTest`, `AuthServiceTest`, `BidServiceTest`, `CategoryServiceTest`, `NotificationServiceTest`, `OrderServiceTest`, `PaymentServiceTest`, `ProductServiceTest`, `ReportServiceTest`, `ShipmentServiceTest`, `Seed`) — sẽ sửa/gỡ ở Phase 9.
 - Đã thêm `src/test/java/com/omnibid/config/JacksonConfigTest.java` kiểm tra serialize `+07:00`, deserialize `Z`/`+07:00` và `SortWhitelist`.

@@ -18,6 +18,7 @@ import java.time.Instant;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Repository
 public interface AuctionRepository extends JpaRepository<Auction, Long>, JpaSpecificationExecutor<Auction> {
@@ -49,6 +50,11 @@ public interface AuctionRepository extends JpaRepository<Auction, Long>, JpaSpec
     Optional<Auction> findFirstByProductIdAndStatusIn(Long productId, Collection<AuctionStatus> statuses);
 
     List<Auction> findByProductIdAndStatusIn(Long productId, Collection<AuctionStatus> statuses);
+
+    List<Auction> findByProductIdInAndStatusIn(Collection<Long> productIds, Collection<AuctionStatus> statuses);
+
+    @Query("SELECT DISTINCT a.productId FROM Auction a WHERE a.productId IN :productIds")
+    Set<Long> findProductIdsWithAnyAuction(@Param("productIds") Collection<Long> productIds);
 
     List<Auction> findBySellerIdAndStatusIn(Long sellerId, Collection<AuctionStatus> statuses);
 

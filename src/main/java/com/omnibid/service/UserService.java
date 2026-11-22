@@ -1,5 +1,6 @@
 package com.omnibid.service;
 
+import com.omnibid.dto.user.AvatarResponse;
 import com.omnibid.dto.user.ChangePasswordRequest;
 import com.omnibid.dto.user.UpdateProfileRequest;
 import com.omnibid.dto.user.UserProfileResponse;
@@ -11,8 +12,7 @@ public interface UserService {
 
     UserProfileResponse updateProfile(Long userId, UpdateProfileRequest request);
 
-    UserProfileResponse updateAvatar(Long userId, MultipartFile file);
+    AvatarResponse updateAvatar(Long userId, MultipartFile file);
 
     void changePassword(Long userId, ChangePasswordRequest request);
 }
-

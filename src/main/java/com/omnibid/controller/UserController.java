@@ -2,6 +2,7 @@ package com.omnibid.controller;
 
 import com.omnibid.common.ApiResponse;
 import com.omnibid.common.MessageResponse;
+import com.omnibid.dto.user.AvatarResponse;
 import com.omnibid.dto.user.ChangePasswordRequest;
 import com.omnibid.dto.user.UpdateProfileRequest;
 import com.omnibid.dto.user.UserProfileResponse;
@@ -10,6 +11,7 @@ import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.UserService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
@@ -40,11 +42,10 @@ public class UserController {
         return ApiResponse.ok(userService.updateProfile(currentUser.id(), request));
     }
 
-    // TODO v4-phase-4: return AvatarResponse { avatarUrl }
-    @PostMapping("/me/avatar")
-    public ApiResponse<UserProfileResponse> uploadAvatar(
+    @PostMapping(value = "/me/avatar", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ApiResponse<AvatarResponse> uploadAvatar(
             @AuthenticationPrincipal CustomUserDetails userDetails,
-            @RequestParam("file") MultipartFile file
+            @RequestPart(value = "file", required = false) MultipartFile file
     ) {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         return ApiResponse.ok(userService.updateAvatar(currentUser.id(), file));

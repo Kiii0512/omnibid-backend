@@ -40,5 +40,20 @@ Danh sách khởi tạo từ phân tích chênh lệch; agent bổ sung chi ti�
 - Thanh toán đồng bộ: kết quả SUCCESS/FAILED ngay trong response; không còn trạng thái PENDING/polling.
 - Admin không gọi được `/orders/{id}` và `/orders/{id}/payments` (dùng `/admin/orders/{id}`).
 - Danh mục dùng `icon` (tên icon lucide-react) thay `iconUrl`.
+- **Ảnh đại diện (`POST /api/v1/users/me/avatar`)**: multipart `file` (JPEG/PNG/WEBP kiểm tra bằng magic bytes, ≤ 5 MB), trả 200 `{ avatarUrl }` (không còn trả cả `UserProfile`); tự xóa ảnh cũ trên Cloudinary sau COMMIT.
+- **Sản phẩm**:
+  - `POST /api/v1/products`: đổi sang `multipart/form-data` với part `product` (JSON: `{ title, description, categoryId, condition }`) và part `files` (1–5 ảnh JPEG/PNG/WEBP ≤ 5 MB); trả 201 `Product`.
+  - `GET /api/v1/products/mine`: hỗ trợ `keyword`, `status`, `page`, `size` (mặc định 10), `sort` (`id`, `createdAt`, `updatedAt`, `title`, `status`); trả `Page<ProductListItem>` gồm `id, title, categoryId, categoryName, condition, status, primaryImageUrl, imageCount, activeAuctionId, everAuctioned, createdAt`.
+  - `GET /api/v1/products/{id}`: chỉ chủ sở hữu (người khác → 403 `FORBIDDEN`, không tồn tại → 404 `NOT_FOUND`); trả `Product` (mở rộng `ProductListItem` thêm `description, images, updatedAt`, không còn `sellerId`/`sellerName`). `ProductImage` chỉ còn `{ id, imageUrl, isPrimary }` (không lộ `publicId`, `createdAt`).
+  - `PATCH /api/v1/products/{id}`: chỉ khi sản phẩm `AVAILABLE` (BR-23), khác → 409 `PRODUCT_NOT_EDITABLE`.
+  - `DELETE /api/v1/products/{id}`: trả **200** `data: null` (trước đây 204); từ chối 409 `INVALID_STATUS_TRANSITION` nếu sản phẩm đã từng lên phiên.
+  - `POST /api/v1/products/{id}/images`: multipart `files` (nhiều tệp, tổng sau khi thêm ≤ 5, BR-23), trả 201 `Product` (đã gồm ảnh mới).
+  - `DELETE /api/v1/products/{id}/images/{imageId}`: trả **200** `Product` (không xóa được ảnh cuối → 400 `INVALID_IMAGE`; nếu xóa ảnh chính sẽ tự chuyển sang ảnh còn lại có `id` nhỏ nhất).
+  - Đã xóa: `GET /api/v1/products`, `GET /api/v1/products/mine/summary`, `PATCH /api/v1/products/{id}/images/{imageId}/primary`.
+- **Danh mục**:
+  - `GET /api/v1/categories`: trả `Page<Category>` (`{ id, name, slug, icon }`), hỗ trợ `keyword`, `page`, `size` (mặc định 10), `sort` (`id`, `name`, `slug`, `createdAt`). Đã xóa `GET /api/v1/categories/{id}`.
+  - `GET /api/v1/admin/categories`: trả `Page<AdminCategory>` (`{ id, name, slug, icon, productCount }`), hỗ trợ `keyword`, phân trang và sắp xếp.
+  - `POST /api/v1/admin/categories` (201) và `PUT /api/v1/admin/categories/{id}` (200): nhận `{ name, slug?, icon? }` (`icon` ≤ 50 ký tự, `^[a-z0-9-]+$`), trả `AdminCategory`; slug trùng → 400 `VALIDATION_ERROR` kèm `details.fields.slug`.
+  - `DELETE /api/v1/admin/categories/{id}`: trả 200 `data: null`; còn sản phẩm → 409 `CATEGORY_IN_USE`.
 - Báo cáo: `reportedOrderId` thay `orderId`; không còn `reportType`.
 - Thông báo chỉ 5 loại: OUTBID, AUCTION_RESULT, AUCTION_CANCELLED, ORDER_UPDATE, REPORT_RESOLVED.

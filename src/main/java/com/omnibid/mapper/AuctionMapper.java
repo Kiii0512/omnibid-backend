@@ -151,9 +151,7 @@ public class AuctionMapper {
         return new ProductImageResponse(
                 image.getId(),
                 image.getImageUrl(),
-                image.getPublicId(),
-                image.getIsPrimary(),
-                image.getCreatedAt()
+                Boolean.TRUE.equals(image.getIsPrimary())
         );
     }
 

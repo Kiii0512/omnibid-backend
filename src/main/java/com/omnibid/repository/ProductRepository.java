@@ -44,6 +44,22 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
 
     boolean existsByCategoryId(Long categoryId);
 
+    long countByCategoryId(Long categoryId);
+
+    @Query("SELECT p.categoryId, COUNT(p) FROM Product p WHERE p.categoryId IN :categoryIds GROUP BY p.categoryId")
+    List<Object[]> countGroupedByCategoryIdIn(@Param("categoryIds") Collection<Long> categoryIds);
+
+    @Query("""
+        SELECT p FROM Product p
+        WHERE p.sellerId = :sellerId
+          AND (:status IS NULL OR p.status = :status)
+          AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+    """)
+    Page<Product> findMyProducts(@Param("sellerId") Long sellerId,
+                                 @Param("status") ProductStatus status,
+                                 @Param("keyword") String keyword,
+                                 Pageable pageable);
+
     long countByStatus(ProductStatus status);
 
     long countBySellerId(Long sellerId);

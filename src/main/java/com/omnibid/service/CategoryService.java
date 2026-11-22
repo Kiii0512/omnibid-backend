@@ -1,20 +1,21 @@
 package com.omnibid.service;
 
+import com.omnibid.common.PageResponse;
+import com.omnibid.dto.category.AdminCategoryResponse;
 import com.omnibid.dto.category.CategoryRequest;
 import com.omnibid.dto.category.CategoryResponse;
 import com.omnibid.security.CurrentUser;
-
-import java.util.List;
+import org.springframework.data.domain.Pageable;
 
 public interface CategoryService {
 
-    List<CategoryResponse> getAllCategories();
+    PageResponse<CategoryResponse> getCategories(String keyword, Pageable pageable);
 
-    CategoryResponse getCategoryById(Long id);
+    PageResponse<AdminCategoryResponse> getAdminCategories(CurrentUser admin, String keyword, Pageable pageable);
 
-    CategoryResponse createCategory(CurrentUser admin, CategoryRequest request);
+    AdminCategoryResponse createCategory(CurrentUser admin, CategoryRequest request);
 
-    CategoryResponse updateCategory(CurrentUser admin, Long id, CategoryRequest request);
+    AdminCategoryResponse updateCategory(CurrentUser admin, Long id, CategoryRequest request);
 
     void deleteCategory(CurrentUser admin, Long id);
 }

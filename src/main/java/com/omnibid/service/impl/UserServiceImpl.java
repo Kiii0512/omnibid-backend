@@ -1,20 +1,25 @@
 package com.omnibid.service.impl;
 
+import com.omnibid.common.AfterCommitExecutor;
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
-import com.omnibid.dto.storage.StorageUploadResult;
+import com.omnibid.common.ImageValidator;
+import com.omnibid.dto.storage.StoredImage;
+import com.omnibid.dto.user.AvatarResponse;
 import com.omnibid.dto.user.ChangePasswordRequest;
 import com.omnibid.dto.user.UpdateProfileRequest;
 import com.omnibid.dto.user.UserProfileResponse;
 import com.omnibid.entity.User;
 import com.omnibid.repository.UserRepository;
-import com.omnibid.service.StorageService;
+import com.omnibid.service.ImageStorageService;
 import com.omnibid.service.UserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.Map;
@@ -26,7 +31,13 @@ public class UserServiceImpl implements UserService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final StorageService storageService;
+    private final ImageValidator imageValidator;
+    private final ImageStorageService imageStorageService;
+    private final AfterCommitExecutor afterCommitExecutor;
+    private final TransactionTemplate transactionTemplate;
+
+    @Value("${cloudinary.folder:omnibid}")
+    private String cloudinaryFolder = "omnibid";
 
     @Override
     @Transactional(readOnly = true)
@@ -54,16 +65,29 @@ public class UserServiceImpl implements UserService {
         return mapToProfile(updated);
     }
 
-    // TODO v4-phase-4: move to Cloudinary ImageStorageService, save avatarPublicId, delete old avatar after commit, return { avatarUrl }
     @Override
-    @Transactional
-    public UserProfileResponse updateAvatar(Long userId, MultipartFile file) {
-        User user = getUser(userId);
-        StorageUploadResult uploadResult = storageService.upload(file, "avatars/" + userId);
-        user.setAvatarUrl(uploadResult.url());
+    public AvatarResponse updateAvatar(Long userId, MultipartFile file) {
+        ImageValidator.ValidatedImage validated = imageValidator.validate(file);
+        String folder = normalizeBaseFolder() + "/avatars";
+        StoredImage uploaded = imageStorageService.upload(validated.bytes(), folder);
 
-        User updated = userRepository.save(user);
-        return mapToProfile(updated);
+        try {
+            return transactionTemplate.execute(status -> {
+                User user = getUser(userId);
+                String oldPublicId = user.getAvatarPublicId();
+                user.setAvatarUrl(uploaded.url());
+                user.setAvatarPublicId(uploaded.publicId());
+                userRepository.save(user);
+
+                if (oldPublicId != null && !oldPublicId.isBlank() && !oldPublicId.equals(uploaded.publicId())) {
+                    afterCommitExecutor.runAfterCommit(() -> imageStorageService.delete(oldPublicId));
+                }
+                return new AvatarResponse(uploaded.url());
+            });
+        } catch (RuntimeException ex) {
+            imageStorageService.delete(uploaded.publicId());
+            throw ex;
+        }
     }
 
     @Override
@@ -98,6 +122,15 @@ public class UserServiceImpl implements UserService {
         user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
         user.increaseTokenVersion();
         userRepository.save(user);
+    }
+
+    private String normalizeBaseFolder() {
+        if (cloudinaryFolder == null || cloudinaryFolder.isBlank()) {
+            return "omnibid";
+        }
+        return cloudinaryFolder.endsWith("/")
+                ? cloudinaryFolder.substring(0, cloudinaryFolder.length() - 1)
+                : cloudinaryFolder.trim();
     }
 
     private User getUser(Long userId) {

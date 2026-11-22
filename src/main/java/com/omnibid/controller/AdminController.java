@@ -4,8 +4,8 @@ import com.omnibid.common.ApiResponse;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.admin.*;
 import com.omnibid.dto.auction.AuctionResponse;
+import com.omnibid.dto.category.AdminCategoryResponse;
 import com.omnibid.dto.category.CategoryRequest;
-import com.omnibid.dto.category.CategoryResponse;
 import com.omnibid.dto.order.OrderResponse;
 import com.omnibid.enums.OrderStatus;
 import com.omnibid.enums.ProductStatus;
@@ -19,6 +19,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
+import org.springframework.data.web.PageableDefault;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
@@ -105,32 +106,36 @@ public class AdminController {
     }
 
     @GetMapping("/categories")
-    public ResponseEntity<ApiResponse<List<CategoryResponse>>> getCategories() {
-        List<CategoryResponse> response = categoryService.getAllCategories();
-        return ResponseEntity.ok(ApiResponse.success(response));
+    public ResponseEntity<ApiResponse<PageResponse<AdminCategoryResponse>>> getCategories(
+            @AuthenticationPrincipal CustomUserDetails userDetails,
+            @RequestParam(required = false) String keyword,
+            @PageableDefault(size = 10, sort = "name", direction = Sort.Direction.ASC) Pageable pageable) {
+        CurrentUser currentUser = CurrentUser.of(userDetails);
+        PageResponse<AdminCategoryResponse> response = categoryService.getAdminCategories(currentUser, keyword, pageable);
+        return ResponseEntity.ok(ApiResponse.ok(response));
     }
 
     @PostMapping("/categories")
-    public ResponseEntity<ApiResponse<CategoryResponse>> createCategory(
+    public ResponseEntity<ApiResponse<AdminCategoryResponse>> createCategory(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @Valid @RequestBody CategoryRequest request) {
 
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        CategoryResponse response = categoryService.createCategory(currentUser, request);
+        AdminCategoryResponse response = categoryService.createCategory(currentUser, request);
 
-        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.success(response));
+        return ResponseEntity.status(HttpStatus.CREATED).body(ApiResponse.ok(response));
     }
 
     @PutMapping("/categories/{id}")
-    public ResponseEntity<ApiResponse<CategoryResponse>> updateCategory(
+    public ResponseEntity<ApiResponse<AdminCategoryResponse>> updateCategory(
             @AuthenticationPrincipal CustomUserDetails userDetails,
             @PathVariable Long id,
             @Valid @RequestBody CategoryRequest request) {
 
         CurrentUser currentUser = CurrentUser.of(userDetails);
-        CategoryResponse response = categoryService.updateCategory(currentUser, id, request);
+        AdminCategoryResponse response = categoryService.updateCategory(currentUser, id, request);
 
-        return ResponseEntity.ok(ApiResponse.success(response));
+        return ResponseEntity.ok(ApiResponse.ok(response));
     }
 
     @DeleteMapping("/categories/{id}")
@@ -141,7 +146,7 @@ public class AdminController {
         CurrentUser currentUser = CurrentUser.of(userDetails);
         categoryService.deleteCategory(currentUser, id);
 
-        return ResponseEntity.ok(ApiResponse.success("Category deleted", null));
+        return ResponseEntity.ok(ApiResponse.ok(null));
     }
 
     @GetMapping("/orders")

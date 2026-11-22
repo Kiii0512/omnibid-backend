@@ -4,6 +4,7 @@ import com.omnibid.entity.ProductImage;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
 
@@ -11,6 +12,7 @@ import java.util.Optional;
 public interface ProductImageRepository extends JpaRepository<ProductImage, Long> {
     List<ProductImage> findByProductId(Long productId);
     List<ProductImage> findByProductIdOrderByIdAsc(Long productId);
+    List<ProductImage> findByProductIdInOrderByIdAsc(Collection<Long> productIds);
     Optional<ProductImage> findByProductIdAndIsPrimaryTrue(Long productId);
     void deleteByProductId(Long productId);
     long countByProductId(Long productId);

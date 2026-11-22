@@ -8,16 +8,18 @@ import java.util.List;
 
 public record ProductResponse(
         Long id,
-        Long sellerId,
-        String sellerName,
-        Long categoryId,
-        String categoryName,
         String title,
         String description,
+        Long categoryId,
+        String categoryName,
         ProductCondition condition,
         ProductStatus status,
+        String primaryImageUrl,
+        int imageCount,
+        Long activeAuctionId,
+        boolean everAuctioned,
         List<ProductImageResponse> images,
         Instant createdAt,
         Instant updatedAt
-) {}
-
+) {
+}
