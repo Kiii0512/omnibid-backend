@@ -8,10 +8,10 @@ public final class MaskingUtils {
         if (fullName == null || fullName.isBlank()) {
             return "***";
         }
-        String[] parts = fullName.trim().split("\\s+");
-        if (parts.length == 1) {
-            return parts[0].charAt(0) + "***";
+        String trimmed = fullName.trim();
+        if (trimmed.length() == 1) {
+            return trimmed.charAt(0) + "***";
         }
-        return parts[0].charAt(0) + "***" + parts[parts.length - 1].charAt(0);
+        return trimmed.charAt(0) + "***" + trimmed.charAt(trimmed.length() - 1);
     }
 }

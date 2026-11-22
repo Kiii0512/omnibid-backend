@@ -8,7 +8,7 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - [x] 2. Mô hình miền (entity, enum, repository, gỡ tính năng thừa)
 - [x] 3. Bảo mật, xác thực
 - [x] 4. Ảnh, sản phẩm, danh mục
-- [ ] 5. Phiên, đặt giá, chốt phiên, WebSocket
+- [x] 5. Phiên, đặt giá, chốt phiên, WebSocket
 - [ ] 6. Đơn hàng, thanh toán, giao hàng
 - [ ] 7. Thông báo, báo cáo vi phạm
 - [ ] 8. Quản trị
@@ -47,6 +47,11 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
   - `D3`: Cập nhật `POST /api/v1/users/me/avatar` dùng `ImageValidator` + `ImageStorageService` ngoài transaction, lưu `avatarPublicId`, xóa ảnh cũ sau COMMIT, bù trừ khi lỗi DB, trả 200 `AvatarResponse { avatarUrl }`.
   - `D5`: Cập nhật `CategoryController`/`CategoryServiceImpl`/`AdminController` (`icon` ≤ 50 ký tự `@Pattern("^[a-z0-9-]+$")`, `slug` tùy chọn/kiểm tra trùng 400 `VALIDATION_ERROR`, `GET /categories` phân trang + `keyword` trả `Page<CategoryResponse>`, xóa `GET /categories/{id}`, `/admin/categories` trả `AdminCategoryResponse` có `productCount`, xóa khi còn sản phẩm → 409 `CATEGORY_IN_USE`).
   - Thêm `ImageValidatorTest` và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
+- **Phase 5** (`refactor(v4): phase 5 - auctions and bids`):
+  - `E1`, `E2`, `E3`, `E8`: Đổi route đặt giá sang `POST /api/v1/auctions/{id}/bids` (`BidRequest(amount)`), trả 201 `PlaceBidResponse`; đặt giá khóa auction, kiểm tra sản phẩm không `HIDDEN`, không truy vấn/không khóa bảng `users`, lưu `Bid` không trạng thái + flush (`DataIntegrityViolationException` → 409 `CONFLICT`), gửi `OUTBID` cho leader cũ và phát `AuctionEvent(BID_PLACED)` sau COMMIT. `GET /auctions/{id}/bids` phân trang `Page<BidHistoryItem>` (ẩn danh, bỏ `bidderId`/`status`, whitelist `createdAt`/`amount`, chặn sản phẩm `HIDDEN` trừ ADMIN). `GET /bids/mine` lọc `auctionId`, trả `Page<MyBidItem>` (có `leading`, `orderId`). Xóa `GET /bids/mine/summary`, `BidResponse`, `BidSummaryResponse`.
+  - `E5`, `E9`, `E10`, `E11`, `E12`: Chuẩn hóa `AuctionController`/`AuctionServiceImpl`/`AuctionSpecification`/`AuctionMapper` theo `RESPONSE_DTO_v4.md` (`AuctionSummaryResponse`, `AuctionDetailResponse`, `MyAuctionItemResponse`, `UserRef`): tạo phiên `SCHEDULED` với `startTime > now`, thời lượng theo `AppProperties` (`min-duration-minutes`..`max-duration-days`), khóa product + kiểm tra BR-06/BR-15 (`PRODUCT_NOT_AVAILABLE`, bắt UNIQUE → `CONFLICT`); sửa phiên chỉ khi `SCHEDULED` (BR-07 → `AUCTION_NOT_EDITABLE`) và phát `AUCTION_UPDATED`; hủy bởi người bán bắt buộc `reason`, chỉ `SCHEDULED` hoặc `ACTIVE` 0 bid (`CANNOT_CANCEL` / `INVALID_STATUS_TRANSITION`), gửi `AUCTION_CANCELLED` cho cả người bán và leader; tìm kiếm `GET /auctions` hỗ trợ `keyword`, `categoryId`, `minPrice`, `maxPrice`, `status`, `endBefore`, loại sản phẩm `HIDDEN`, sort whitelist 4 cặp; `GET /auctions/mine` hỗ trợ `status`, `keyword`.
+  - `E4`, `E7`: Viết lại `AuctionCloser` theo BR-09 (đọc trạng thái leader bằng truy vấn thường, leader `BANNED` → `UNSOLD`, không trao cho người thứ hai; `ENDED` tạo `Order` qua `OrderService.createFromAuction(auction, now)`, khóa product `reserve()`, gửi `AUCTION_RESULT` cho người thắng kèm hạn thanh toán + người bán; `UNSOLD` `release()`, giữ nguyên `HIDDEN` theo BR-16). Thay `AuctionWebSocketMessage` bằng `AuctionEvent` 12 trường phát sau COMMIT qua `AfterCommitExecutor` trên `/topic/auctions/{id}` (cập nhật cả `AdminServiceImpl`).
+  - Cập nhật `MaskingUtils.maskName` theo quy tắc v4 (`ký tự đầu + *** + ký tự cuối`), sửa 4 unit test Phase 5 (`BidServiceTest`, `AuctionServiceTest`, `AuctionCloserTest`, `WebSocketPublisherTest`) và cập nhật `docs/v4/API_CHANGES_FOR_FRONTEND.md`.
 
 ## Bảng ánh xạ mã lỗi cũ → mới (phase 1)
 | Mã cũ (`AppException`) | Mã mới (`ErrorCode`) | HTTP mới | Ghi chú |
@@ -76,11 +81,14 @@ Nhánh: `refactor/v4-sync` · Kit: `.agents/skills/omnibid-v4-sync` · Agent c�
 - **Tương thích `ApiResponse.success(...)`**: Giữ tạm 2 hàm alias `success(T)` và `success(String, T)` gọi thẳng `ok(T)` (không xuất trường `message` cấp ngoài, đảm bảo JSON đúng chuẩn v4) để các controller cũ vẫn biên dịch sạch trước khi dọn ở Phase 3–8.
 - **Timestamp entity (Phase 2)**: Thống nhất dùng `@CreationTimestamp` (`updatable = false`) và `@UpdateTimestamp` với kiểu `Instant` trên toàn bộ 10 entity (bổ sung `@CreationTimestamp` cho `Payment.createdAt` để nhất quán). Không ánh xạ hai cột sinh `auctions.active_product_id` và `payments.success_order_id`.
 - **`Order.isPaymentOverdue(Instant now)`**: Kiểm tra `paymentDeadline != null && now.isAfter(paymentDeadline)` để khớp chặt truy vấn quét `o.paymentDeadline < :now`.
+- **`MaskingUtils.maskName` & `winnerName` (Phase 5)**: Thống nhất ẩn danh theo đúng ví dụ `API_SPEC_v4.md` §3 (`ký tự đầu + *** + ký tự cuối`, 1 ký tự → `ký tự đầu + ***`), áp dụng cho cả `highestBidderName`, `bidderName` và `winnerName` ở response công khai.
+- **Quyền ADMIN xem chi tiết/lịch sử đặt giá của sản phẩm `HIDDEN` (Phase 5)**: `GET /api/v1/auctions` luôn loại sản phẩm `HIDDEN`; `GET /api/v1/auctions/{id}` và `GET /api/v1/auctions/{id}/bids` trả 404 `NOT_FOUND` với mọi người gọi không phải ADMIN (cho phép ADMIN tra cứu lịch sử đặt giá vì không có `/admin/auctions/{id}/bids` riêng).
+- **Trường tùy chọn `?` trong `AuctionDetailResponse` & `AuctionEvent` (Phase 5)**: Gắn `@JsonInclude(JsonInclude.Include.NON_NULL)` riêng trên `reservePrice`, `orderId` (`AuctionDetailResponse`) và `bid` (`AuctionEvent`) để chỉ xuất hiện khi thỏa điều kiện; các trường `T | null` khác luôn có mặt trong JSON.
 
 ## Cần người duyệt
 
 ## Việc tồn / test còn lỗi
-- Sau Phase 4: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch mọi mục thuộc Phase 4 (không còn `LocalStorageServiceImpl`/`iconUrl`, đủ toàn bộ endpoint ảnh/sản phẩm/danh mục và đã bỏ 4 endpoint thừa).
-- Đã thêm `src/test/java/com/omnibid/common/ImageValidatorTest.java` (magic bytes JPEG/PNG/WEBP, 5 MB, rỗng, số lượng 1–5). Các tệp test cũ thuộc Phase 4–8 (gồm `ProductServiceTest`, `CategoryServiceTest`, `UserServiceTest`…) sẽ sửa đồng bộ ở Phase 9.
-- **21 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` do tham chiếu lớp/enum/kiểu cũ (`NotificationControllerTest`, `OrderControllerTest`, `PaymentControllerTest`, `ReportControllerTest`, `ShipmentControllerTest`, `DefaultMockPaymentGatewayTest`, `AuthorizationIT`, `NotificationIntegrationIT`, `AdminServiceTest`, `AuctionCloserTest`, `AuctionServiceTest`, `AuthServiceTest`, `BidServiceTest`, `CategoryServiceTest`, `NotificationServiceTest`, `OrderServiceTest`, `PaymentServiceTest`, `ProductServiceTest`, `ReportServiceTest`, `ShipmentServiceTest`, `Seed`) — sẽ sửa/gỡ ở Phase 9.
-- Đã thêm `src/test/java/com/omnibid/config/JacksonConfigTest.java` kiểm tra serialize `+07:00`, deserialize `Z`/`+07:00` và `SortWhitelist`.
+- Sau Phase 5: `.\mvnw.cmd -q -o "-Daether.syncContext.named.factory=rwlock-local" compile` đạt **0 lỗi**; `verify-v4.ps1` sạch toàn bộ 9 endpoint phiên/đặt giá và 0 từ khóa cấm.
+- Đã cập nhật 4 tệp unit test Phase 5 (`BidServiceTest`, `AuctionServiceTest`, `AuctionCloserTest`, `WebSocketPublisherTest`) biên dịch sạch theo v4.
+- **17 tệp test** cũ trong `src/test/java` còn lỗi `test-compile` do thuộc Phase 6–8 hoặc tham chiếu lớp/enum cũ (`NotificationControllerTest`, `OrderControllerTest`, `PaymentControllerTest`, `ReportControllerTest`, `ShipmentControllerTest`, `DefaultMockPaymentGatewayTest`, `AuthorizationIT`, `NotificationIntegrationIT`, `AdminServiceTest`, `CategoryServiceTest`, `NotificationServiceTest`, `OrderServiceTest`, `PaymentServiceTest`, `ProductServiceTest`, `ReportServiceTest`, `ShipmentServiceTest`, `Seed`) — sẽ sửa/gỡ ở Phase 9.
+- Đã thêm `src/test/java/com/omnibid/common/ImageValidatorTest.java` và `src/test/java/com/omnibid/config/JacksonConfigTest.java`.

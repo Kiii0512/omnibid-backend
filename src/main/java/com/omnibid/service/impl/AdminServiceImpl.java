@@ -2,12 +2,13 @@ package com.omnibid.service.impl;
 
 import com.omnibid.common.BusinessException;
 import com.omnibid.common.ErrorCode;
+import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.NotificationTemplates;
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.admin.*;
 import com.omnibid.dto.auction.AuctionResponse;
 import com.omnibid.dto.order.OrderResponse;
-import com.omnibid.dto.websocket.AuctionWebSocketMessage;
+import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.entity.*;
 import com.omnibid.enums.*;
 import com.omnibid.repository.*;
@@ -488,8 +489,15 @@ public class AdminServiceImpl implements AdminService {
 
     private void broadcastAuctionUpdate(Auction auction) {
         try {
-            webSocketPublisher.publishAuctionUpdate(auction.getId(),
-                    new AuctionWebSocketMessage("AUCTION_UPDATED", auction.getId(), mapToAuctionResponse(auction)));
+            String maskedLeaderName = auction.getHighestBidderId() != null
+                    ? userRepository.findById(auction.getHighestBidderId())
+                            .map(User::getFullName)
+                            .map(MaskingUtils::maskName)
+                            .orElse(null)
+                    : null;
+            webSocketPublisher.publishAuctionEvent(
+                    AuctionEvent.of(AuctionEventType.AUCTION_CANCELLED, auction, maskedLeaderName, null, Instant.now(clock))
+            );
         } catch (Exception e) {
             log.warn("Failed to broadcast WebSocket update for auction {}: {}", auction.getId(), e.getMessage());
         }

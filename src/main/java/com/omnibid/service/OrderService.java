@@ -12,9 +12,11 @@ import com.omnibid.enums.OrderStatus;
 import com.omnibid.security.CurrentUser;
 import org.springframework.data.domain.Pageable;
 
+import java.time.Instant;
+
 public interface OrderService {
 
-    Order createFromAuction(Auction auction);
+    Order createFromAuction(Auction auction, Instant now);
 
     PageResponse<OrderResponse> getOrders(CurrentUser currentUser, String role, OrderStatus status, Pageable pageable);
 

@@ -1,17 +1,22 @@
 package com.omnibid.service;
 
+import com.omnibid.common.MaskingUtils;
 import com.omnibid.common.NotificationTemplates;
-import com.omnibid.dto.auction.AuctionResponse;
+import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.entity.Auction;
 import com.omnibid.entity.Order;
 import com.omnibid.entity.Product;
+import com.omnibid.entity.User;
+import com.omnibid.enums.AuctionEventType;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.ReserveStatus;
+import com.omnibid.enums.UserStatus;
 import com.omnibid.repository.AuctionRepository;
-import com.omnibid.repository.BidRepository;
 import com.omnibid.repository.ProductRepository;
+import com.omnibid.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
@@ -26,18 +31,18 @@ public class AuctionCloser {
 
     private final TransactionTemplate transactionTemplate;
     private final AuctionRepository auctionRepository;
-    private final BidRepository bidRepository;
     private final ProductRepository productRepository;
+    private final UserRepository userRepository;
     private final OrderService orderService;
     private final WebSocketPublisher webSocketPublisher;
     private final NotificationService notificationService;
     private final Clock clock;
 
-    @org.springframework.beans.factory.annotation.Autowired
+    @Autowired
     public AuctionCloser(PlatformTransactionManager transactionManager,
                          AuctionRepository auctionRepository,
-                         BidRepository bidRepository,
                          ProductRepository productRepository,
+                         UserRepository userRepository,
                          OrderService orderService,
                          WebSocketPublisher webSocketPublisher,
                          NotificationService notificationService,
@@ -46,8 +51,8 @@ public class AuctionCloser {
         template.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         this.transactionTemplate = template;
         this.auctionRepository = auctionRepository;
-        this.bidRepository = bidRepository;
         this.productRepository = productRepository;
+        this.userRepository = userRepository;
         this.orderService = orderService;
         this.webSocketPublisher = webSocketPublisher;
         this.notificationService = notificationService;
@@ -56,16 +61,16 @@ public class AuctionCloser {
 
     public AuctionCloser(TransactionTemplate transactionTemplate,
                          AuctionRepository auctionRepository,
-                         BidRepository bidRepository,
                          ProductRepository productRepository,
+                         UserRepository userRepository,
                          OrderService orderService,
                          WebSocketPublisher webSocketPublisher,
                          NotificationService notificationService,
                          Clock clock) {
         this.transactionTemplate = transactionTemplate;
         this.auctionRepository = auctionRepository;
-        this.bidRepository = bidRepository;
         this.productRepository = productRepository;
+        this.userRepository = userRepository;
         this.orderService = orderService;
         this.webSocketPublisher = webSocketPublisher;
         this.notificationService = notificationService;
@@ -89,29 +94,38 @@ public class AuctionCloser {
             return;
         }
 
-        // TODO v4-phase-5: verify highestBidderId is ACTIVE per BR-09
-        boolean hasLeader = auction.getHighestBidderId() != null && auction.getBidCount() != null && auction.getBidCount() > 0;
+        // BR-09: đọc trạng thái người dẫn đầu bằng truy vấn thường (không khóa users)
+        User leader = auction.getHighestBidderId() != null
+                ? userRepository.findById(auction.getHighestBidderId()).orElse(null)
+                : null;
+        boolean hasActiveLeader = leader != null
+                && leader.getStatus() == UserStatus.ACTIVE
+                && auction.getBidCount() != null
+                && auction.getBidCount() > 0;
         boolean reserveMet = auction.reserveStatus() != ReserveStatus.NOT_MET;
+        String maskedLeaderName = leader != null ? MaskingUtils.maskName(leader.getFullName()) : null;
 
-        if (hasLeader && reserveMet) {
+        if (hasActiveLeader && reserveMet) {
             auction.closeAsEnded(now);
             auctionRepository.save(auction);
+
+            // Thứ tự khóa: auctions -> (order mới tạo, không cần khóa) -> products
+            Order order = orderService.createFromAuction(auction, now);
 
             Product product = productRepository.findByIdForUpdate(auction.getProductId())
                     .or(() -> productRepository.findById(auction.getProductId()))
                     .orElse(null);
-            if (product != null) {
+            if (product != null && product.getStatus() != com.omnibid.enums.ProductStatus.HIDDEN) {
                 product.reserve();
                 productRepository.save(product);
             }
 
-            Order order = orderService.createFromAuction(auction);
-
+            Instant paymentDeadline = order != null ? order.getPaymentDeadline() : null;
             notificationService.notify(
                     auction.getWinnerId(),
                     NotificationType.AUCTION_RESULT,
                     NotificationTemplates.auctionWonTitle(),
-                    NotificationTemplates.auctionWonContent(auction.getId(), auction.getFinalPrice()),
+                    NotificationTemplates.auctionWonContent(auction.getId(), auction.getFinalPrice(), paymentDeadline),
                     "AUCTION",
                     auction.getId()
             );
@@ -134,7 +148,7 @@ public class AuctionCloser {
             Product product = productRepository.findByIdForUpdate(auction.getProductId())
                     .or(() -> productRepository.findById(auction.getProductId()))
                     .orElse(null);
-            if (product != null) {
+            if (product != null && product.getStatus() != com.omnibid.enums.ProductStatus.HIDDEN) {
                 product.release();
                 productRepository.save(product);
             }
@@ -148,10 +162,12 @@ public class AuctionCloser {
                     auction.getId()
             );
 
-            log.info("Auction {} UNSOLD (hasLeader={}, reserveMet={})", auction.getId(), hasLeader, reserveMet);
+            log.info("Auction {} UNSOLD (hasActiveLeader={}, reserveMet={})", auction.getId(), hasActiveLeader, reserveMet);
         }
 
-        publishWsAfterCommit(auction);
+        webSocketPublisher.publishAuctionEvent(
+                AuctionEvent.of(AuctionEventType.AUCTION_ENDED, auction, maskedLeaderName, null, now)
+        );
     }
 
     public void startOne(Long auctionId) {
@@ -168,29 +184,8 @@ public class AuctionCloser {
         Auction updated = auctionRepository.save(auction);
         log.info("Started auction {} at {}", updated.getId(), now);
 
-        publishWsAfterCommit(updated);
-    }
-
-    private void publishWsAfterCommit(Auction auction) {
-        AuctionResponse response = AuctionResponse.builder()
-                .id(auction.getId())
-                .productId(auction.getProductId())
-                .sellerId(auction.getSellerId())
-                .startPrice(auction.getStartPrice())
-                .bidIncrement(auction.getBidIncrement())
-                .currentPrice(auction.getCurrentPrice())
-                .highestBidderId(auction.getHighestBidderId())
-                .bidCount(auction.getBidCount())
-                .startTime(auction.getStartTime())
-                .endTime(auction.getEndTime())
-                .status(auction.getStatus())
-                .winnerId(auction.getWinnerId())
-                .finalPrice(auction.getFinalPrice())
-                .closedAt(auction.getClosedAt())
-                .cancelReason(auction.getCancelReason())
-                .createdAt(auction.getCreatedAt())
-                .build();
-
-        webSocketPublisher.publishAuctionUpdate(auction.getId(), response);
+        webSocketPublisher.publishAuctionEvent(
+                AuctionEvent.of(AuctionEventType.AUCTION_STARTED, updated, null, null, now)
+        );
     }
 }

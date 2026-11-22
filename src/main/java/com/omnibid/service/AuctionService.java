@@ -2,42 +2,43 @@ package com.omnibid.service;
 
 import com.omnibid.common.PageResponse;
 import com.omnibid.dto.auction.AuctionCreateRequest;
-import com.omnibid.dto.auction.AuctionResponse;
+import com.omnibid.dto.auction.AuctionDetailResponse;
+import com.omnibid.dto.auction.AuctionSummaryResponse;
 import com.omnibid.dto.auction.AuctionUpdateRequest;
+import com.omnibid.dto.auction.MyAuctionItemResponse;
 import com.omnibid.enums.AuctionStatus;
-import org.springframework.data.domain.Page;
+import com.omnibid.security.CurrentUser;
 import org.springframework.data.domain.Pageable;
 
 import java.math.BigDecimal;
-import java.util.List;
+import java.time.Instant;
 
 public interface AuctionService {
 
-    AuctionResponse createAuction(Long userId, AuctionCreateRequest request);
+    AuctionDetailResponse createAuction(Long sellerId, AuctionCreateRequest request);
 
-    AuctionResponse getAuctionById(Long id);
+    AuctionDetailResponse getAuctionById(Long id, CurrentUser currentUser);
 
-    AuctionResponse getAuctionById(Long id, Long currentUserId);
-
-    Page<AuctionResponse> getAuctions(AuctionStatus status, Pageable pageable);
-
-    PageResponse<AuctionResponse> searchAuctions(
-            Long currentUserId,
-            String q,
-            List<Long> categoryIds,
-            AuctionStatus status,
+    PageResponse<AuctionSummaryResponse> searchAuctions(
+            String keyword,
+            Long categoryId,
             BigDecimal minPrice,
             BigDecimal maxPrice,
-            Long sellerId,
-            String sort,
+            AuctionStatus status,
+            Instant endBefore,
             Pageable pageable
     );
 
-    AuctionResponse updateAuction(Long sellerId, Long auctionId, AuctionUpdateRequest request);
+    AuctionDetailResponse updateAuction(Long sellerId, Long auctionId, AuctionUpdateRequest request);
 
-    PageResponse<AuctionResponse> getMyAuctions(Long sellerId, AuctionStatus status, Pageable pageable);
+    PageResponse<MyAuctionItemResponse> getMyAuctions(
+            Long sellerId,
+            AuctionStatus status,
+            String keyword,
+            Pageable pageable
+    );
 
-    AuctionResponse cancelAuction(Long userId, Long auctionId, String reason);
+    AuctionDetailResponse cancelAuction(Long sellerId, Long auctionId, String reason);
 
     void startScheduledAuctions();
 

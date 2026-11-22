@@ -36,7 +36,18 @@ Danh sách khởi tạo từ phân tích chênh lệch; agent bổ sung chi ti�
 - Đăng nhập sai 5 lần/15 phút theo `(email, IP)` → 429 `TOO_MANY_REQUESTS` kèm header `Retry-After` và `error.details.retryAfterSeconds`.
 - JWT của tài khoản `BANNED` luôn nhận 403 `ACCOUNT_BANNED` ở mọi endpoint (kể cả Public); JWT hỏng/hết hạn/`ver` sai bị bỏ qua ở endpoint Public và trả 401 `UNAUTHORIZED` ở endpoint cần đăng nhập.
 - WebSocket: đổi endpoint sang `/ws` (WebSocket thuần, bỏ SockJS và `/ws-auction`), kênh `/topic/auctions/{id}`, chỉ đọc (mọi khung `SEND` và `SUBSCRIBE` ngoài `/topic/auctions/{id}` bị từ chối); CORS `allowCredentials=false`.
-- `SELF_BID_NOT_ALLOWED` trả 409. Lịch sử đặt giá công khai không còn `bidderId`, `status`.
+- **Phiên đấu giá**:
+  - `GET /api/v1/auctions`: query `keyword`, `categoryId`, `minPrice`, `maxPrice`, `status`, `endBefore`, `page`, `size` (mặc định 10), `sort` (chỉ nhận `endTime,asc` mặc định, `createdAt,desc`, `currentPrice,asc`, `currentPrice,desc`); loại phiên của sản phẩm `HIDDEN`; trả `Page<AuctionSummary>` (`id, productId, title, primaryImageUrl, categoryId, categoryName, status, startPrice, currentPrice, minNextBid, bidCount, reserveStatus, startTime, endTime, createdAt`).
+  - `GET /api/v1/auctions/{id}`: trả `AuctionDetail` (mở rộng `AuctionSummary` thêm `description, condition, images, bidIncrement, seller: { id, fullName }, highestBidderName, viewerIsSeller, viewerIsLeading, reservePrice?, winnerName, finalPrice, closedAt, cancelReason, orderId?`); `reservePrice` chỉ xuất hiện khi `viewerIsSeller=true`, `orderId` chỉ xuất hiện cho người bán/người thắng khi `ENDED`. Phiên của sản phẩm `HIDDEN` → 404 `NOT_FOUND` (trừ ADMIN).
+  - `POST /api/v1/auctions` (201): `startTime` bắt buộc lớn hơn thời điểm hiện tại, thời lượng theo cấu hình (`min-duration-minutes`..`max-duration-days`), luôn tạo ở trạng thái `SCHEDULED`, trả `AuctionDetail`.
+  - `PATCH /api/v1/auctions/{id}`: chỉ sửa khi `SCHEDULED` (BR-07; `ACTIVE` dù 0 bid → 409 `AUCTION_NOT_EDITABLE`), phát sự kiện WebSocket `AUCTION_UPDATED`, trả `AuctionDetail`.
+  - `POST /api/v1/auctions/{id}/cancel`: bắt buộc body `{ reason }` (`@NotBlank`); hủy `ACTIVE` đã có bid → 409 `CANNOT_CANCEL`, trạng thái đã kết thúc/hủy → 409 `INVALID_STATUS_TRANSITION`; trả `AuctionDetail`.
+  - `GET /api/v1/auctions/mine`: hỗ trợ `status`, `keyword`, `page`, `size`, `sort`; trả `Page<MyAuctionItem>` (`AuctionSummary` + `reservePrice, orderId`).
+- **Đặt giá & WebSocket**:
+  - `POST /api/v1/auctions/{id}/bids` (thay `POST /api/v1/bids`): body `{ amount }`, trả 201 `PlaceBidResponse { bidId, auctionId, amount, currentPrice, bidCount, minNextBid }`; `SELF_BID_NOT_ALLOWED` trả 409; `BID_TOO_LOW` kèm `details.minNextBid`.
+  - `GET /api/v1/auctions/{id}/bids`: phân trang `Page<BidHistoryItem>` (`{ id, amount, bidderName, createdAt }`, mặc định `createdAt,desc`, whitelist `createdAt`/`amount`, không còn `bidderId`/`status`).
+  - `GET /api/v1/bids/mine`: lọc `auctionId`, trả `Page<MyBidItem>` (`{ id, auctionId, title, primaryImageUrl, amount, createdAt, auctionStatus, currentPrice, endTime, leading, orderId }`). Đã xóa `GET /api/v1/bids/mine/summary`.
+  - WebSocket `/topic/auctions/{id}`: payload `AuctionEvent { type, auctionId, status, currentPrice, minNextBid, bidCount, highestBidderName, reserveStatus, startTime, endTime, bid?, createdAt }` với 5 loại `BID_PLACED`, `AUCTION_UPDATED`, `AUCTION_STARTED`, `AUCTION_ENDED`, `AUCTION_CANCELLED` (`bid` chỉ xuất hiện ở `BID_PLACED`).
 - Thanh toán đồng bộ: kết quả SUCCESS/FAILED ngay trong response; không còn trạng thái PENDING/polling.
 - Admin không gọi được `/orders/{id}` và `/orders/{id}/payments` (dùng `/admin/orders/{id}`).
 - Danh mục dùng `icon` (tên icon lucide-react) thay `iconUrl`.

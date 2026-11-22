@@ -46,6 +46,13 @@ public final class NotificationTemplates {
         return "Chúc mừng bạn đã thắng phiên đấu giá #" + auctionId + " với mức giá " + formatCurrency(finalPrice) + ".";
     }
 
+    public static String auctionWonContent(Long auctionId, BigDecimal finalPrice, Instant paymentDeadline) {
+        String deadlinePart = paymentDeadline != null
+                ? " Vui lòng hoàn tất thanh toán trước " + formatDateTime(paymentDeadline) + "."
+                : "";
+        return "Chúc mừng bạn đã thắng phiên đấu giá #" + auctionId + " với mức giá " + formatCurrency(finalPrice) + "." + deadlinePart;
+    }
+
     public static String orderCreatedTitle(Long orderId, Instant deadline) {
         return "Đơn hàng #" + orderId + ": thanh toán trước " + formatDateTime(deadline);
     }

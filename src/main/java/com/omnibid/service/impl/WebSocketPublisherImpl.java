@@ -1,15 +1,13 @@
 package com.omnibid.service.impl;
 
-import com.omnibid.dto.bid.BidResponse;
-import com.omnibid.dto.websocket.AuctionWebSocketMessage;
+import com.omnibid.common.AfterCommitExecutor;
+import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.service.WebSocketPublisher;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 @Slf4j
 @Service
@@ -18,49 +16,18 @@ public class WebSocketPublisherImpl implements WebSocketPublisher {
 
     private final SimpMessagingTemplate messagingTemplate;
     private final UserRepository userRepository;
+    private final AfterCommitExecutor afterCommitExecutor;
 
     @Override
-    public void publishAuctionUpdate(Long auctionId, Object payload) {
-        AuctionWebSocketMessage wrapped = wrapAuctionMessage(auctionId, payload);
-        String destination = "/topic/auctions/" + auctionId;
-
-        Runnable sendTask = () -> {
-            try {
-                log.info("Broadcasting auction update to {}: {}", destination, wrapped);
-                messagingTemplate.convertAndSend(destination, wrapped);
-            } catch (Exception ex) {
-                log.warn("Failed to broadcast WebSocket auction update to {}: {}", destination, ex.getMessage(), ex);
-            }
-        };
-
-        if (TransactionSynchronizationManager.isActualTransactionActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    sendTask.run();
-                }
-            });
-        } else {
-            sendTask.run();
+    public void publishAuctionEvent(AuctionEvent event) {
+        if (event == null || event.auctionId() == null) {
+            return;
         }
-    }
-
-    private AuctionWebSocketMessage wrapAuctionMessage(Long auctionId, Object payload) {
-        if (payload instanceof AuctionWebSocketMessage msg) {
-            return msg;
-        }
-        if (payload instanceof BidResponse) {
-            return AuctionWebSocketMessage.builder()
-                    .type("BID_PLACED")
-                    .auctionId(auctionId)
-                    .data(payload)
-                    .build();
-        }
-        return AuctionWebSocketMessage.builder()
-                .type("AUCTION_UPDATED")
-                .auctionId(auctionId)
-                .data(payload)
-                .build();
+        String destination = "/topic/auctions/" + event.auctionId();
+        afterCommitExecutor.runAfterCommit(() -> {
+            log.info("Broadcasting auction event {} to {}", event.type(), destination);
+            messagingTemplate.convertAndSend(destination, event);
+        });
     }
 
     @Override

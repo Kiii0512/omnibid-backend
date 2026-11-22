@@ -1,9 +1,12 @@
 package com.omnibid.service;
 
-import com.omnibid.dto.auction.AuctionResponse;
-import com.omnibid.dto.bid.BidResponse;
-import com.omnibid.dto.websocket.AuctionWebSocketMessage;
+import com.omnibid.common.AfterCommitExecutor;
+import com.omnibid.dto.bid.BidHistoryItem;
+import com.omnibid.dto.websocket.AuctionEvent;
 import com.omnibid.entity.User;
+import com.omnibid.enums.AuctionEventType;
+import com.omnibid.enums.AuctionStatus;
+import com.omnibid.enums.ReserveStatus;
 import com.omnibid.repository.UserRepository;
 import com.omnibid.service.impl.WebSocketPublisherImpl;
 import org.junit.jupiter.api.BeforeEach;
@@ -16,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -35,51 +39,68 @@ class WebSocketPublisherTest {
 
     @BeforeEach
     void setUp() {
-        webSocketPublisher = new WebSocketPublisherImpl(messagingTemplate, userRepository);
+        webSocketPublisher = new WebSocketPublisherImpl(messagingTemplate, userRepository, new AfterCommitExecutor());
     }
 
     @Test
-    @DisplayName("G-09 Bọc payload BidResponse thành {type: 'BID_PLACED', auctionId, data}")
-    void publishAuctionUpdate_BidResponse_WrapsProperly() {
-        BidResponse bidResponse = BidResponse.builder()
-                .id(1L)
-                .auctionId(10L)
-                .bidderName("N***n")
-                .amount(BigDecimal.valueOf(500000))
-                .build();
+    @DisplayName("Phát AuctionEvent BID_PLACED tới /topic/auctions/{id}")
+    void publishAuctionEvent_BidPlaced_SendsToPluralTopic() {
+        Instant now = Instant.parse("2026-11-20T02:00:00Z");
+        BidHistoryItem bid = new BidHistoryItem(1L, BigDecimal.valueOf(500000), "N***h", now);
+        AuctionEvent event = new AuctionEvent(
+                AuctionEventType.BID_PLACED,
+                10L,
+                AuctionStatus.ACTIVE,
+                BigDecimal.valueOf(500000),
+                BigDecimal.valueOf(510000),
+                1,
+                "N***h",
+                ReserveStatus.NO_RESERVE,
+                now.minusSeconds(3600),
+                now.plusSeconds(3600),
+                bid,
+                now
+        );
 
-        webSocketPublisher.publishAuctionUpdate(10L, bidResponse);
+        webSocketPublisher.publishAuctionEvent(event);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(messagingTemplate).convertAndSend(eq("/topic/auction/10"), captor.capture());
+        verify(messagingTemplate).convertAndSend(eq("/topic/auctions/10"), captor.capture());
 
-        Object captured = captor.getValue();
-        assertInstanceOf(AuctionWebSocketMessage.class, captured);
-        AuctionWebSocketMessage message = (AuctionWebSocketMessage) captured;
-        assertEquals("BID_PLACED", message.getType());
-        assertEquals(10L, message.getAuctionId());
-        assertEquals(bidResponse, message.getData());
+        assertInstanceOf(AuctionEvent.class, captor.getValue());
+        AuctionEvent sent = (AuctionEvent) captor.getValue();
+        assertEquals(AuctionEventType.BID_PLACED, sent.type());
+        assertEquals(10L, sent.auctionId());
+        assertEquals(bid, sent.bid());
     }
 
     @Test
-    @DisplayName("G-09 Bọc payload AuctionResponse thành {type: 'AUCTION_UPDATED', auctionId, data}")
-    void publishAuctionUpdate_AuctionResponse_WrapsProperly() {
-        AuctionResponse auctionResponse = AuctionResponse.builder()
-                .id(10L)
-                .currentPrice(BigDecimal.valueOf(500000))
-                .build();
+    @DisplayName("Phát AuctionEvent AUCTION_UPDATED không kèm bid tới /topic/auctions/{id}")
+    void publishAuctionEvent_AuctionUpdated_SendsWithoutBid() {
+        Instant now = Instant.parse("2026-11-20T02:00:00Z");
+        AuctionEvent event = new AuctionEvent(
+                AuctionEventType.AUCTION_UPDATED,
+                10L,
+                AuctionStatus.SCHEDULED,
+                BigDecimal.valueOf(500000),
+                BigDecimal.valueOf(500000),
+                0,
+                null,
+                ReserveStatus.NOT_MET,
+                now.plusSeconds(3600),
+                now.plusSeconds(7200),
+                null,
+                now
+        );
 
-        webSocketPublisher.publishAuctionUpdate(10L, auctionResponse);
+        webSocketPublisher.publishAuctionEvent(event);
 
         ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
-        verify(messagingTemplate).convertAndSend(eq("/topic/auction/10"), captor.capture());
+        verify(messagingTemplate).convertAndSend(eq("/topic/auctions/10"), captor.capture());
 
-        Object captured = captor.getValue();
-        assertInstanceOf(AuctionWebSocketMessage.class, captured);
-        AuctionWebSocketMessage message = (AuctionWebSocketMessage) captured;
-        assertEquals("AUCTION_UPDATED", message.getType());
-        assertEquals(10L, message.getAuctionId());
-        assertEquals(auctionResponse, message.getData());
+        AuctionEvent sent = (AuctionEvent) captor.getValue();
+        assertEquals(AuctionEventType.AUCTION_UPDATED, sent.type());
+        assertNull(sent.bid());
     }
 
     @Test

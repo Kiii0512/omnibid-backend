@@ -52,11 +52,13 @@ public class OrderServiceImpl implements OrderService {
 
     @Override
     @Transactional
-    public Order createFromAuction(Auction auction) {
+    public Order createFromAuction(Auction auction, Instant now) {
         return orderRepository.findByAuctionId(auction.getId())
                 .orElseGet(() -> {
                     Duration deadline = appProperties.getOrder().getPaymentDeadlineHours();
-                    Instant closedAt = auction.getClosedAt() != null ? auction.getClosedAt() : Instant.now(clock);
+                    Instant closedAt = auction.getClosedAt() != null
+                            ? auction.getClosedAt()
+                            : (now != null ? now : Instant.now(clock));
                     Order order = Order.builder()
                             .auctionId(auction.getId())
                             .productId(auction.getProductId())
@@ -66,8 +68,8 @@ public class OrderServiceImpl implements OrderService {
                             .status(OrderStatus.PENDING_PAYMENT)
                             .paymentDeadline(closedAt.plus(deadline))
                             .build();
-                    log.info("Creating order for auction {}: buyer={}, amount={}",
-                            auction.getId(), auction.getWinnerId(), auction.getFinalPrice());
+                    log.info("Creating order for auction {}: buyer={}, amount={}, paymentDeadline={}",
+                            auction.getId(), auction.getWinnerId(), auction.getFinalPrice(), order.getPaymentDeadline());
                     return orderRepository.save(order);
                 });
     }
