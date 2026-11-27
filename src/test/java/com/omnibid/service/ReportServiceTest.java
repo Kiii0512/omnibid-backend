@@ -195,6 +195,12 @@ class ReportServiceTest {
         when(reportRepository.findAdminReports(eq(ReportStatus.PENDING), eq("ORDER"), any(Pageable.class)))
                 .thenReturn(new PageImpl<>(List.of(r)));
         when(reportRepository.findById(REPORT_ID)).thenReturn(Optional.of(r));
+        when(userRepository.findAllById(any())).thenReturn(List.of(activeBuyer, activeSeller));
+        when(productRepository.findAllById(any())).thenReturn(List.of(product10));
+        when(auctionRepository.findByProductIdInAndStatusIn(any(), anyList()))
+                .thenReturn(List.of(Auction.builder().id(AUCTION_ID).productId(PRODUCT_ID).status(AuctionStatus.ACTIVE).bidCount(3).build()));
+        when(orderRepository.findAllById(any())).thenReturn(List.of(order9));
+
         when(userRepository.findById(BUYER_ID)).thenReturn(Optional.of(activeBuyer));
         when(userRepository.findById(SELLER_ID)).thenReturn(Optional.of(activeSeller));
         when(productRepository.findById(PRODUCT_ID)).thenReturn(Optional.of(product10));
@@ -210,6 +216,9 @@ class ReportServiceTest {
         assertThat(item.targets().product().activeAuction().bidCount()).isEqualTo(3);
         assertThat(item.targets().user().email()).isEqualTo("seller@example.com");
         assertThat(item.targets().order().auctionId()).isEqualTo(AUCTION_ID);
+        verify(userRepository, never()).findById(any());
+        verify(productRepository, never()).findById(any());
+        verify(orderRepository, never()).findById(any());
 
         AdminReportDetailResponse detail = reportService.getAdminReportById(adminUser, REPORT_ID);
         assertThat(detail.id()).isEqualTo(REPORT_ID);

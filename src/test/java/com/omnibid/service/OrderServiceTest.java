@@ -125,12 +125,15 @@ class OrderServiceTest {
     }
 
     @Test
-    @DisplayName("GET /orders: lọc theo BUYER, SELLER hoặc cả hai; role/sort sai trả 400 VALIDATION_ERROR")
+    @DisplayName("GET /orders: lọc theo BUYER, SELLER hoặc cả hai; role/sort sai trả 400 VALIDATION_ERROR; không có N+1")
     void getOrders_RoleAndSortValidation() {
         when(orderRepository.findByBuyerId(eq(2L), any(), any())).thenReturn(new PageImpl<>(List.of(sampleOrder)));
-        when(productRepository.findById(4L)).thenReturn(Optional.of(sampleProduct));
-        when(userRepository.findById(1L)).thenReturn(Optional.of(User.builder().id(1L).fullName("Seller A").build()));
-        when(userRepository.findById(2L)).thenReturn(Optional.of(User.builder().id(2L).fullName("Buyer B").build()));
+        when(productRepository.findAllById(any())).thenReturn(List.of(sampleProduct));
+        when(productImageRepository.findByProductIdInOrderByIdAsc(any())).thenReturn(List.of());
+        when(userRepository.findAllById(any())).thenReturn(List.of(
+                User.builder().id(1L).fullName("Seller A").build(),
+                User.builder().id(2L).fullName("Buyer B").build()
+        ));
 
         PageResponse<OrderSummaryResponse> buyerRes = orderService.getOrders(
                 buyerUser, "BUYER", null, PageRequest.of(0, 10, Sort.by(Sort.Direction.DESC, "createdAt"))
@@ -139,6 +142,8 @@ class OrderServiceTest {
         assertEquals("Máy ảnh Fuji X100V", buyerRes.getContent().get(0).getTitle());
         assertEquals("Buyer B", buyerRes.getContent().get(0).getBuyer().fullName());
         assertEquals("Seller A", buyerRes.getContent().get(0).getSeller().fullName());
+        verify(productRepository, never()).findById(any());
+        verify(userRepository, never()).findById(any());
 
         when(orderRepository.findBySellerId(eq(1L), any(), any())).thenReturn(new PageImpl<>(List.of(sampleOrder)));
         PageResponse<OrderSummaryResponse> sellerRes = orderService.getOrders(

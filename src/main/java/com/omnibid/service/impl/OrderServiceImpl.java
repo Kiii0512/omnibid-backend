@@ -40,9 +40,13 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -107,7 +111,52 @@ public class OrderServiceImpl implements OrderService {
             );
         }
 
-        return PageResponse.from(page, this::mapToOrderSummaryResponse);
+        List<Order> orders = page.getContent();
+        if (orders.isEmpty()) {
+            return PageResponse.from(page, o -> null);
+        }
+
+        Set<Long> productIds = orders.stream()
+                .map(Order::getProductId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        Set<Long> userIds = new HashSet<>();
+        for (Order o : orders) {
+            if (o.getBuyerId() != null) userIds.add(o.getBuyerId());
+            if (o.getSellerId() != null) userIds.add(o.getSellerId());
+        }
+
+        Map<Long, Product> products = productIds.isEmpty()
+                ? Map.of()
+                : productRepository.findAllById(productIds).stream()
+                        .collect(Collectors.toMap(Product::getId, Function.identity(), (a, b) -> a));
+        Map<Long, User> users = userIds.isEmpty()
+                ? Map.of()
+                : userRepository.findAllById(userIds).stream()
+                        .collect(Collectors.toMap(User::getId, Function.identity(), (a, b) -> a));
+        Map<Long, List<ProductImage>> imagesByProduct = productIds.isEmpty()
+                ? Map.of()
+                : productImageRepository.findByProductIdInOrderByIdAsc(productIds).stream()
+                        .collect(Collectors.groupingBy(ProductImage::getProductId));
+
+        return PageResponse.from(page, o -> {
+            Product product = products.get(o.getProductId());
+            List<ProductImage> imgs = imagesByProduct.getOrDefault(o.getProductId(), List.of());
+            return OrderSummaryResponse.builder()
+                    .id(o.getId())
+                    .auctionId(o.getAuctionId())
+                    .productId(o.getProductId())
+                    .title(product != null ? product.getTitle() : null)
+                    .primaryImageUrl(resolvePrimaryImageUrl(imgs))
+                    .finalPrice(o.getFinalPrice())
+                    .status(o.getStatus())
+                    .buyer(toUserRef(users.get(o.getBuyerId()), o.getBuyerId()))
+                    .seller(toUserRef(users.get(o.getSellerId()), o.getSellerId()))
+                    .paymentDeadline(o.getPaymentDeadline())
+                    .confirmDeadline(o.getConfirmDeadline())
+                    .createdAt(o.getCreatedAt())
+                    .build();
+        });
     }
 
     @Override
@@ -242,29 +291,22 @@ public class OrderServiceImpl implements OrderService {
         }
     }
 
-    private OrderSummaryResponse mapToOrderSummaryResponse(Order order) {
-        Product product = productRepository.findById(order.getProductId()).orElse(null);
-        String primaryImageUrl = productImageRepository.findByProductIdAndIsPrimaryTrue(order.getProductId())
+    private String resolvePrimaryImageUrl(List<ProductImage> images) {
+        if (images == null || images.isEmpty()) {
+            return null;
+        }
+        return images.stream()
+                .filter(img -> Boolean.TRUE.equals(img.getIsPrimary()))
                 .map(ProductImage::getImageUrl)
-                .orElse(null);
+                .findFirst()
+                .orElse(images.get(0).getImageUrl());
+    }
 
-        UserRef buyer = toUserRef(order.getBuyerId());
-        UserRef seller = toUserRef(order.getSellerId());
-
-        return OrderSummaryResponse.builder()
-                .id(order.getId())
-                .auctionId(order.getAuctionId())
-                .productId(order.getProductId())
-                .title(product != null ? product.getTitle() : null)
-                .primaryImageUrl(primaryImageUrl)
-                .finalPrice(order.getFinalPrice())
-                .status(order.getStatus())
-                .buyer(buyer)
-                .seller(seller)
-                .paymentDeadline(order.getPaymentDeadline())
-                .confirmDeadline(order.getConfirmDeadline())
-                .createdAt(order.getCreatedAt())
-                .build();
+    private UserRef toUserRef(User user, Long fallbackId) {
+        if (fallbackId == null) {
+            return null;
+        }
+        return new UserRef(fallbackId, user != null ? user.getFullName() : null);
     }
 
     private OrderDetailResponse mapToOrderDetailResponse(Order order, CurrentUser currentUser) {

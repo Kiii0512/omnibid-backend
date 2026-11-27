@@ -16,6 +16,7 @@ import com.omnibid.entity.Auction;
 import com.omnibid.entity.Order;
 import com.omnibid.entity.Product;
 import com.omnibid.entity.Report;
+import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.NotificationType;
 import com.omnibid.enums.ReportDecision;
@@ -40,8 +41,14 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Clock;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -123,8 +130,97 @@ public class ReportServiceImpl implements ReportService {
 
         String targetTypeStr = targetType != null ? targetType.name() : null;
         Page<Report> page = reportRepository.findAdminReports(status, targetTypeStr, effective);
+        List<Report> reports = page.getContent();
+        if (reports.isEmpty()) {
+            return PageResponse.from(page, r -> null);
+        }
 
-        return PageResponse.from(page, this::toAdminReportItem);
+        Set<Long> userIds = new HashSet<>();
+        Set<Long> productIds = new HashSet<>();
+        Set<Long> orderIds = new HashSet<>();
+        for (Report r : reports) {
+            if (r.getReporterId() != null) userIds.add(r.getReporterId());
+            if (r.getReportedUserId() != null) userIds.add(r.getReportedUserId());
+            if (r.getReportedProductId() != null) productIds.add(r.getReportedProductId());
+            if (r.getReportedOrderId() != null) orderIds.add(r.getReportedOrderId());
+        }
+
+        Map<Long, User> users = userIds.isEmpty()
+                ? Map.of()
+                : userRepository.findAllById(userIds).stream()
+                        .collect(Collectors.toMap(User::getId, Function.identity(), (a, b) -> a));
+        Map<Long, Product> products = productIds.isEmpty()
+                ? Map.of()
+                : productRepository.findAllById(productIds).stream()
+                        .collect(Collectors.toMap(Product::getId, Function.identity(), (a, b) -> a));
+        Map<Long, Auction> activeAuctionByProduct = new HashMap<>();
+        if (!productIds.isEmpty()) {
+            for (Auction auc : auctionRepository.findByProductIdInAndStatusIn(
+                    productIds, List.of(AuctionStatus.SCHEDULED, AuctionStatus.ACTIVE))) {
+                activeAuctionByProduct.putIfAbsent(auc.getProductId(), auc);
+            }
+        }
+        Map<Long, Order> orders = orderIds.isEmpty()
+                ? Map.of()
+                : orderRepository.findAllById(orderIds).stream()
+                        .collect(Collectors.toMap(Order::getId, Function.identity(), (a, b) -> a));
+
+        return PageResponse.from(page, r -> {
+            User reporter = users.get(r.getReporterId());
+            UserRef reporterRef = reporter != null ? new UserRef(reporter.getId(), reporter.getFullName()) : null;
+
+            ReportTargetSummary.ProductTarget productTarget = null;
+            if (r.getReportedProductId() != null) {
+                Product product = products.get(r.getReportedProductId());
+                if (product != null) {
+                    Auction activeAuction = activeAuctionByProduct.get(product.getId());
+                    productTarget = new ReportTargetSummary.ProductTarget(
+                            product.getId(),
+                            product.getTitle(),
+                            product.getStatus(),
+                            product.getSellerId(),
+                            activeAuction != null ? toActiveAuctionRef(activeAuction) : null
+                    );
+                }
+            }
+
+            ReportTargetSummary.UserTarget userTarget = null;
+            if (r.getReportedUserId() != null) {
+                User reportedUser = users.get(r.getReportedUserId());
+                if (reportedUser != null) {
+                    userTarget = new ReportTargetSummary.UserTarget(
+                            reportedUser.getId(),
+                            reportedUser.getFullName(),
+                            reportedUser.getEmail(),
+                            reportedUser.getRole(),
+                            reportedUser.getStatus()
+                    );
+                }
+            }
+
+            ReportTargetSummary.OrderTarget orderTarget = null;
+            if (r.getReportedOrderId() != null) {
+                Order reportedOrder = orders.get(r.getReportedOrderId());
+                if (reportedOrder != null) {
+                    orderTarget = new ReportTargetSummary.OrderTarget(
+                            reportedOrder.getId(),
+                            reportedOrder.getStatus(),
+                            reportedOrder.getBuyerId(),
+                            reportedOrder.getSellerId(),
+                            reportedOrder.getAuctionId()
+                    );
+                }
+            }
+
+            return new AdminReportItemResponse(
+                    r.getId(),
+                    reporterRef,
+                    new ReportTargetSummary(productTarget, userTarget, orderTarget),
+                    r.getReason(),
+                    r.getStatus(),
+                    r.getCreatedAt()
+            );
+        });
     }
 
     @Override
