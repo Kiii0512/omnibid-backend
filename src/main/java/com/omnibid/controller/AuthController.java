@@ -6,6 +6,7 @@ import com.omnibid.dto.auth.LoginRequest;
 import com.omnibid.dto.auth.LoginResponse;
 import com.omnibid.dto.auth.RegisterRequest;
 import com.omnibid.dto.user.UserProfileResponse;
+import com.omnibid.security.ClientIpResolver;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.CustomUserDetails;
 import com.omnibid.service.AuthService;
@@ -26,6 +27,7 @@ public class AuthController {
             "Đăng xuất thành công, mọi phiên đăng nhập của tài khoản đã kết thúc";
 
     private final AuthService authService;
+    private final ClientIpResolver clientIpResolver;
 
     @PostMapping("/register")
     @ResponseStatus(HttpStatus.CREATED)
@@ -38,7 +40,7 @@ public class AuthController {
             @Valid @RequestBody LoginRequest request,
             HttpServletRequest httpRequest
     ) {
-        return ApiResponse.ok(authService.login(request, httpRequest.getRemoteAddr()));
+        return ApiResponse.ok(authService.login(request, clientIpResolver.resolve(httpRequest)));
     }
 
     @PostMapping("/logout")

@@ -59,4 +59,30 @@ class LoginAttemptLimiterTest {
         limiter.recordFailure("user@example.com", "10.0.0.1");
         assertDoesNotThrow(() -> limiter.checkAllowed("user@example.com", "10.0.0.1"));
     }
+
+    @Test
+    void tenThousandRandomEmailsDoNotExceedMaxEntries() {
+        AppProperties boundedProps = new AppProperties();
+        boundedProps.getSecurity().getLogin().setMaxEntries(500);
+        LoginAttemptLimiter boundedLimiter = new LoginAttemptLimiter(clock, boundedProps);
+
+        for (int i = 0; i < 10_000; i++) {
+            boundedLimiter.recordFailure("random" + i + "@attacker.test", "198.51.100.1");
+        }
+
+        assertTrue(boundedLimiter.size() <= 500, "Cache size must not exceed maxEntries");
+    }
+
+    @Test
+    void expiredEntriesAreEvictedWhenClockAdvances() {
+        for (int i = 0; i < 20; i++) {
+            limiter.recordFailure("user" + i + "@example.com", "10.0.0.1");
+        }
+        assertEquals(20, limiter.size());
+
+        clock.advance(Duration.ofMinutes(16));
+        limiter.evictExpired();
+
+        assertEquals(0, limiter.size());
+    }
 }

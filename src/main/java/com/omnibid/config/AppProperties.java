@@ -70,6 +70,10 @@ public class AppProperties {
 
             @DurationUnit(ChronoUnit.MINUTES)
             private Duration blockMinutes = Duration.ofMinutes(15);
+
+            private int maxEntries = 50_000;
+
+            private String trustedProxies = "";
         }
     }
 
