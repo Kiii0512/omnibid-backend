@@ -41,11 +41,11 @@ public interface AuctionRepository extends JpaRepository<Auction, Long>, JpaSpec
 
     List<Auction> findByStatusAndEndTimeLessThanEqual(AuctionStatus status, Instant now);
 
-    @Query("SELECT a.id FROM Auction a WHERE a.status = :status AND a.startTime <= :now")
-    List<Long> findIdsByStatusAndStartTimeLessThanEqual(@Param("status") AuctionStatus status, @Param("now") Instant now);
+    @Query("SELECT a.id FROM Auction a WHERE a.status = :status AND a.startTime <= :now ORDER BY a.startTime ASC, a.id ASC")
+    List<Long> findIdsByStatusAndStartTimeLessThanEqual(@Param("status") AuctionStatus status, @Param("now") Instant now, Pageable pageable);
 
-    @Query("SELECT a.id FROM Auction a WHERE a.status = :status AND a.endTime <= :now")
-    List<Long> findIdsByStatusAndEndTimeLessThanEqual(@Param("status") AuctionStatus status, @Param("now") Instant now);
+    @Query("SELECT a.id FROM Auction a WHERE a.status = :status AND a.endTime <= :now ORDER BY a.endTime ASC, a.id ASC")
+    List<Long> findIdsByStatusAndEndTimeLessThanEqual(@Param("status") AuctionStatus status, @Param("now") Instant now, Pageable pageable);
 
     Optional<Auction> findFirstByProductIdAndStatusIn(Long productId, Collection<AuctionStatus> statuses);
 
@@ -82,7 +82,7 @@ public interface AuctionRepository extends JpaRepository<Auction, Long>, JpaSpec
           AND (:sellerId IS NULL OR a.sellerId = :sellerId)
           AND (:keyword IS NULL OR EXISTS (
               SELECT 1 FROM Product p
-              WHERE p.id = a.productId AND LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%'))
+              WHERE p.id = a.productId AND LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
           ))
     """)
     Page<Auction> findAdminAuctions(@Param("keyword") String keyword,

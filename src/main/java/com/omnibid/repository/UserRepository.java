@@ -50,7 +50,7 @@ public interface UserRepository extends JpaRepository<User, Long> {
         SELECT u FROM User u
         WHERE (:status IS NULL OR u.status = :status)
           AND (:role IS NULL OR u.role = :role)
-          AND (:keyword IS NULL OR LOWER(u.email) LIKE LOWER(CONCAT('%', :keyword, '%')) OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :keyword, '%')))
+          AND (:keyword IS NULL OR LOWER(u.email) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\' OR LOWER(u.fullName) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')
     """)
     Page<User> findAdminUsers(@Param("keyword") String keyword,
                               @Param("status") UserStatus status,

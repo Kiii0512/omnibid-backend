@@ -285,7 +285,7 @@ class OrderServiceTest {
     @DisplayName("expireOverdueOrders: quá hạn chưa có SUCCESS -> EXPIRED, product release (trừ HIDDEN), thông báo 2 bên")
     void expireOverdueOrders_SuccessAndGuards() {
         sampleOrder.setPaymentDeadline(NOW);
-        when(orderRepository.findIdsByStatusAndPaymentDeadlineLessThanEqual(OrderStatus.PENDING_PAYMENT, NOW))
+        when(orderRepository.findIdsByStatusAndPaymentDeadlineLessThanEqual(eq(OrderStatus.PENDING_PAYMENT), eq(NOW), any()))
                 .thenReturn(List.of(9L));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
         when(paymentRepository.existsByOrderIdAndStatus(9L, PaymentStatus.SUCCESS)).thenReturn(false);
@@ -317,7 +317,7 @@ class OrderServiceTest {
     void autoCompleteOrders_Success() {
         sampleOrder.setStatus(OrderStatus.SHIPPING);
         sampleOrder.setConfirmDeadline(NOW);
-        when(orderRepository.findIdsByStatusAndConfirmDeadlineLessThanEqual(OrderStatus.SHIPPING, NOW))
+        when(orderRepository.findIdsByStatusAndConfirmDeadlineLessThanEqual(eq(OrderStatus.SHIPPING), eq(NOW), any()))
                 .thenReturn(List.of(9L));
         when(orderRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(sampleOrder));
         when(productRepository.findByIdForUpdate(4L)).thenReturn(Optional.of(sampleProduct));

@@ -1,5 +1,6 @@
 package com.omnibid.repository.specification;
 
+import com.omnibid.common.SearchKeywordUtils;
 import com.omnibid.entity.Auction;
 import com.omnibid.entity.Product;
 import com.omnibid.enums.AuctionStatus;
@@ -81,10 +82,14 @@ public final class AuctionSpecification {
                     productPredicates.add(cb.notEqual(productRoot.get("status"), ProductStatus.HIDDEN));
                 }
                 if (hasKeyword) {
-                    productPredicates.add(cb.like(
-                            cb.lower(productRoot.get("title")),
-                            "%" + keyword.trim().toLowerCase() + "%"
-                    ));
+                    String escaped = SearchKeywordUtils.escapeLike(keyword);
+                    if (escaped != null) {
+                        productPredicates.add(cb.like(
+                                cb.lower(productRoot.get("title")),
+                                "%" + escaped.toLowerCase() + "%",
+                                '\\'
+                        ));
+                    }
                 }
                 if (categoryId != null) {
                     productPredicates.add(cb.equal(productRoot.get("categoryId"), categoryId));

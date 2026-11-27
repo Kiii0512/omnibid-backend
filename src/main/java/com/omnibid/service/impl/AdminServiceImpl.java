@@ -585,10 +585,7 @@ public class AdminServiceImpl implements AdminService {
     }
 
     private String normalizeKeyword(String keyword) {
-        if (keyword == null || keyword.isBlank()) {
-            return null;
-        }
-        return keyword.trim();
+        return com.omnibid.common.SearchKeywordUtils.escapeLike(keyword);
     }
 
     private String resolvePrimaryImageUrl(List<ProductImage> images) {

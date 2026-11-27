@@ -170,7 +170,7 @@ public class CategoryServiceImpl implements CategoryService {
     }
 
     private String normalizeKeyword(String keyword) {
-        return (keyword != null && !keyword.isBlank()) ? keyword.trim() : null;
+        return com.omnibid.common.SearchKeywordUtils.escapeLike(keyword);
     }
 
     private void requireAdmin(CurrentUser admin) {

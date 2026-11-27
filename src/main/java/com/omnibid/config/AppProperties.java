@@ -47,6 +47,8 @@ public class AppProperties {
     public static class Scheduler {
         @DurationUnit(ChronoUnit.SECONDS)
         private Duration intervalSeconds = Duration.ofSeconds(10);
+
+        private int batchSize = 100;
     }
 
     @Getter

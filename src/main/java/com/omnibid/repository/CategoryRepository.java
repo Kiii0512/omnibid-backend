@@ -20,8 +20,8 @@ public interface CategoryRepository extends JpaRepository<Category, Long> {
 
     @Query("""
         SELECT c FROM Category c
-        WHERE (:keyword IS NULL OR LOWER(c.name) LIKE LOWER(CONCAT('%', :keyword, '%'))
-               OR LOWER(c.slug) LIKE LOWER(CONCAT('%', :keyword, '%')))
+        WHERE (:keyword IS NULL OR LOWER(c.name) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\'
+               OR LOWER(c.slug) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')
     """)
     Page<Category> searchByKeyword(@Param("keyword") String keyword, Pageable pageable);
 }

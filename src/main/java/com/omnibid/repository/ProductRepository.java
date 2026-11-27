@@ -53,7 +53,7 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
         SELECT p FROM Product p
         WHERE p.sellerId = :sellerId
           AND (:status IS NULL OR p.status = :status)
-          AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+          AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')
     """)
     Page<Product> findMyProducts(@Param("sellerId") Long sellerId,
                                  @Param("status") ProductStatus status,
@@ -70,7 +70,7 @@ public interface ProductRepository extends JpaRepository<Product, Long> {
         SELECT p FROM Product p
         WHERE (:status IS NULL OR p.status = :status)
           AND (:categoryId IS NULL OR p.categoryId = :categoryId)
-          AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')))
+          AND (:keyword IS NULL OR LOWER(p.title) LIKE LOWER(CONCAT('%', :keyword, '%')) ESCAPE '\\')
     """)
     Page<Product> findAdminProducts(@Param("keyword") String keyword,
                                     @Param("categoryId") Long categoryId,

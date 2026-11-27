@@ -263,8 +263,9 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public void expireOverdueOrders() {
         Instant now = Instant.now(clock);
+        int batchSize = Math.max(1, appProperties.getScheduler().getBatchSize());
         List<Long> overdueOrderIds = orderRepository.findIdsByStatusAndPaymentDeadlineLessThanEqual(
-                OrderStatus.PENDING_PAYMENT, now
+                OrderStatus.PENDING_PAYMENT, now, org.springframework.data.domain.PageRequest.of(0, batchSize)
         );
 
         for (Long orderId : overdueOrderIds) {
@@ -279,8 +280,9 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public void autoCompleteOrders() {
         Instant now = Instant.now(clock);
+        int batchSize = Math.max(1, appProperties.getScheduler().getBatchSize());
         List<Long> overdueOrderIds = orderRepository.findIdsByStatusAndConfirmDeadlineLessThanEqual(
-                OrderStatus.SHIPPING, now
+                OrderStatus.SHIPPING, now, org.springframework.data.domain.PageRequest.of(0, batchSize)
         );
         for (Long orderId : overdueOrderIds) {
             try {

@@ -267,7 +267,9 @@ public class AuctionServiceImpl implements AuctionService {
     @Override
     public void startScheduledAuctions() {
         Instant now = Instant.now(clock);
-        List<Long> scheduledIds = auctionRepository.findIdsByStatusAndStartTimeLessThanEqual(AuctionStatus.SCHEDULED, now);
+        int batchSize = Math.max(1, appProperties.getScheduler().getBatchSize());
+        List<Long> scheduledIds = auctionRepository.findIdsByStatusAndStartTimeLessThanEqual(
+                AuctionStatus.SCHEDULED, now, org.springframework.data.domain.PageRequest.of(0, batchSize));
 
         for (Long id : scheduledIds) {
             try {
@@ -281,7 +283,9 @@ public class AuctionServiceImpl implements AuctionService {
     @Override
     public void closeEndedAuctions() {
         Instant now = Instant.now(clock);
-        List<Long> activeIds = auctionRepository.findIdsByStatusAndEndTimeLessThanEqual(AuctionStatus.ACTIVE, now);
+        int batchSize = Math.max(1, appProperties.getScheduler().getBatchSize());
+        List<Long> activeIds = auctionRepository.findIdsByStatusAndEndTimeLessThanEqual(
+                AuctionStatus.ACTIVE, now, org.springframework.data.domain.PageRequest.of(0, batchSize));
 
         for (Long id : activeIds) {
             try {

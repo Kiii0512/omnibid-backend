@@ -125,7 +125,7 @@ public class ProductServiceImpl implements ProductService {
             Pageable pageable
     ) {
         SortWhitelist.validate(pageable, MY_PRODUCT_SORT_FIELDS);
-        String normalizedKeyword = (keyword != null && !keyword.isBlank()) ? keyword.trim() : null;
+        String normalizedKeyword = com.omnibid.common.SearchKeywordUtils.escapeLike(keyword);
 
         Page<Product> page = productRepository.findMyProducts(sellerId, status, normalizedKeyword, pageable);
         List<Product> products = page.getContent();
