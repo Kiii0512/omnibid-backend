@@ -77,7 +77,7 @@ public class ProductServiceImpl implements ProductService {
         }
 
         // Bước 2: upload lên Cloudinary ngoài transaction
-        String folder = normalizeBaseFolder() + "/products/tmp";
+        String folder = normalizeBaseFolder() + "/products";
         List<StoredImage> uploaded = uploadAllWithCompensation(validatedImages, folder);
 
         // Bước 3: lưu DB trong transaction ngắn; Bước 4: lỗi thì bù trừ xóa asset vừa upload

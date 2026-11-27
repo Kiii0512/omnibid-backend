@@ -3,11 +3,9 @@ package com.omnibid.service;
 import com.omnibid.common.AfterCommitExecutor;
 import com.omnibid.dto.bid.BidHistoryItem;
 import com.omnibid.dto.websocket.AuctionEvent;
-import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionEventType;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.ReserveStatus;
-import com.omnibid.repository.UserRepository;
 import com.omnibid.service.impl.WebSocketPublisherImpl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -20,7 +18,6 @@ import org.springframework.messaging.simp.SimpMessagingTemplate;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.eq;
@@ -32,14 +29,11 @@ class WebSocketPublisherTest {
     @Mock
     private SimpMessagingTemplate messagingTemplate;
 
-    @Mock
-    private UserRepository userRepository;
-
     private WebSocketPublisherImpl webSocketPublisher;
 
     @BeforeEach
     void setUp() {
-        webSocketPublisher = new WebSocketPublisherImpl(messagingTemplate, userRepository, new AfterCommitExecutor());
+        webSocketPublisher = new WebSocketPublisherImpl(messagingTemplate, new AfterCommitExecutor());
     }
 
     @Test
@@ -101,21 +95,5 @@ class WebSocketPublisherTest {
         AuctionEvent sent = (AuctionEvent) captor.getValue();
         assertEquals(AuctionEventType.AUCTION_UPDATED, sent.type());
         assertNull(sent.bid());
-    }
-
-    @Test
-    @DisplayName("publishToUser(userId) tìm user và gửi tin nhắn tới /queue/notifications của email")
-    void publishToUser_ByUserId_SendsToUserQueue() {
-        User user = User.builder()
-                .id(2L)
-                .email("test@example.com")
-                .build();
-
-        when(userRepository.findById(2L)).thenReturn(Optional.of(user));
-
-        String payload = "test payload";
-        webSocketPublisher.publishToUser(2L, payload);
-
-        verify(messagingTemplate).convertAndSendToUser("test@example.com", "/queue/notifications", payload);
     }
 }
