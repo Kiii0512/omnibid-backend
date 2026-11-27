@@ -36,6 +36,8 @@ public interface ReportRepository extends JpaRepository<Report, Long> {
 
     boolean existsByReporterIdAndReportedProductIdAndStatus(Long reporterId, Long reportedProductId, ReportStatus status);
 
+    boolean existsByReportedProductId(Long reportedProductId);
+
     @Query("""
         SELECT r FROM Report r
         WHERE (:status IS NULL OR r.status = :status)

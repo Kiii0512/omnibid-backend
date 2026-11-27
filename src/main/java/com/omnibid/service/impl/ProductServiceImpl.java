@@ -22,6 +22,7 @@ import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.CategoryRepository;
 import com.omnibid.repository.ProductImageRepository;
 import com.omnibid.repository.ProductRepository;
+import com.omnibid.repository.ReportRepository;
 import com.omnibid.service.ImageStorageService;
 import com.omnibid.service.ProductService;
 import lombok.RequiredArgsConstructor;
@@ -56,6 +57,7 @@ public class ProductServiceImpl implements ProductService {
     private final ProductImageRepository productImageRepository;
     private final CategoryRepository categoryRepository;
     private final AuctionRepository auctionRepository;
+    private final ReportRepository reportRepository;
     private final ImageValidator imageValidator;
     private final ImageStorageService imageStorageService;
     private final AfterCommitExecutor afterCommitExecutor;
@@ -221,8 +223,19 @@ public class ProductServiceImpl implements ProductService {
     public void deleteProduct(Long sellerId, Long id) {
         Product product = getOwnedProductForUpdate(sellerId, id);
 
+        if (!product.isEditable()) {
+            throw new BusinessException(
+                    ErrorCode.INVALID_STATUS_TRANSITION,
+                    "Chỉ được xóa sản phẩm khi ở trạng thái AVAILABLE"
+            );
+        }
+
         if (auctionRepository.existsByProductId(id)) {
             throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Không thể xóa sản phẩm đã từng lên phiên đấu giá");
+        }
+
+        if (reportRepository.existsByReportedProductId(id)) {
+            throw new BusinessException(ErrorCode.INVALID_STATUS_TRANSITION, "Không thể xóa sản phẩm có báo cáo vi phạm liên quan");
         }
 
         List<String> publicIds = productImageRepository.findByProductId(id).stream()

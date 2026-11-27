@@ -17,6 +17,7 @@ import com.omnibid.repository.AuctionRepository;
 import com.omnibid.repository.CategoryRepository;
 import com.omnibid.repository.ProductImageRepository;
 import com.omnibid.repository.ProductRepository;
+import com.omnibid.repository.ReportRepository;
 import com.omnibid.service.impl.ProductServiceImpl;
 import com.omnibid.support.FakeImageStorageService;
 import com.omnibid.test.DirectTransactionTemplate;
@@ -55,6 +56,8 @@ class ProductServiceTest {
     private CategoryRepository categoryRepository;
     @Mock
     private AuctionRepository auctionRepository;
+    @Mock
+    private ReportRepository reportRepository;
 
     private FakeImageStorageService fakeStorage;
     private ProductServiceImpl productService;
@@ -72,6 +75,7 @@ class ProductServiceTest {
                 productImageRepository,
                 categoryRepository,
                 auctionRepository,
+                reportRepository,
                 imageValidator,
                 fakeStorage,
                 afterCommitExecutor,
@@ -230,6 +234,36 @@ class ProductServiceTest {
         assertThat(updated.images()).hasSize(2);
         assertThat(updated.images().get(1).id()).isEqualTo(202L);
         assertThat(updated.images().get(1).isPrimary()).isFalse();
+    }
+
+    @Test
+    @DisplayName("deleteProduct: sản phẩm HIDDEN không được phép xóa cứng và không xóa ảnh (MED-02)")
+    void deleteProduct_HiddenProduct_ThrowsInvalidStatusAndKeepsImages() {
+        product.setStatus(ProductStatus.HIDDEN);
+        when(productRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(product));
+
+        assertThatThrownBy(() -> productService.deleteProduct(2L, 9L))
+                .isInstanceOf(BusinessException.class)
+                .matches(e -> ((BusinessException) e).getCode() == ErrorCode.INVALID_STATUS_TRANSITION);
+
+        verify(productRepository, never()).delete(any());
+        verify(productImageRepository, never()).deleteByProductId(any());
+        assertThat(fakeStorage.deleteCount()).isZero();
+    }
+
+    @Test
+    @DisplayName("deleteProduct: sản phẩm có báo cáo vi phạm không được xóa cứng (MED-02)")
+    void deleteProduct_WithExistingReport_ThrowsInvalidStatus() {
+        when(productRepository.findByIdForUpdate(9L)).thenReturn(Optional.of(product));
+        when(auctionRepository.existsByProductId(9L)).thenReturn(false);
+        when(reportRepository.existsByReportedProductId(9L)).thenReturn(true);
+
+        assertThatThrownBy(() -> productService.deleteProduct(2L, 9L))
+                .isInstanceOf(BusinessException.class)
+                .matches(e -> ((BusinessException) e).getCode() == ErrorCode.INVALID_STATUS_TRANSITION);
+
+        verify(productRepository, never()).delete(any());
+        assertThat(fakeStorage.deleteCount()).isZero();
     }
 
     private MockMultipartFile pngFile(String name) {
