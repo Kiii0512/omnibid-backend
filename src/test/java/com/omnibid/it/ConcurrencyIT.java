@@ -5,11 +5,14 @@ import com.omnibid.entity.Product;
 import com.omnibid.entity.User;
 import com.omnibid.enums.AuctionStatus;
 import com.omnibid.enums.ProductStatus;
+import com.omnibid.security.JwtTokenProvider;
 import com.omnibid.support.BaseIT;
 import com.omnibid.support.Concurrently;
 import com.omnibid.support.RepeatedConcurrencyTest;
+import com.omnibid.support.Seed;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 
 import java.math.BigDecimal;
@@ -22,6 +25,9 @@ import java.util.Map;
 import static org.assertj.core.api.Assertions.assertThat;
 
 public class ConcurrencyIT extends BaseIT {
+
+    @Autowired
+    private JwtTokenProvider jwtTokenProvider;
 
     @RepeatedConcurrencyTest
     @DisplayName("INT-CON-01 Hai người đặt cùng mức: 1 thành công, 1 lỗi BID_TOO_LOW kèm minNextBid")
@@ -130,5 +136,65 @@ public class ConcurrencyIT extends BaseIT {
                 "SELECT COUNT(*) FROM orders WHERE auction_id = ?", Long.class, auction.getId()
         );
         assertThat(orderCount).isEqualTo(1L);
+    }
+
+    @RepeatedConcurrencyTest
+    @DisplayName("INT-CON-05 HIGH-04: updateProfile đồng thời với logout không ghi đè mất token_version")
+    void testConcurrentUpdateProfileAndLogoutPreservesTokenVersion() throws Exception {
+        String tokenBefore = jwtTokenProvider.generateToken(buyer.getId(), buyer.getRole(), buyer.getTokenVersion());
+
+        Concurrently.runIndexed(2, index -> {
+            if (index == 0) {
+                return api.asToken(tokenBefore).patch("/users/me", Map.of("fullName", "Updated Buyer Name"));
+            }
+            return api.asToken(tokenBefore).post("/auth/logout", null);
+        });
+
+        Integer tokenVersion = jdbcTemplate.queryForObject(
+                "SELECT token_version FROM users WHERE id = ?", Integer.class, buyer.getId()
+        );
+        assertThat(tokenVersion).isGreaterThanOrEqualTo(1);
+        assertThat(api.asToken(tokenBefore).get("/users/me").getStatusCode().value()).isEqualTo(401);
+    }
+
+    @RepeatedConcurrencyTest
+    @DisplayName("INT-CON-06 HIGH-04: updateProfile đồng thời với changePassword không ghi đè mất token_version")
+    void testConcurrentUpdateProfileAndChangePasswordPreservesTokenVersion() throws Exception {
+        String tokenBefore = jwtTokenProvider.generateToken(buyer.getId(), buyer.getRole(), buyer.getTokenVersion());
+
+        Concurrently.runIndexed(2, index -> {
+            if (index == 0) {
+                return api.asToken(tokenBefore).patch("/users/me", Map.of("fullName", "Buyer Concurrent"));
+            }
+            return api.asToken(tokenBefore).patch("/users/me/password", Map.of(
+                    "currentPassword", Seed.DEFAULT_PASSWORD,
+                    "newPassword", "NewStrongPass99",
+                    "confirmPassword", "NewStrongPass99"
+            ));
+        });
+
+        Integer tokenVersion = jdbcTemplate.queryForObject(
+                "SELECT token_version FROM users WHERE id = ?", Integer.class, buyer.getId()
+        );
+        assertThat(tokenVersion).isGreaterThanOrEqualTo(1);
+        assertThat(api.asToken(tokenBefore).get("/users/me").getStatusCode().value()).isEqualTo(401);
+    }
+
+    @RepeatedConcurrencyTest
+    @DisplayName("INT-CON-07 HIGH-04: updateProfile đồng thời với admin banUser không làm user quay lại ACTIVE")
+    void testConcurrentUpdateProfileAndAdminBanPreservesBannedStatus() throws Exception {
+        String buyerToken = jwtTokenProvider.generateToken(buyer.getId(), buyer.getRole(), buyer.getTokenVersion());
+
+        Concurrently.runIndexed(2, index -> {
+            if (index == 0) {
+                return api.asToken(buyerToken).patch("/users/me", Map.of("fullName", "Buyer Before Ban"));
+            }
+            return api.as(admin).post("/admin/users/" + buyer.getId() + "/ban", Map.of("reason", "Vi phạm"));
+        });
+
+        String status = jdbcTemplate.queryForObject(
+                "SELECT status FROM users WHERE id = ?", String.class, buyer.getId()
+        );
+        assertThat(status).isEqualTo("BANNED");
     }
 }

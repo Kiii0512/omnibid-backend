@@ -165,12 +165,20 @@ class AuthServiceTest {
     }
 
     @Test
-    void logout_IncreasesTokenVersion() {
-        when(userRepository.findById(1L)).thenReturn(Optional.of(sampleUser));
+    void logout_IncreasesTokenVersionAtomically() {
+        when(userRepository.incrementTokenVersion(1L)).thenReturn(1);
 
         authService.logout(1L);
 
-        assertEquals(1, sampleUser.getTokenVersion());
-        verify(userRepository).save(sampleUser);
+        verify(userRepository).incrementTokenVersion(1L);
+        verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void logout_UserNotFound_ThrowsNotFound() {
+        when(userRepository.incrementTokenVersion(999L)).thenReturn(0);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> authService.logout(999L));
+        assertEquals(ErrorCode.NOT_FOUND, ex.getCode());
     }
 }

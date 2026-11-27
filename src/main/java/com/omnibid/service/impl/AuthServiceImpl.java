@@ -122,9 +122,9 @@ public class AuthServiceImpl implements AuthService {
     @Override
     @Transactional
     public void logout(Long userId) {
-        User user = userRepository.findById(userId)
-                .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy người dùng"));
-        user.increaseTokenVersion();
-        userRepository.save(user);
+        int updated = userRepository.incrementTokenVersion(userId);
+        if (updated == 0) {
+            throw new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy người dùng");
+        }
     }
 }

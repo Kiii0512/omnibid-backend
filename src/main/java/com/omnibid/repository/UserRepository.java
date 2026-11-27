@@ -21,9 +21,30 @@ public interface UserRepository extends JpaRepository<User, Long> {
 
     boolean existsByEmail(String email);
 
-    @Modifying(flushAutomatically = true)
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
     @Query("UPDATE User u SET u.status = :status WHERE u.id = :id")
     int updateStatus(@Param("id") Long id, @Param("status") UserStatus status);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE User u SET u.tokenVersion = u.tokenVersion + 1 WHERE u.id = :id")
+    int incrementTokenVersion(@Param("id") Long id);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE User u SET u.passwordHash = :passwordHash, u.tokenVersion = u.tokenVersion + 1 WHERE u.id = :id")
+    int updatePasswordAndIncrementTokenVersion(@Param("id") Long id, @Param("passwordHash") String passwordHash);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE User u SET u.fullName = :fullName, u.phoneNumber = :phoneNumber, u.address = :address WHERE u.id = :id")
+    int updateProfileFields(@Param("id") Long id,
+                            @Param("fullName") String fullName,
+                            @Param("phoneNumber") String phoneNumber,
+                            @Param("address") String address);
+
+    @Modifying(flushAutomatically = true, clearAutomatically = true)
+    @Query("UPDATE User u SET u.avatarUrl = :avatarUrl, u.avatarPublicId = :avatarPublicId WHERE u.id = :id")
+    int updateAvatarFields(@Param("id") Long id,
+                           @Param("avatarUrl") String avatarUrl,
+                           @Param("avatarPublicId") String avatarPublicId);
 
     @Query("""
         SELECT u FROM User u

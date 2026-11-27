@@ -51,18 +51,29 @@ public class UserServiceImpl implements UserService {
     public UserProfileResponse updateProfile(Long userId, UpdateProfileRequest request) {
         User user = getUser(userId);
 
-        if (request.fullName() != null && !request.fullName().isBlank()) {
-            user.setFullName(request.fullName().trim());
-        }
-        if (request.phoneNumber() != null) {
-            user.setPhoneNumber(request.phoneNumber().isBlank() ? null : request.phoneNumber().trim());
-        }
-        if (request.address() != null) {
-            user.setAddress(request.address().isBlank() ? null : request.address().trim());
-        }
+        String newFullName = (request.fullName() != null && !request.fullName().isBlank())
+                ? request.fullName().trim()
+                : user.getFullName();
+        String newPhoneNumber = request.phoneNumber() != null
+                ? (request.phoneNumber().isBlank() ? null : request.phoneNumber().trim())
+                : user.getPhoneNumber();
+        String newAddress = request.address() != null
+                ? (request.address().isBlank() ? null : request.address().trim())
+                : user.getAddress();
 
-        User updated = userRepository.save(user);
-        return mapToProfile(updated);
+        userRepository.updateProfileFields(userId, newFullName, newPhoneNumber, newAddress);
+
+        return new UserProfileResponse(
+                user.getId(),
+                newFullName,
+                user.getEmail(),
+                newPhoneNumber,
+                user.getAvatarUrl(),
+                newAddress,
+                user.getRole(),
+                user.getStatus(),
+                user.getCreatedAt()
+        );
     }
 
     @Override
@@ -75,9 +86,7 @@ public class UserServiceImpl implements UserService {
             return transactionTemplate.execute(status -> {
                 User user = getUser(userId);
                 String oldPublicId = user.getAvatarPublicId();
-                user.setAvatarUrl(uploaded.url());
-                user.setAvatarPublicId(uploaded.publicId());
-                userRepository.save(user);
+                userRepository.updateAvatarFields(userId, uploaded.url(), uploaded.publicId());
 
                 if (oldPublicId != null && !oldPublicId.isBlank() && !oldPublicId.equals(uploaded.publicId())) {
                     afterCommitExecutor.runAfterCommit(() -> imageStorageService.delete(oldPublicId));
@@ -119,9 +128,7 @@ public class UserServiceImpl implements UserService {
             );
         }
 
-        user.setPasswordHash(passwordEncoder.encode(request.newPassword()));
-        user.increaseTokenVersion();
-        userRepository.save(user);
+        userRepository.updatePasswordAndIncrementTokenVersion(userId, passwordEncoder.encode(request.newPassword()));
     }
 
     private String normalizeBaseFolder() {
