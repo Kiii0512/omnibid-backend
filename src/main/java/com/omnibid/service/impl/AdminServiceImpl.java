@@ -285,12 +285,11 @@ public class AdminServiceImpl implements AdminService {
         requireAdmin(admin);
 
         // Lock order: auctions -> orders -> products (BUSINESS_RULES §5.8)
-        List<Long> openAuctionIds = auctionRepository.findIdsByProductIdAndStatusInOrderByIdAsc(productId, OPEN_AUCTION_STATUSES);
-        List<Long> pendingOrderIds = orderRepository.findIdsByProductIdAndStatusInOrderByIdAsc(productId, List.of(OrderStatus.PENDING_PAYMENT));
-
         Instant now = Instant.now(clock);
         String hideReason = "Sản phẩm bị ẩn";
 
+        // Round 1: Lock and cancel open auctions first
+        List<Long> openAuctionIds = auctionRepository.findIdsByProductIdAndStatusInOrderByIdAsc(productId, OPEN_AUCTION_STATUSES);
         List<Auction> cancelledAuctions = new ArrayList<>();
         if (!openAuctionIds.isEmpty()) {
             for (Auction auc : auctionRepository.findAllByIdInForUpdateOrderByIdAsc(openAuctionIds)) {
@@ -301,8 +300,11 @@ public class AdminServiceImpl implements AdminService {
                     cancelledAuctions.add(auc);
                 }
             }
+            auctionRepository.flush();
         }
 
+        // Round 2: Query pending orders AFTER open auctions are locked/cancelled (prevents missing newly closed auction orders)
+        List<Long> pendingOrderIds = orderRepository.findIdsByProductIdAndStatusInOrderByIdAsc(productId, List.of(OrderStatus.PENDING_PAYMENT));
         List<Order> cancelledOrders = new ArrayList<>();
         if (!pendingOrderIds.isEmpty()) {
             for (Order ord : orderRepository.findAllByIdInForUpdateOrderByIdAsc(pendingOrderIds)) {
@@ -312,10 +314,22 @@ public class AdminServiceImpl implements AdminService {
                     cancelledOrders.add(ord);
                 }
             }
+            orderRepository.flush();
         }
 
+        // Round 3: Lock product and verify no concurrent auction/order was created before locking product (TOCTOU guard)
         Product product = productRepository.findByIdForUpdate(productId)
                 .orElseThrow(() -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy sản phẩm"));
+
+        boolean hasConcurrentOpenAuction = auctionRepository.existsByProductIdAndStatusIn(productId, OPEN_AUCTION_STATUSES);
+        boolean hasConcurrentPendingOrder = orderRepository.existsByProductIdAndStatusIn(productId, List.of(OrderStatus.PENDING_PAYMENT));
+        if (hasConcurrentOpenAuction || hasConcurrentPendingOrder) {
+            throw new BusinessException(
+                    ErrorCode.CONFLICT,
+                    "Trạng thái phiên đấu giá hoặc đơn hàng vừa thay đổi đồng thời, vui lòng thử lại"
+            );
+        }
+
         product.hide();
         productRepository.save(product);
 

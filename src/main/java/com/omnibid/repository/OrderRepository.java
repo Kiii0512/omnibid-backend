@@ -42,6 +42,8 @@ public interface OrderRepository extends JpaRepository<Order, Long> {
 
     List<Order> findByProductIdAndStatusIn(Long productId, Collection<OrderStatus> statuses);
 
+    boolean existsByProductIdAndStatusIn(Long productId, Collection<OrderStatus> statuses);
+
     @Query("SELECT o FROM Order o WHERE o.status = com.omnibid.enums.OrderStatus.PENDING_PAYMENT AND (o.buyerId = :userId OR o.sellerId = :userId) ORDER BY o.id ASC")
     List<Order> findUnpaidOrdersByUser(@Param("userId") Long userId);
 

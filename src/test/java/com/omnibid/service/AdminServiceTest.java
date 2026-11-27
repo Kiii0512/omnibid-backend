@@ -289,6 +289,22 @@ class AdminServiceTest {
     }
 
     @Test
+    @DisplayName("hideProduct: throws CONFLICT when concurrent open auction or pending order appears after locking product (HIGH-01)")
+    void hideProduct_ConcurrentOpenAuctionOrPendingOrder_ThrowsConflict() {
+        when(auctionRepository.findIdsByProductIdAndStatusInOrderByIdAsc(eq(PRODUCT_ID), anyList())).thenReturn(List.of());
+        when(orderRepository.findIdsByProductIdAndStatusInOrderByIdAsc(eq(PRODUCT_ID), anyList())).thenReturn(List.of());
+        when(productRepository.findByIdForUpdate(PRODUCT_ID)).thenReturn(Optional.of(product));
+        when(auctionRepository.existsByProductIdAndStatusIn(eq(PRODUCT_ID), anyList())).thenReturn(true);
+
+        assertThatThrownBy(() -> adminService.hideProduct(adminUser, PRODUCT_ID, "Vi pham"))
+                .isInstanceOf(BusinessException.class)
+                .extracting(e -> ((BusinessException) e).getCode())
+                .isEqualTo(ErrorCode.CONFLICT);
+        assertThat(product.getStatus()).isNotEqualTo(ProductStatus.HIDDEN);
+        verify(productRepository, never()).save(any());
+    }
+
+    @Test
     @DisplayName("cancelAuction: cancels active auction with bids, releases product, notifies seller & leader")
     void cancelAuction_Success() {
         when(auctionRepository.findByIdForUpdate(AUCTION_ID)).thenReturn(Optional.of(auction));

@@ -197,4 +197,74 @@ public class ConcurrencyIT extends BaseIT {
         );
         assertThat(status).isEqualTo("BANNED");
     }
+
+    @RepeatedConcurrencyTest
+    @DisplayName("INT-CON-08 HIGH-01: hideProduct đồng thời với createAuction không vi phạm bất biến BR-18")
+    void testConcurrentHideProductAndCreateAuction() throws Exception {
+        Product product = seed.createProduct(seller, category, "Concurrent Hide Watch", ProductStatus.AVAILABLE);
+        Instant start = mutableClock.instant().plus(1, ChronoUnit.HOURS);
+        Instant end = start.plus(2, ChronoUnit.HOURS);
+
+        Map<String, Object> createBody = Map.of(
+                "productId", product.getId(),
+                "startPrice", 500000,
+                "bidIncrement", 10000,
+                "startTime", start.toString(),
+                "endTime", end.toString()
+        );
+
+        Concurrently.runIndexed(2, index -> {
+            if (index == 0) {
+                return api.as(seller).post("/auctions", createBody);
+            }
+            return api.as(admin).post("/admin/products/" + product.getId() + "/hide", Map.of("reason", "Vi phạm"));
+        });
+
+        String productStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM products WHERE id = ?", String.class, product.getId()
+        );
+        Long openAuctions = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM auctions WHERE product_id = ? AND status IN ('SCHEDULED', 'ACTIVE')",
+                Long.class, product.getId()
+        );
+        if ("HIDDEN".equals(productStatus)) {
+            assertThat(openAuctions).isZero();
+        }
+    }
+
+    @RepeatedConcurrencyTest
+    @DisplayName("INT-CON-09 HIGH-01: hideProduct đồng thời với AuctionCloser không để lại đơn PENDING_PAYMENT trên sản phẩm HIDDEN")
+    void testConcurrentHideProductAndAuctionCloser() throws Exception {
+        Instant now = mutableClock.instant();
+        Product product = seed.createProduct(seller, category, "Concurrent Close Item", ProductStatus.IN_AUCTION);
+        Auction auction = seed.createAuction(seller, product, new BigDecimal("500000"), new BigDecimal("10000"),
+                now.minus(20, ChronoUnit.MINUTES), now.plus(5, ChronoUnit.MINUTES), AuctionStatus.ACTIVE);
+
+        api.as(buyer).post("/auctions/" + auction.getId() + "/bids", Map.of("amount", 510000));
+        mutableClock.advance(Duration.ofMinutes(10));
+
+        Concurrently.runIndexed(2, index -> {
+            if (index == 0) {
+                auctionScheduler.scheduleAuctionStatusTransitions();
+                return null;
+            }
+            return api.as(admin).post("/admin/products/" + product.getId() + "/hide", Map.of("reason", "Vi phạm"));
+        });
+
+        String productStatus = jdbcTemplate.queryForObject(
+                "SELECT status FROM products WHERE id = ?", String.class, product.getId()
+        );
+        Long openAuctions = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM auctions WHERE product_id = ? AND status IN ('SCHEDULED', 'ACTIVE')",
+                Long.class, product.getId()
+        );
+        Long pendingOrders = jdbcTemplate.queryForObject(
+                "SELECT COUNT(*) FROM orders WHERE product_id = ? AND status = 'PENDING_PAYMENT'",
+                Long.class, product.getId()
+        );
+        if ("HIDDEN".equals(productStatus)) {
+            assertThat(openAuctions).isZero();
+            assertThat(pendingOrders).isZero();
+        }
+    }
 }

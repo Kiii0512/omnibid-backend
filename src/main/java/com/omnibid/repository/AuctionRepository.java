@@ -62,6 +62,8 @@ public interface AuctionRepository extends JpaRepository<Auction, Long>, JpaSpec
 
     boolean existsByProductId(Long productId);
 
+    boolean existsByProductIdAndStatusIn(Long productId, Collection<AuctionStatus> statuses);
+
     Page<Auction> findBySellerId(Long sellerId, Pageable pageable);
 
     Page<Auction> findBySellerIdAndStatus(Long sellerId, AuctionStatus status, Pageable pageable);
