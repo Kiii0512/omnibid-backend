@@ -148,6 +148,22 @@ class AuthServiceTest {
     }
 
     @Test
+    void login_NonExistentEmail_StillRunsPasswordMatchesAndThrowsUnauthorized() {
+        LoginRequest request = LoginRequest.builder()
+                .email("unknown@example.com")
+                .password("SomePass123")
+                .build();
+
+        when(userRepository.findByEmail("unknown@example.com")).thenReturn(Optional.empty());
+        when(passwordEncoder.matches(eq("SomePass123"), anyString())).thenReturn(false);
+
+        BusinessException ex = assertThrows(BusinessException.class, () -> authService.login(request, "127.0.0.1"));
+        assertEquals(ErrorCode.UNAUTHORIZED, ex.getCode());
+        verify(passwordEncoder).matches(eq("SomePass123"), anyString());
+        verify(loginAttemptLimiter).recordFailure("unknown@example.com", "127.0.0.1");
+    }
+
+    @Test
     void login_BannedUser_ThrowsAccountBanned() {
         sampleUser.setStatus(UserStatus.BANNED);
 

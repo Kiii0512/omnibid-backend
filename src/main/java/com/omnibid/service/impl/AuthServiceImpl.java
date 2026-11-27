@@ -27,6 +27,8 @@ import java.util.Map;
 public class AuthServiceImpl implements AuthService {
 
     private static final String INVALID_CREDENTIALS_MESSAGE = "Email hoặc mật khẩu không đúng";
+    // Pre-computed BCrypt (cost 10) hash used when email does not exist to equalize login response timing (LOW-01)
+    private static final String DUMMY_PASSWORD_HASH = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy";
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
@@ -83,7 +85,9 @@ public class AuthServiceImpl implements AuthService {
         loginAttemptLimiter.checkAllowed(normalizedEmail, clientIp);
 
         User user = userRepository.findByEmail(normalizedEmail).orElse(null);
-        if (user == null || !passwordEncoder.matches(request.getPassword(), user.getPasswordHash())) {
+        String candidateHash = user != null ? user.getPasswordHash() : DUMMY_PASSWORD_HASH;
+        boolean passwordMatches = passwordEncoder.matches(request.getPassword(), candidateHash);
+        if (user == null || !passwordMatches) {
             loginAttemptLimiter.recordFailure(normalizedEmail, clientIp);
             throw new BusinessException(ErrorCode.UNAUTHORIZED, INVALID_CREDENTIALS_MESSAGE);
         }
