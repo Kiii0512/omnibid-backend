@@ -23,13 +23,16 @@ import com.omnibid.security.CurrentUser;
 import com.omnibid.security.OrderAccessPolicy;
 import com.omnibid.service.NotificationService;
 import com.omnibid.service.PaymentService;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Clock;
 import java.time.Instant;
@@ -40,7 +43,6 @@ import java.util.regex.Pattern;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class PaymentServiceImpl implements PaymentService {
 
     private static final Pattern UUID_PATTERN = Pattern.compile(
@@ -57,12 +59,85 @@ public class PaymentServiceImpl implements PaymentService {
     private final MockPaymentGateway gateway;
     private final NotificationService notificationService;
     private final Clock clock;
+    private final TransactionTemplate writeTxTemplate;
+    private final TransactionTemplate recoveryTxTemplate;
+
+    @Autowired
+    public PaymentServiceImpl(
+            OrderRepository orderRepository,
+            PaymentRepository paymentRepository,
+            OrderAccessPolicy orderAccessPolicy,
+            MockPaymentGateway gateway,
+            NotificationService notificationService,
+            Clock clock,
+            PlatformTransactionManager transactionManager
+    ) {
+        this.orderRepository = orderRepository;
+        this.paymentRepository = paymentRepository;
+        this.orderAccessPolicy = orderAccessPolicy;
+        this.gateway = gateway;
+        this.notificationService = notificationService;
+        this.clock = clock;
+
+        this.writeTxTemplate = new TransactionTemplate(transactionManager);
+
+        TransactionTemplate readRecovery = new TransactionTemplate(transactionManager);
+        readRecovery.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        readRecovery.setReadOnly(true);
+        this.recoveryTxTemplate = readRecovery;
+    }
+
+    public PaymentServiceImpl(
+            OrderRepository orderRepository,
+            PaymentRepository paymentRepository,
+            OrderAccessPolicy orderAccessPolicy,
+            MockPaymentGateway gateway,
+            NotificationService notificationService,
+            Clock clock,
+            TransactionTemplate transactionTemplate
+    ) {
+        this.orderRepository = orderRepository;
+        this.paymentRepository = paymentRepository;
+        this.orderAccessPolicy = orderAccessPolicy;
+        this.gateway = gateway;
+        this.notificationService = notificationService;
+        this.clock = clock;
+        this.writeTxTemplate = transactionTemplate;
+        this.recoveryTxTemplate = transactionTemplate;
+    }
 
     @Override
-    @Transactional
     public PaymentResultResponse pay(CurrentUser currentUser, Long orderId, String idempotencyKey, PaymentRequest request) {
         String normalizedKey = validateIdempotencyKey(idempotencyKey);
 
+        try {
+            return writeTxTemplate.execute(status -> doPayInTransaction(currentUser, orderId, normalizedKey, request));
+        } catch (DataIntegrityViolationException dive) {
+            // The write transaction has rolled back cleanly; perform idempotency recheck in a fresh read-only transaction
+            // so we never touch a corrupted Hibernate session or trigger UnexpectedRollbackException.
+            log.warn("Data integrity violation when inserting payment for orderId={}: {}", orderId, dive.getMessage());
+            Optional<PaymentResultResponse> recovered = recoveryTxTemplate.execute(status ->
+                    paymentRepository.findByOrderIdAndIdempotencyKey(orderId, normalizedKey)
+                            .map(existing -> {
+                                OrderStatus latestStatus = orderRepository.findById(orderId)
+                                        .map(Order::getStatus)
+                                        .orElse(OrderStatus.PENDING_PAYMENT);
+                                return toResult(existing, latestStatus);
+                            })
+            );
+            if (recovered != null && recovered.isPresent()) {
+                return recovered.get();
+            }
+            throw new BusinessException(ErrorCode.CONFLICT, "Xung đột giao dịch thanh toán");
+        }
+    }
+
+    private PaymentResultResponse doPayInTransaction(
+            CurrentUser currentUser,
+            Long orderId,
+            String normalizedKey,
+            PaymentRequest request
+    ) {
         Order order = orderRepository.findByIdForUpdate(orderId).orElseThrow(
                 () -> new BusinessException(ErrorCode.NOT_FOUND, "Không tìm thấy đơn hàng")
         );
@@ -104,6 +179,8 @@ public class PaymentServiceImpl implements PaymentService {
                 : PaymentMethod.MOCK_CARD;
         PaymentStatus simulateResult = request != null ? request.getSimulateResult() : null;
 
+        // Note: synchronous mock gateway runs in-process. When migrating to a real external HTTP payment gateway,
+        // move gateway.charge() outside the DB transaction using an async/webhook state machine to avoid holding locks over network I/O.
         GatewayResult gwResult = gateway.charge(new GatewayRequest(order.getFinalPrice(), method, simulateResult));
         boolean success = gwResult.status() == PaymentStatus.SUCCESS;
 
@@ -118,16 +195,7 @@ public class PaymentServiceImpl implements PaymentService {
                 .paidAt(success ? now : null)
                 .build();
 
-        try {
-            payment = paymentRepository.saveAndFlush(payment);
-        } catch (DataIntegrityViolationException dive) {
-            log.warn("Data integrity violation when inserting payment for orderId={}: {}", order.getId(), dive.getMessage());
-            Optional<Payment> recheck = paymentRepository.findByOrderIdAndIdempotencyKey(orderId, normalizedKey);
-            if (recheck.isPresent()) {
-                return toResult(recheck.get(), order.getStatus());
-            }
-            throw new BusinessException(ErrorCode.CONFLICT, "Xung đột giao dịch thanh toán");
-        }
+        payment = paymentRepository.saveAndFlush(payment);
 
         if (success) {
             order.markPaid(now);

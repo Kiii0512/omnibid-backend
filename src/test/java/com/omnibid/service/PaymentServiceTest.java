@@ -20,6 +20,7 @@ import com.omnibid.repository.PaymentRepository;
 import com.omnibid.security.CurrentUser;
 import com.omnibid.security.OrderAccessPolicy;
 import com.omnibid.service.impl.PaymentServiceImpl;
+import com.omnibid.test.DirectTransactionTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -91,7 +92,8 @@ class PaymentServiceTest {
                 new OrderAccessPolicy(),
                 gateway,
                 notificationService,
-                clock
+                clock,
+                new DirectTransactionTemplate()
         );
 
         sampleOrder = Order.builder()
