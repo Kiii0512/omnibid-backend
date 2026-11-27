@@ -15,9 +15,19 @@ import java.util.Map;
 public class CloudinaryImageStorageService implements ImageStorageService {
 
     private final Cloudinary cloudinary;
+    private final int readTimeoutMs;
 
     public CloudinaryImageStorageService(Cloudinary cloudinary) {
+        this(cloudinary, 15_000);
+    }
+
+    public CloudinaryImageStorageService(Cloudinary cloudinary, int readTimeoutMs) {
         this.cloudinary = cloudinary;
+        this.readTimeoutMs = Math.max(1000, readTimeoutMs);
+    }
+
+    public int getReadTimeoutMs() {
+        return readTimeoutMs;
     }
 
     @Override
@@ -32,8 +42,8 @@ public class CloudinaryImageStorageService implements ImageStorageService {
 
         try {
             Map<?, ?> options = StringUtils.hasText(folder)
-                    ? ObjectUtils.asMap("folder", folder, "resource_type", "image")
-                    : ObjectUtils.asMap("resource_type", "image");
+                    ? ObjectUtils.asMap("folder", folder, "resource_type", "image", "timeout", readTimeoutMs)
+                    : ObjectUtils.asMap("resource_type", "image", "timeout", readTimeoutMs);
 
             Map<?, ?> result = cloudinary.uploader().upload(bytes, options);
             String url = result != null ? (String) result.get("secure_url") : null;

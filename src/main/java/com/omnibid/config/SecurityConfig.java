@@ -88,6 +88,8 @@ public class SecurityConfig {
                         .accessDeniedHandler(accessDeniedHandler)
                 )
                 .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+                        .requestMatchers("/actuator/**").hasRole("ADMIN")
                         .requestMatchers("/api/v1/auctions/mine", "/api/v1/auctions/mine/**").authenticated()
                         .requestMatchers(publicEndpointMatcher).permitAll()
                         .requestMatchers("/api/v1/admin/**").hasRole("ADMIN")
