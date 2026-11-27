@@ -14,6 +14,7 @@ public record ProductCreateRequest(
         String title,
 
         @NotBlank(message = "Description cannot be blank")
+        @Size(max = 10000, message = "Description cannot exceed 10000 characters")
         String description,
 
         @NotNull(message = "Condition is required")

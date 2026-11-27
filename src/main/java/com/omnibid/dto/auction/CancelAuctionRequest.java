@@ -14,6 +14,6 @@ import lombok.NoArgsConstructor;
 public class CancelAuctionRequest {
 
     @NotBlank(message = "Lý do hủy phiên không được để trống")
-    @Size(max = 500, message = "Lý do hủy tối đa 500 ký tự")
+    @Size(max = 255, message = "Lý do hủy tối đa 255 ký tự")
     private String reason;
 }

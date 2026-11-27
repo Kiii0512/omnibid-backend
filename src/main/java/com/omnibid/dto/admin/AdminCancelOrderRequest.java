@@ -5,6 +5,6 @@ import jakarta.validation.constraints.Size;
 
 public record AdminCancelOrderRequest(
         @NotBlank(message = "Lý do hủy đơn không được để trống")
-        @Size(max = 500, message = "Lý do hủy tối đa 500 ký tự")
+        @Size(max = 255, message = "Lý do hủy tối đa 255 ký tự")
         String reason
 ) {}
