@@ -1,5 +1,7 @@
 package com.omnibid.common;
 
+import jakarta.persistence.LockTimeoutException;
+import jakarta.persistence.PessimisticLockException;
 import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
@@ -134,7 +136,9 @@ public class GlobalExceptionHandler {
             DataIntegrityViolationException.class,
             CannotAcquireLockException.class,
             PessimisticLockingFailureException.class,
-            ObjectOptimisticLockingFailureException.class
+            ObjectOptimisticLockingFailureException.class,
+            LockTimeoutException.class,
+            PessimisticLockException.class
     })
     public ResponseEntity<ApiResponse<Void>> handleConflict(Exception ex) {
         log.warn("Database conflict ({}): {}", ex.getClass().getSimpleName(), ex.getMessage());
