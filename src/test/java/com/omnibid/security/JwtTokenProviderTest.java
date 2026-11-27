@@ -64,4 +64,11 @@ class JwtTokenProviderTest {
         JwtValidationException ex = assertThrows(JwtValidationException.class, () -> provider.parse("invalid.token.string"));
         assertEquals(JwtValidationException.Reason.MALFORMED, ex.getReason());
     }
+
+    @Test
+    void constructor_RejectsBlankOrWeakSecretFailFast() {
+        assertThrows(IllegalArgumentException.class, () -> new JwtTokenProvider("   ", 3_600_000L, Clock.systemUTC()));
+        assertThrows(io.jsonwebtoken.security.WeakKeyException.class,
+                () -> new JwtTokenProvider("too-short-secret", 3_600_000L, Clock.systemUTC()));
+    }
 }

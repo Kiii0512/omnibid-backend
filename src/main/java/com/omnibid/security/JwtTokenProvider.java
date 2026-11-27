@@ -14,8 +14,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
+import javax.crypto.SecretKey;
 import java.nio.charset.StandardCharsets;
-import java.security.Key;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Date;
@@ -23,7 +23,7 @@ import java.util.Date;
 @Component
 public class JwtTokenProvider {
 
-    private final String jwtSecret;
+    private final SecretKey signingKey;
     private final long jwtExpirationMs;
     private final Clock clock;
 
@@ -33,14 +33,17 @@ public class JwtTokenProvider {
             @Value("${jwt.expiration-ms:86400000}") long jwtExpirationMs,
             Clock clock
     ) {
-        this.jwtSecret = jwtSecret;
+        this.signingKey = buildSigningKey(jwtSecret);
         this.jwtExpirationMs = jwtExpirationMs;
         this.clock = clock;
     }
 
     public record IssuedToken(String accessToken, long expiresInSeconds, Instant expiresAt) {}
 
-    private Key getSigningKey() {
+    private static SecretKey buildSigningKey(String jwtSecret) {
+        if (jwtSecret == null || jwtSecret.isBlank()) {
+            throw new IllegalArgumentException("jwt.secret must not be blank");
+        }
         byte[] keyBytes;
         try {
             keyBytes = Decoders.BASE64.decode(jwtSecret);
@@ -64,7 +67,7 @@ public class JwtTokenProvider {
                 .claim("ver", tokenVersion)
                 .setIssuedAt(Date.from(now))
                 .setExpiration(Date.from(expiresAt))
-                .signWith(getSigningKey(), SignatureAlgorithm.HS256)
+                .signWith(signingKey, SignatureAlgorithm.HS256)
                 .compact();
 
         return new IssuedToken(token, jwtExpirationMs / 1000L, expiresAt);
@@ -76,7 +79,7 @@ public class JwtTokenProvider {
         }
         try {
             Claims claims = Jwts.parserBuilder()
-                    .setSigningKey(getSigningKey())
+                    .setSigningKey(signingKey)
                     .setClock(() -> Date.from(clock.instant()))
                     .build()
                     .parseClaimsJws(token)
