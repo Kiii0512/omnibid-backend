@@ -3,6 +3,7 @@ package com.omnibid.config;
 import com.omnibid.entity.User;
 import com.omnibid.enums.UserRole;
 import com.omnibid.enums.UserStatus;
+import com.omnibid.repository.AuctionRepository;
 import com.omnibid.security.CustomUserDetails;
 import com.omnibid.security.JwtClaims;
 import com.omnibid.security.JwtTokenProvider;
@@ -39,6 +40,9 @@ class WebSocketConfigTest {
     private UserDetailsServiceImpl userDetailsService;
 
     @Mock
+    private AuctionRepository auctionRepository;
+
+    @Mock
     private MessageBrokerRegistry messageBrokerRegistry;
 
     @Mock
@@ -52,7 +56,7 @@ class WebSocketConfigTest {
     @Test
     @DisplayName("Cấu hình Message Broker v4 chỉ mở /topic")
     void configureMessageBroker_ConfiguresTopicOnly() {
-        WebSocketConfig config = new WebSocketConfig(jwtTokenProvider, userDetailsService, appProperties);
+        WebSocketConfig config = new WebSocketConfig(jwtTokenProvider, userDetailsService, auctionRepository, appProperties);
 
         config.configureMessageBroker(messageBrokerRegistry);
 
@@ -62,7 +66,7 @@ class WebSocketConfigTest {
     @Test
     @DisplayName("ChannelInterceptor xác thực JWT (userId + ver) khi CONNECT và chặn mọi SEND")
     void channelInterceptor_AuthenticatesOnConnectAndBlocksSend() {
-        WebSocketConfig config = new WebSocketConfig(jwtTokenProvider, userDetailsService, appProperties);
+        WebSocketConfig config = new WebSocketConfig(jwtTokenProvider, userDetailsService, auctionRepository, appProperties);
 
         ArgumentCaptor<ChannelInterceptor> captor = ArgumentCaptor.forClass(ChannelInterceptor.class);
         config.configureClientInboundChannel(channelRegistration);
@@ -102,5 +106,48 @@ class WebSocketConfigTest {
         sendAccessor.setDestination("/app/bid");
         Message<byte[]> sendMsg = MessageBuilder.createMessage(new byte[0], sendAccessor.getMessageHeaders());
         assertThrows(MessageDeliveryException.class, () -> interceptor.preSend(sendMsg, messageChannel));
+    }
+
+    @Test
+    @DisplayName("SUBSCRIBE phiên của sản phẩm HIDDEN: USER bị chặn, phiên thường được phép, ADMIN được phép (MED-03)")
+    void channelInterceptor_SubscribeChecksHiddenProductVisibility() {
+        WebSocketConfig config = new WebSocketConfig(jwtTokenProvider, userDetailsService, auctionRepository, appProperties);
+        ArgumentCaptor<ChannelInterceptor> captor = ArgumentCaptor.forClass(ChannelInterceptor.class);
+        config.configureClientInboundChannel(channelRegistration);
+        verify(channelRegistration).interceptors(captor.capture());
+        ChannelInterceptor interceptor = captor.getValue();
+
+        User normalUser = User.builder().id(2L).email("u@e.com").role(UserRole.USER).status(UserStatus.ACTIVE).build();
+        CustomUserDetails normalDetails = new CustomUserDetails(normalUser);
+        Authentication normalAuth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                normalDetails, null, normalDetails.getAuthorities());
+
+        User adminUser = User.builder().id(9L).email("a@e.com").role(UserRole.ADMIN).status(UserStatus.ACTIVE).build();
+        CustomUserDetails adminDetails = new CustomUserDetails(adminUser);
+        Authentication adminAuth = new org.springframework.security.authentication.UsernamePasswordAuthenticationToken(
+                adminDetails, null, adminDetails.getAuthorities());
+
+        // Hidden auction -> rejected for normal user
+        when(auctionRepository.isPubliclyVisible(55L)).thenReturn(false);
+        StompHeaderAccessor hiddenSub = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        hiddenSub.setDestination("/topic/auctions/55");
+        hiddenSub.setUser(normalAuth);
+        Message<byte[]> hiddenMsg = MessageBuilder.createMessage(new byte[0], hiddenSub.getMessageHeaders());
+        assertThrows(MessageDeliveryException.class, () -> interceptor.preSend(hiddenMsg, messageChannel));
+
+        // Visible auction -> allowed for normal user
+        when(auctionRepository.isPubliclyVisible(77L)).thenReturn(true);
+        StompHeaderAccessor okSub = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        okSub.setDestination("/topic/auctions/77");
+        okSub.setUser(normalAuth);
+        Message<byte[]> okMsg = MessageBuilder.createMessage(new byte[0], okSub.getMessageHeaders());
+        assertNotNull(interceptor.preSend(okMsg, messageChannel));
+
+        // Hidden auction -> allowed for ADMIN
+        StompHeaderAccessor adminSub = StompHeaderAccessor.create(StompCommand.SUBSCRIBE);
+        adminSub.setDestination("/topic/auctions/55");
+        adminSub.setUser(adminAuth);
+        Message<byte[]> adminMsg = MessageBuilder.createMessage(new byte[0], adminSub.getMessageHeaders());
+        assertNotNull(interceptor.preSend(adminMsg, messageChannel));
     }
 }

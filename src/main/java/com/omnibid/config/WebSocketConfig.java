@@ -1,5 +1,7 @@
 package com.omnibid.config;
 
+import com.omnibid.enums.UserRole;
+import com.omnibid.repository.AuctionRepository;
 import com.omnibid.security.CustomUserDetails;
 import com.omnibid.security.JwtClaims;
 import com.omnibid.security.JwtTokenProvider;
@@ -20,13 +22,16 @@ import org.springframework.messaging.simp.stomp.StompHeaderAccessor;
 import org.springframework.messaging.support.ChannelInterceptor;
 import org.springframework.messaging.support.MessageHeaderAccessor;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.util.StringUtils;
 import org.springframework.web.socket.config.annotation.EnableWebSocketMessageBroker;
 import org.springframework.web.socket.config.annotation.StompEndpointRegistry;
 import org.springframework.web.socket.config.annotation.WebSocketMessageBrokerConfigurer;
 
+import java.security.Principal;
 import java.util.Arrays;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 @Slf4j
@@ -36,10 +41,11 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
-    private static final Pattern ALLOWED_SUBSCRIBE_PATTERN = Pattern.compile("^/topic/auctions/\\d+$");
+    private static final Pattern ALLOWED_SUBSCRIBE_PATTERN = Pattern.compile("^/topic/auctions/(\\d+)$");
 
     private final JwtTokenProvider jwtTokenProvider;
     private final UserDetailsServiceImpl userDetailsService;
+    private final AuctionRepository auctionRepository;
     private final AppProperties appProperties;
 
     @Override
@@ -109,8 +115,28 @@ public class WebSocketConfig implements WebSocketMessageBrokerConfigurer {
 
     private void handleSubscribe(Message<?> message, StompHeaderAccessor accessor) {
         String destination = accessor.getDestination();
-        if (destination == null || !ALLOWED_SUBSCRIBE_PATTERN.matcher(destination).matches()) {
+        if (destination == null) {
+            throw new MessageDeliveryException(message, "Subscription destination not allowed: null");
+        }
+        Matcher matcher = ALLOWED_SUBSCRIBE_PATTERN.matcher(destination);
+        if (!matcher.matches()) {
             throw new MessageDeliveryException(message, "Subscription destination not allowed: " + destination);
         }
+
+        if (isAdminPrincipal(accessor.getUser())) {
+            return;
+        }
+
+        Long auctionId = Long.parseLong(matcher.group(1));
+        if (!auctionRepository.isPubliclyVisible(auctionId)) {
+            throw new MessageDeliveryException(message, "Subscription to hidden or nonexistent auction is not allowed");
+        }
+    }
+
+    private boolean isAdminPrincipal(Principal principal) {
+        if (principal instanceof Authentication auth && auth.getPrincipal() instanceof CustomUserDetails details) {
+            return details.getRole() == UserRole.ADMIN;
+        }
+        return false;
     }
 }
