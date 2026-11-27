@@ -74,25 +74,26 @@ Khi Flyway chạy migration `V2__seed_data.sql` trên database mới, hệ thố
 
 ### Biến môi trường cần thiết
 
-Các cấu hình nhạy cảm được đọc từ biến môi trường (xem mẫu tại [application-example.properties](src/main/resources/application-example.properties)) hoặc đặt trong `src/main/resources/application-local.properties` (đã có trong `.gitignore`):
+Các cấu hình nhạy cảm được đọc từ biến môi trường hoặc tệp `.env` ở thư mục gốc dự án (tạo từ mẫu [.env.example](.env.example), đã nằm trong `.gitignore`):
 
 | Biến môi trường | Mô tả |
 | :--- | :--- |
-| `DB_URL` | JDBC URL MySQL (ví dụ `jdbc:mysql://localhost:3306/omnibid_v4?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&connectionTimeZone=UTC`) |
+| `DB_URL` | JDBC URL MySQL (ví dụ `jdbc:mysql://localhost:3306/omnibid_v4?connectionTimeZone=UTC&forceConnectionTimeZoneToSession=true`) |
 | `DB_USERNAME`, `DB_PASSWORD` | Tài khoản kết nối MySQL |
 | `JWT_SECRET` | Chuỗi bí mật ký HS256 (tối thiểu 32 ký tự / 256-bit) |
-| `CORS_ALLOWED_ORIGINS` | Nguồn Frontend được phép (mặc định `http://localhost:3000`) |
+| `ADMIN_INITIAL_PASSWORD` | *(Tùy chọn, khuyến nghị trên Production)* Tự động đổi mật khẩu tài khoản `admin@omnibid.local` khi khởi động nếu còn dùng mật khẩu mặc định |
 | `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` | Thông tin tài khoản Cloudinary (nếu bỏ trống ứng dụng vẫn khởi động nhưng API upload ảnh sẽ trả `502 IMAGE_UPLOAD_FAILED`) |
 
 ### Khởi chạy ứng dụng
 
-- **Môi trường phát triển cục bộ (dùng `application-local.properties`):**
+- **Môi trường phát triển cục bộ (đọc biến từ `.env`):**
   ```powershell
-  .\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=dev,local
+  Copy-Item .env.example .env
+  .\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=dev
   ```
-- **Chế độ Demo (rút ngắn thời lượng phiên tối thiểu xuống 2 phút, scheduler 5s, bật `simulateResult` cho thanh toán mô phỏng):**
+- **Chế độ Demo (nạp dữ liệu mẫu `V3__demo_data.sql`, rút ngắn thời lượng phiên tối thiểu xuống 2 phút, scheduler 5s):**
   ```powershell
-  .\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=demo,local
+  .\mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=demo
   ```
 
 Ứng dụng lắng nghe tại `http://localhost:8080` và WebSocket STOMP tại `ws://localhost:8080/ws`.
